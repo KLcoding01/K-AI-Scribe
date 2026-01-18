@@ -1329,12 +1329,26 @@ function parseStructuredFromFreeText(aiNotes = "") {
   text.match(/(?:^|\n)\s*current\s*(types?\s*of\s*)?assistance\s*(types)?\s*:\s*([^\n\r]+)/i);
   
   if (currAsstMatch) {
-    const raw = (currAsstMatch[3] || "").trim();
+    let raw = (currAsstMatch[3] || "").trim();
     if (raw) {
-      result.living.currentAssistanceTypes = raw;       // as-is for Kinnser fill
-      result.living.rawCurrentAssistanceLine = raw;     // optional trace
+      // 1) If the note concatenates the next sentence/section on the same line, cut it off safely.
+      
+      // Cut off known "next section" phrases if they appear
+      raw = raw.split(/\bno\s+hazard\b/i)[0].trim();
+      raw = raw.split(/\bhazard\b/i)[0].trim();
+      
+      // Cut off at the first sentence boundary if extra text follows (".", ";", "|")
+      // Keeps "Family / Spouse" from "Family / Spouse. No hazard found."
+      raw = raw.split(/[.;|]/)[0].trim();
+      
+      // Normalize spacing only (does not change wording)
+      raw = raw.replace(/\s+/g, " ").trim();
+      
+      result.living.currentAssistanceTypes = raw;
+      result.living.rawCurrentAssistanceLine = raw;
     }
   }
+
   
   // -------------------------
   // Living situation + helper extraction
