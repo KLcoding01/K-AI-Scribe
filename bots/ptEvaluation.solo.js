@@ -1219,49 +1219,177 @@ function parseStructuredFromFreeText(aiNotes = "") {
   
   if (goalsMatch) result.patientGoals = goalsMatch[1].trim();
   
-  // LIVING SITUATION + HELPER
+  // =========================
+  // CONSOLIDATED FIX BLOCK (drop-in)
+  // Fixes:
+  /// - Ensures result.living exists (prevents TypeError)
+  /// - Maps living situation to ONLY 3 Kinnser values
+  /// - Builds correct evaluationText ("in" vs "with")
+  /// - Uses explicit "Current assistance types:" AS-IS (highest priority)
+  /// - Uses helper/living inference ONLY as fallback
+  /// - Avoids duplicate pets + duplicate currAsst parsing
+  // =========================
+  
+  // Ensure nested objects exist (prevents: Cannot set properties of undefined)
+  result.living = result.living || {};
+  
+  // Helper: map living situation text to 1 of 3 Kinnser options
+  function inferPatientLivesValue(livingLine) {
+    const s = (livingLine || "").toLowerCase().trim();
+    
+    const ALONE = "Alone";
+    const WITH_OTHERS = "With other person(s) in the home";
+    const CONGREGATE = "In congregate situation, e.g., assisted living";
+    
+    // 1) CONGREGATE (highest priority)
+    const congregatePatterns = [
+      /\bcongregate\b/,
+      /\bassisted\s*living\b/,
+      /\balf\b/,
+      /\bboard\s*(and|&)\s*care\b/,
+      /\bb\s*&\s*c\b/,
+      /\broom\s*and\s*board\b/,
+      /\bgroup\s*home\b/,
+      /\bmemory\s*care\b/,
+      /\bnursing\s*home\b/,
+      /\bsnf\b/,
+      /\bskilled\s*nursing\b/,
+      /\bltc\b/,
+      /\blong[-\s]*term\s*care\b/,
+      /\bfacility\b/,
+      /\bcare\s*home\b/,
+      /\brcfe\b/,
+      /\bresidential\s*care\b/,
+      /\bretirement\s*home\b/
+    ];
+    if (congregatePatterns.some((re) => re.test(s))) return CONGREGATE;
+    
+    // 2) ALONE (explicit / strong indicators)
+    const alonePatterns = [
+      /\blives\s*alone\b/,
+      /\bliving\s*alone\b/,
+      /\balone\b/,
+      /\bby\s*(my|him|her)?\s*self\b/,
+      /\bon\s*(my|his|her)?\s*own\b/,
+      /\bno\s*one\b/,
+      /\bno\s*help\b/,
+      /\bno\s*assistance\b/,
+      /\bno\s*caregiver\b/,
+      /\bwithout\s*help\b/
+    ];
+    
+    if (alonePatterns.some((re) => re.test(s))) {
+      // Guard: if someone else is mentioned too, treat as WITH OTHERS
+      const withOthersGuard = [
+        /\blives\s*with\b/,
+        /\bwith\b/,
+        /\bfamily\b/,
+        /\bspouse\b/,
+        /\bhusband\b/,
+        /\bwife\b/,
+        /\bpartner\b/,
+        /\broommate(s)?\b/,
+        /\bfriend\b/,
+        /\bcaregiver\b/,
+        /\bcg\b/,
+        /\bstaff\b/,
+        /\bshared?\s*(room|home)\b/,
+        /\bshare\s*(a\s*)?(room|home)\b/
+      ];
+      if (!withOthersGuard.some((re) => re.test(s))) return ALONE;
+    }
+    
+    // 3) WITH OTHER PERSON(S)
+    const withOthersPatterns = [
+      /\blives\s*with\b/,
+      /\bwith\b/,
+      /\bfamily\b/,
+      /\bspouse\b/,
+      /\bhusband\b/,
+      /\bwife\b/,
+      /\bpartner\b/,
+      /\broommate(s)?\b/,
+      /\bfriend\b/,
+      /\bcaregiver\b/,
+      /\bcg\b/,
+      /\bstaff\b/,
+      /\bshared?\s*(room|home)\b/,
+      /\bshare\s*(a\s*)?(room|home)\b/
+    ];
+    if (withOthersPatterns.some((re) => re.test(s))) return WITH_OTHERS;
+    
+    // Fallback
+    return WITH_OTHERS;
+  }
+  
+  // -------------------------
+  // Explicit label: Current assistance types (AS-IS) - highest priority
+  // -------------------------
+  const currAsstMatch =
+  text.match(/(?:^|\n)\s*current\s*(types?\s*of\s*)?assistance\s*(types)?\s*:\s*([^\n\r]+)/i);
+  
+  if (currAsstMatch) {
+    const raw = (currAsstMatch[3] || "").trim();
+    if (raw) {
+      result.living.currentAssistanceTypes = raw;       // as-is for Kinnser fill
+      result.living.rawCurrentAssistanceLine = raw;     // optional trace
+    }
+  }
+  
+  // -------------------------
+  // Living situation + helper extraction
+  // -------------------------
   const livingMatch =
   text.match(/(?:^|\n)\s*living situation\s*:\s*([^\n\r]+)/i) ||
-  text.match(/(?:^|\n)\s*lives\s+(?:in|with)\s+([^\n\r]+)/i);
+  // Capture the full phrase after "lives" (e.g., "with family", "in apartment", "alone")
+  text.match(/(?:^|\n)\s*lives\s+([^\n\r]+)/i);
   
-  const helperMatch = text.match(/(?:^|\n)\s*person helping\s*:\s*([^\n\r]+)/i);
+  const helperMatch =
+  text.match(/(?:^|\n)\s*person helping\s*:\s*([^\n\r]+)/i);
   
   if (livingMatch) {
     const livingLine = (livingMatch[1] || "").trim();
     result.living.rawLivingLine = livingLine;
     
+    // Evaluation sentence: keep "in ..." or "with ..." if present; otherwise default to "in ..."
+    const ll = livingLine.toLowerCase();
     result.living.evaluationText = `Pt lives ${
-      livingLine.toLowerCase().startsWith("in") ? livingLine : "in " + livingLine
-    }.`;
+    (ll.startsWith("in") || ll.startsWith("with")) ? livingLine : "in " + livingLine
+  }.`;
     
+    // ✅ Kinnser-limited living situation (3 options only)
     result.living.patientLivesValue = inferPatientLivesValue(livingLine);
-
-// If Living Situation is explicitly "With other person", preserve label for dropdown selection.
-if (/with\s+other\s+person/i.test(livingLine)) {
-  result.living.patientLivesValue = "With other person";
-}
-
+    
+    // Existing helpers (must exist)
     result.living.assistanceAvailableValue = inferAssistanceValue(livingLine);
     
     const stepsInfo = parseStepsFromLiving(livingLine);
     result.living.stepsPresent = stepsInfo.stepsPresent;
     result.living.stepsCount = stepsInfo.stepsCount;
     
-    const low = livingLine.toLowerCase();
-    if (low.includes("caregiver") || low.includes("cg") || low.includes("staff")) {
-      result.living.currentAssistanceTypes = "Caregivers / facility staff";
+    // Pets (single check)
+    if (ll.includes("pet")) result.living.hasPets = true;
+    
+    // Fallback inference for Current Assistance Types ONLY if explicit label absent
+    if (!result.living.currentAssistanceTypes) {
+      if (ll.includes("caregiver") || ll.includes("cg") || ll.includes("staff")) {
+        result.living.currentAssistanceTypes = "Caregivers / facility staff";
+      } else if (ll.includes("family") || ll.includes("spouse")) {
+        result.living.currentAssistanceTypes = "Family/Spouse";
+      }
     }
-    if (low.includes("family")) {
-      result.living.currentAssistanceTypes = "Family/Spouse";
-    }
-    if (low.includes("pet")) result.living.hasPets = true;
   }
   
   if (helperMatch) {
-    const helperLine = helperMatch[1].trim();
+    const helperLine = (helperMatch[1] || "").trim();
     result.living.rawHelperLine = helperLine;
     
     const hl = helperLine.toLowerCase();
+    
+    // Pets (single check)
+    if (hl.includes("pet")) result.living.hasPets = true;
+    
+    // Fallback inference for Current Assistance Types ONLY if explicit label absent
     if (!result.living.currentAssistanceTypes) {
       if (hl.includes("caregiver") || hl.includes("cg") || hl.includes("staff")) {
         result.living.currentAssistanceTypes = "Caregivers / facility staff";
@@ -1271,65 +1399,12 @@ if (/with\s+other\s+person/i.test(livingLine)) {
     }
   }
   
-  
-  
-  // Standardize assistance label (only if Current assistance types not explicitly provided)
-  try {
-    if (!result.living.currentAssistanceTypes) {
-      const helper = (result.living.rawHelperLine || "").toLowerCase();
-      const livingLine = (result.living.rawLivingLine || "").toLowerCase();
-      
-      if (helper.includes("spouse") || livingLine.includes("spouse")) {
-        result.living.currentAssistanceTypes = "Family/Spouse";
-      }
-      if (helper.includes("family") || livingLine.includes("family")) {
-        result.living.currentAssistanceTypes = "Family/Spouse";
-      }
-      if (
-          helper.includes("caregiver") ||
-          helper.includes("cg") ||
-          helper.includes("staff") ||
-          livingLine.includes("caregiver") ||
-          livingLine.includes("cg") ||
-          livingLine.includes("staff")
-          ) {
-            result.living.currentAssistanceTypes = "Caregivers / facility staff";
-          }
-    }
-  } catch {}
-  
-  
-  if (text.toLowerCase().includes("pets")) result.living.hasPets = true;
-  
-  
-  
-  
-  // =========================
-  // Explicit labels (template-driven)
-  // =========================
-  // Current Types of Assistance Received
-  const currAsstMatch =
-  text.match(/(?:^|\n)\s*current\s*(types?\s*of\s*)?assistance\s*(types)?\s*:\s*([^\n\r]+)/i);
-  if (currAsstMatch) {
-    const raw = (currAsstMatch[3] || "").trim();
-    if (raw) {
-      // Normalize common phrasing from your AI note ("Family/Spouse" → "Family / CG")
-      const low = raw.toLowerCase();
-      if (low.includes("family") || low.includes("spouse")) {
-        result.living.currentAssistanceTypes = "Family/Spouse";
-      } else if (low.includes("caregiver") || low.includes("cg") || low.includes("staff")) {
-        result.living.currentAssistanceTypes = "Caregivers / facility staff";
-      } else {
-        result.living.currentAssistanceTypes = raw;
-      }
-    }
-  }
-  
-  // Steps Count (e.g., "Steps Count: 3 step entry")
+  // Explicit "Steps Count:" overrides any inferred steps from livingLine
   const stepsCountMatch =
   text.match(/(?:^|\n)\s*steps\s*count\s*:\s*(\d+)\b/i) ||
   text.match(/(?:^|\n)\s*steps\s*cont\s*:\s*(\d+)\b/i) ||
   text.match(/(?:^|\n)\s*number\s*of\s*steps\s*:\s*(\d+)\b/i);
+  
   if (stepsCountMatch) {
     result.living.stepsCount = String(stepsCountMatch[1] || "").trim();
     if (result.living.stepsCount) result.living.stepsPresent = true;
