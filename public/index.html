@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Kin-Scribe — Kinnser Automation</title>
+  <style>
+    :root{
+      --bg:#f6f7fb;
+      --card:#ffffff;
+      --text:#111827;
+      --muted:#6b7280;
+      --line:#e5e7eb;
+      --primary:#2563eb;
+      --primary2:#1d4ed8;
+      --bad:#b91c1c;
+      --warn:#b45309;
+      --ok:#047857;
+      --chip:#f3f4f6;
+    }
+    *{ box-sizing:border-box; }
+    body{ margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif; background:var(--bg); color:var(--text); }
+    .wrap{ max-width: 1040px; margin: 22px auto; padding: 0 18px 42px; }
+    .top{ display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:14px; }
+    h1{ margin:0; font-size:20px; font-weight:900; letter-spacing:-0.2px; }
+    .pill{ font-size:12px; color:var(--muted); border:1px solid var(--line); padding:6px 10px; border-radius:999px; background:#fff; white-space:nowrap; }
+
+    .card{ background:var(--card); border:1px solid var(--line); border-radius:14px; padding:16px; box-shadow: 0 10px 30px rgba(0,0,0,0.06); }
+
+    .grid{ display:grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap:12px; }
+    .span-3{ grid-column: 1 / -1; }
+    .span-2{ grid-column: span 2; }
+    @media (max-width: 980px){ .grid{ grid-template-columns: repeat(2, minmax(0, 1fr)); } .span-3{ grid-column: 1 / -1; } }
+    @media (max-width: 680px){ .grid{ grid-template-columns: 1fr; } .span-2{ grid-column: 1 / -1; } }
+
+    .field{ display:flex; flex-direction:column; gap:6px; min-width:0; }
+    label{ font-size:12px; font-weight:800; color:var(--muted); }
+    input, select, textarea{
+      font-family:inherit; font-size:14px; padding:10px 12px;
+      border-radius:10px; border:1px solid var(--line); background:#fff; outline:none;
+      transition: box-shadow .12s, border-color .12s;
+    }
+    input:focus, select:focus, textarea:focus{ border-color:#93c5fd; box-shadow:0 0 0 4px rgba(37,99,235,0.12); }
+
+    textarea{
+      width:100%;
+      min-height: 420px;
+      resize:vertical;
+      white-space:pre-wrap;
+      overflow-wrap:anywhere;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      line-height:1.35;
+    }
+
+    .actions{ display:flex; justify-content:flex-end; gap:10px; margin-top:12px; flex-wrap:wrap; }
+    button{
+      padding:10px 14px; border-radius:999px; border:1px solid var(--line);
+      background:#fff; cursor:pointer; font-weight:900; font-size:14px;
+    }
+    button.primary{ background:var(--primary); border-color:var(--primary); color:#fff; }
+    button.primary:hover{ background:var(--primary2); }
+    button:disabled{ opacity:.55; cursor:not-allowed; }
+
+    .sectionTitle{ margin-top: 4px; margin-bottom: 8px; font-weight:950; font-size:13px; color:#111827; letter-spacing:0.1px; }
+    .hint{ margin-top:10px; color:var(--muted); font-size:12px; line-height:1.35; }
+
+    .statusHeader{ display:flex; align-items:center; justify-content:space-between; gap:10px; }
+    .badge{
+      font-size:12px; font-weight:950; padding:6px 10px; border-radius:999px;
+      border:1px solid var(--line); background:#fff; color:var(--muted);
+    }
+    .badge.ok{ border-color: rgba(4,120,87,.25); color:var(--ok); background:rgba(4,120,87,.06); }
+    .badge.warn{ border-color: rgba(180,83,9,.25); color:var(--warn); background:rgba(180,83,9,.06); }
+    .badge.bad{ border-color: rgba(185,28,28,.25); color:var(--bad); background:rgba(185,28,28,.06); }
+
+    .statusBox{
+      border:1px solid var(--line);
+      background:#fafafa;
+      border-radius:12px;
+      padding:12px;
+      height: 260px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      font-size:12px;
+      white-space:pre-wrap;
+      overflow-wrap:anywhere;
+      line-height:1.45;
+          overflow-y: auto;
+    }
+
+    .logBox{
+      margin-top:10px;
+      border:1px solid var(--line);
+      background:#0b1220;
+      color:#e5e7eb;
+      border-radius:12px;
+      padding:12px;
+      min-height: 220px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      font-size:12px;
+      white-space:pre-wrap;
+      overflow-wrap:anywhere;
+      line-height:1.45;
+      max-height: 420px;
+      overflow:auto;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="top">
+      <h1>Kin-Scribe — Kinnser Automation</h1>
+      <div class="pill" id="apiBasePill">API: (detecting…)</div>
+    </div>
+
+    <div class="card">
+      <div class="grid">
+        <div class="field span-2">
+          <label>Kinnser username</label>
+          <input id="kinnserUsername" placeholder="Username" autocomplete="username" />
+        </div>
+        <div class="field">
+          <label>Kinnser password</label>
+          <input id="kinnserPassword" type="password" placeholder="Password" autocomplete="current-password" />
+        </div>
+
+        <div class="field span-3">
+          <div class="actions" style="justify-content:flex-start;">
+            <label style="display:flex;align-items:center;gap:8px;font-weight:800;color:var(--muted);font-size:12px;">
+              <input type="checkbox" id="rememberCreds" />
+              Remember Kinnser credentials on this computer
+            </label>
+            <button id="btnSaveCreds" type="button">Save</button>
+            <button id="btnClearCreds" type="button">Clear</button>
+            <a href="/logout" style="margin-left:auto;font-weight:900;font-size:12px;color:var(--muted);text-decoration:none;">Logout</a>
+          </div>
+        </div>
+
+
+        <div class="field">
+          <label>Patient name</label>
+          <input id="patientName" placeholder="LAST, FIRST" />
+        </div>
+        <div class="field">
+          <label>Visit date</label>
+          <input id="visitDate" type="date" />
+        </div>
+        <div class="field">
+          <label>Task type</label>
+          <select id="taskType">
+            <option>PT Visit</option>
+            <option>PT Evaluation</option>
+            <option>PT Re-Evaluation</option>
+            <option>PT Discharge w/Discharge Summary</option>
+          </select>
+        </div>
+
+        <div class="field">
+          <label>Time in</label>
+          <input id="timeIn" placeholder="16:30" />
+        </div>
+        <div class="field">
+          <label>Time out</label>
+          <input id="timeOut" placeholder="17:30" />
+        </div>
+        <div class="field">
+          <label>Template</label>
+          <select id="templateKey">
+            <option value="">(None)</option>
+          </select>
+        </div>
+
+        
+        <div class="field span-3">
+          <div class="sectionTitle">Free Dictation (raw input)</div>
+          <textarea id="dictationNotes" placeholder="Dictate freely here… messy notes are OK." style="min-height:200px;"></textarea>
+          <div class="actions" style="justify-content:flex-start; margin-top:10px;">
+            <button id="btnConvert" type="button">Convert Dictation → Selected Template</button>
+          </div>
+
+          <div class="sectionTitle" style="margin-top:14px;">Convert from Image (optional)</div>
+          <div class="field" style="gap:8px;">
+            <input id="imageFile" type="file" accept="image/*" />
+            <div class="actions" style="justify-content:flex-start; margin-top:4px;">
+              <button id="btnConvertImage" type="button">Convert Image → Selected Template</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="field span-3">
+          <div class="sectionTitle">AI Notes (what you want autofilled)</div>
+          <textarea id="aiNotes" placeholder="Paste or type your note here..."></textarea>
+        </div>
+
+        <div class="field span-3">
+          <div class="statusHeader">
+            <div class="sectionTitle" style="margin:0;">Status</div>
+            <div class="badge" id="jobBadge">Idle</div>
+          </div>
+
+          <div class="statusBox" id="statusBox">No job yet.</div>
+<div class="actions">
+            <button id="btnHealth" type="button">Test /health</button>
+            <button id="btnClear" type="button">Clear</button>
+            <button class="primary" id="btnRun" type="button">Run Automation</button>
+          </div>
+
+          <div class="hint">
+            This area shows a live, step-by-step status stream from the server while the bot runs.
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

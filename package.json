@@ -1,0 +1,18 @@
+{
+  "name": "kin-scribe-server",
+  "version": "1.0.0",
+  "private": true,
+  "type": "commonjs",
+  "engines": {
+    "node": "22.x"
+  },
+  "scripts": {
+    "start": "node ui.js"
+  },
+  "dependencies": {
+    "dotenv": "^17.2.3",
+    "express": "^5.1.0",
+    "openai": "^6.9.1",
+    "playwright": "^1.56.1"
+  }
+}
