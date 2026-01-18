@@ -747,10 +747,6 @@ async function findTemplateScope(target, opts = {}) {
   return null;
 }
 
-// =========================
-// GW2 + Visit Basics (select template -> fill basics -> SAVE) BEFORE next steps
-// =========================
-
 async function selectTemplateGW2(context) {
   log("➡️ Selecting GW2...");
   
@@ -782,6 +778,10 @@ async function selectTemplateGW2(context) {
   log("⚠️ GW2 not found");
 }
 
+/* =========================
+ * Visit basics (ID + times + date)
+ * =======================*/
+
 async function fillVisitBasics(context, { timeIn, timeOut, visitDate }) {
   log("➡️ Filling visit basics...");
   
@@ -793,7 +793,6 @@ async function fillVisitBasics(context, { timeIn, timeOut, visitDate }) {
     return;
   }
   
-  // Patient identity confirmed
   try {
     const box = frame.getByLabel("Patient identity confirmed");
     if (await box.isVisible().catch(() => false)) {
@@ -802,7 +801,6 @@ async function fillVisitBasics(context, { timeIn, timeOut, visitDate }) {
     }
   } catch {}
   
-  // Time In
   const timeInInput = await firstVisibleLocator(frame, [
     "#frm_timein",
     "input[name^='frm_timein']",
@@ -811,17 +809,16 @@ async function fillVisitBasics(context, { timeIn, timeOut, visitDate }) {
     await timeInInput.fill("");
     await timeInInput.type(timeIn, { delay: 40 });
     log("⏱ Time In filled:", timeIn);
-    
+    // Verify persisted value (prevents false positives when typing into a stale/hidden iframe)
     try {
       const v = (await timeInInput.inputValue().catch(() => "")).trim();
       if (!v) throw new Error("empty");
       log("✅ Verified Time In persisted:", v);
-    } catch {
+    } catch (e) {
       throw new Error("ASSERT FAIL: Time In did not persist in active form");
     }
   }
   
-  // Time Out
   const timeOutInput = await firstVisibleLocator(frame, [
     "#frm_timeout",
     "input[name^='frm_timeout']",
@@ -830,19 +827,24 @@ async function fillVisitBasics(context, { timeIn, timeOut, visitDate }) {
     await timeOutInput.fill("");
     await timeOutInput.type(timeOut, { delay: 40 });
     log("⏱ Time Out filled:", timeOut);
-    
+    // Verify persisted value (prevents false positives when typing into a stale/hidden iframe)
     try {
       const v = (await timeOutInput.inputValue().catch(() => "")).trim();
       if (!v) throw new Error("empty");
       log("✅ Verified Time Out persisted:", v);
-    } catch {
+    } catch (e) {
       throw new Error("ASSERT FAIL: Time Out did not persist in active form");
     }
   }
   
-  // Visit Date (normalized MM/DD/YYYY)
+  // Normalize visit date to MM/DD/YYYY before typing
   const normalizedDate = normalizeDateToMMDDYYYY(visitDate);
-  log("📅 Visit Date (raw → normalized):", visitDate, "→", normalizedDate);
+  log(
+              "📅 Visit Date (raw → normalized):",
+              visitDate,
+              "→",
+              normalizedDate
+              );
   
   const dateInput = await firstVisibleLocator(frame, [
     "#frm_visitdate",
@@ -852,53 +854,18 @@ async function fillVisitBasics(context, { timeIn, timeOut, visitDate }) {
     await dateInput.fill("");
     await dateInput.type(normalizedDate, { delay: 40 });
     log("📅 Visit Date filled:", normalizedDate);
-    
+    // Verify persisted value (prevents false positives when typing into a stale/hidden iframe)
     try {
       const v = (await dateInput.inputValue().catch(() => "")).trim();
       if (!v) throw new Error("empty");
       log("✅ Verified Visit Date persisted:", v);
-    } catch {
+    } catch (e) {
       throw new Error("ASSERT FAIL: Visit Date did not persist in active form");
     }
   }
   
-  // ✅ REQUIRED: Save immediately after basics BEFORE moving on
-  await clickSave(frame);
-  
-  // ✅ Post-save re-assert
-  try {
-    const ti = timeInInput ? (await timeInInput.inputValue().catch(() => "")).trim() : "";
-    const to = timeOutInput ? (await timeOutInput.inputValue().catch(() => "")).trim() : "";
-    const vd = dateInput ? (await dateInput.inputValue().catch(() => "")).trim() : "";
-    
-    if (!ti || !to || !vd) {
-      throw new Error(`Post-save empty field(s): timeIn='${ti}', timeOut='${to}', visitDate='${vd}'`);
-    }
-    
-    log("✅ Post-save fields still present:", { timeIn: ti, timeOut: to, visitDate: vd });
-  } catch (e) {
-    throw new Error(`ASSERT FAIL: Visit basics did not persist after save: ${e?.message || e}`);
-  }
-  
-  log("✅ Visit basics step finished (saved).");
+  log("✅ Visit basics step finished");
 }
-
-// One-call wrapper you can use in your run flow:
-// await selectGW2FillBasicsAndSave(context, { timeIn, timeOut, visitDate });
-async function selectGW2FillBasicsAndSave(context, { timeIn, timeOut, visitDate }) {
-  // 1) Select GW2 template first
-  await selectTemplateGW2(context);
-  
-  // (Optional) small settle for template swap
-  await wait(1000);
-  
-  // 2) Fill basics in the active template scope
-  await fillVisitBasics(context, { timeIn, timeOut, visitDate });
-  
-  // 3) After this returns, you are safe to proceed to next sections
-  log("✅ GW2 selected + basics filled + saved. Proceed to next steps.");
-}
-
 
 /* =========================
  * Helper: infer living situation from text
@@ -1381,6 +1348,7 @@ function parseStructuredFromFreeText(aiNotes = "") {
       result.living.rawCurrentAssistanceLine = raw;
     }
   }
+
   
   // -------------------------
   // Living situation + helper extraction
