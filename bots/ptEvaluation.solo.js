@@ -403,8 +403,15 @@ async function isAlreadyOnHotbox(page) {
     .first()
     .isVisible()
     .catch(() => false);
+
+    // Additional common HotBox marker (DataTables length dropdown)
+    const hasLength = await frame
+      .locator("select[name='resultsTable_length']")
+      .first()
+      .isVisible()
+      .catch(() => false);
     
-    if (hasAnchor || hasSelect) {
+    if (hasAnchor || hasSelect || hasLength) {
       return true;
     }
   }
@@ -421,8 +428,62 @@ async function navigateToHotBox(page) {
   }
   
   log("➡️ Navigating to HotBox (robust mode)...");
+
+  // Helpful debug for post-save flows
+  try {
+    log("ℹ️ Current page URL before HotBox navigation:", page.url());
+  } catch {}
+
+  // Helper: wait/poll for HotBox markers to appear after navigation
+  async function waitForHotbox(timeoutMs = 12000) {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      if (await isAlreadyOnHotbox(page)) return true;
+      await wait(400);
+    }
+    return false;
+  }
+
+  // 0) Fastest/most reliable after Save: goBack() to HotBox (often the immediate previous page)
+  try {
+    for (let i = 0; i < 2; i++) {
+      await page.goBack({ waitUntil: "domcontentloaded", timeout: 8000 }).catch(() => null);
+      if (await waitForHotbox(9000)) {
+        log("✅ HotBox opened via browser back navigation.");
+        return;
+      }
+    }
+  } catch {}
+
+  // Determine the correct origin dynamically (some agencies use different origins/paths)
+  let origin = "https://www.kinnser.net";
+  try {
+    const u = new URL(page.url());
+    if (u && u.origin && u.origin.startsWith("http")) origin = u.origin;
+  } catch {}
   
   await wait(1000);
+
+  // 0) Prefer direct navigation first (most reliable after form save / iframe pages)
+  const directCandidates = [
+    `${origin}/hotbox.cfm?ts=${Date.now()}`,
+    `${origin}/secure/hotbox.cfm?ts=${Date.now()}`,
+    `${origin}/hotbox?ts=${Date.now()}`,
+  ];
+
+  for (const url of directCandidates) {
+    try {
+      log("➡️ HotBox direct URL attempt:", url);
+      await page.goto(url, { waitUntil: "domcontentloaded" });
+      // HotBox often loads nested frames after DOMContentLoaded
+      if (await waitForHotbox(12000)) {
+        log(`✅ HotBox opened via direct URL: ${url}`);
+        return;
+      }
+    } catch (e) {
+      log("⚠️ Direct URL attempt failed:", e?.message || String(e));
+    }
+  }
   
   // 2) Try direct "HotBox" link in main page
   try {
@@ -430,7 +491,7 @@ async function navigateToHotBox(page) {
     if (await hotboxLink.isVisible().catch(() => false)) {
       await hotboxLink.click({ timeout: 5000 }).catch(() => {});
       await wait(1200);
-      if (await isAlreadyOnHotbox(page)) {
+      if (await waitForHotbox(12000)) {
         log("✅ HotBox opened via direct link.");
         return;
       }
@@ -481,8 +542,8 @@ async function navigateToHotBox(page) {
       if (hotboxMenu) {
         await hotboxMenu.click({ force: true }).catch(() => {});
         await wait(1200);
-        
-        if (await isAlreadyOnHotbox(page)) {
+
+        if (await waitForHotbox(12000)) {
           log("✅ HotBox opened via Go To menu.");
           return;
         }
@@ -493,19 +554,33 @@ async function navigateToHotBox(page) {
   } else {
     log("⚠️ Could not find a 'Go To' menu. Trying fallbacks...");
   }
+
+  // 3.5) Fallback: click any link whose href contains "hotbox" (often present in headers/frames)
+  try {
+    for (const frame of page.frames()) {
+      const anyHotboxHref = frame.locator('a[href*="hotbox"]').first();
+      if (await anyHotboxHref.isVisible().catch(() => false)) {
+        await anyHotboxHref.click({ force: true, timeout: 5000 }).catch(() => {});
+        if (await waitForHotbox(12000)) {
+          log("✅ HotBox opened via href contains 'hotbox' link.");
+          return;
+        }
+      }
+    }
+  } catch {}
   
   // 4) Last resort: direct navigation attempts
   const candidates = [
-    "https://www.kinnser.net/hotbox.cfm",
-    "https://www.kinnser.net/hotbox",
-    "https://www.kinnser.net/secure/hotbox.cfm",
+    `${origin}/hotbox.cfm`,
+    `${origin}/hotbox`,
+    `${origin}/secure/hotbox.cfm`,
   ];
   
   for (const url of candidates) {
     try {
       await page.goto(url, { waitUntil: "domcontentloaded" });
       await wait(1500);
-      if (await isAlreadyOnHotbox(page)) {
+      if (await waitForHotbox(12000)) {
         log(`✅ HotBox opened via direct URL: ${url}`);
         return;
       }
