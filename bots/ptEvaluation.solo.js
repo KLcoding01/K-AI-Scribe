@@ -1318,11 +1318,15 @@ function parseStructuredFromFreeText(aiNotes = "") {
     text.match(/(?:^|\n)\s*current\s*(types?\s*of\s*)?assistance\s*(types)?\s*:\s*([^\n\r]+)/i);
 
   if (currAsstMatch) {
-<<<<<<< HEAD
     const raw = (currAsstMatch[3] || "").trim();
     const cleaned = cleanInlineValue(raw);
     if (cleaned) {
-      result.living.rawCurrentAssistanceLine = cleaned; // authoritative
+      // Authoritative: use explicit label when present
+      const normalized = String(cleaned).replace(/[^ -~]/g, "").replace(/\s+/g, " ").trim();
+      if (normalized) {
+        result.living.currentAssistanceTypes = normalized;
+        result.living.rawCurrentAssistanceLine = normalized;
+      }
     }
   }
 
@@ -1330,33 +1334,14 @@ function parseStructuredFromFreeText(aiNotes = "") {
   // Safety Narrative: store ONLY content after the colon (no "Safety Narrative:" prefix)
   // ---------------------------------------------------------
   const safetyNarrMatch =
-  text.match(/(?:^|\n)\s*safety\s*narrative\s*:\s*([\s\S]+?)(?=\n\s*[a-zA-Z][^:\n]{0,60}\s*:\s*|\n{2,}|$)/i);
-  
+    text.match(/(?:^|\n)\s*safety\s*narrative\s*:\s*([\s\S]+?)(?=\n\s*[a-zA-Z][^:\n]{0,60}\s*:\s*|\n{2,}|$)/i);
+
   if (safetyNarrMatch) {
     let narrative = (safetyNarrMatch[1] || "").trim();
     narrative = narrative.replace(/^\s*safety\s*narrative\s*:\s*/i, "").trim();
     narrative = narrative.replace(/\s+/g, " ").trim();
     if (narrative) {
       result.living.safetyNarrative = narrative;
-=======
-    let raw = (currAsstMatch[3] || "").trim();
-    if (raw) {
-      // 1) If the note concatenates the next sentence/section on the same line, cut it off safely.
-      
-      // Cut off known "next section" phrases if they appear
-      raw = raw.split(/\bno\s+hazard\b/i)[0].trim();
-      raw = raw.split(/\bhazard\b/i)[0].trim();
-      
-      // Cut off at the first sentence boundary if extra text follows (".", ";", "|")
-      // Keeps "Family / Spouse" from "Family / Spouse. No hazard found."
-      raw = raw.split(/[.;|]/)[0].trim();
-      
-      // Normalize spacing only (does not change wording)
-      raw = raw.replace(/\s+/g, " ").trim();
-      
-      result.living.currentAssistanceTypes = raw;
-      result.living.rawCurrentAssistanceLine = raw;
->>>>>>> f419544 (Update)
     }
   }
 
