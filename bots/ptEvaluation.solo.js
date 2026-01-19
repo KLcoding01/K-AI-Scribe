@@ -38,7 +38,7 @@ function logErrSafe(...args) { return logErr(...args); }
 
 const { chromium } = require("playwright");
 const path = require("path");
-const { callOpenAIJSON, callOpenAIText } = require("./openaiClient");
+const { callOpenAIJSON } = require("./openaiClient");
 
 require("dotenv").config({
   path: path.resolve(__dirname, "../.env"),
@@ -56,81 +56,6 @@ const PASSWORD = process.env.KINNSER_PASSWORD;
  * =======================*/
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-
-
-// ------------------------------------------------------------
-// HH PT Evaluation Assessment Summary Prompt (6 sentences exact)
-// - Randomized sentence openers (chosen in JS, not by the model)
-// - Always ends with: "Continued skilled HH PT remains indicated."
-// ------------------------------------------------------------
-function buildHHEvalAssessmentPrompt({
-  age,
-  gender,
-  relevantMedicalHistory,
-  primaryProblems,
-  assistiveDeviceText,
-} = {}) {
-  const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
-
-  const ageTxt = String(age ?? "").trim();
-  const genderTxt = String(gender ?? "").trim();
-  const pmhTxt = String(relevantMedicalHistory ?? "").trim();
-  const probsTxt = String(
-    primaryProblems ??
-      "generalized weakness with impaired bed mobility, transfers, gait, and balance"
-  ).trim();
-  const adTxt = String(assistiveDeviceText ?? "AD").trim();
-
-  const s1Open = pick(["Pt is a", "Pt is a pleasant", "Pt is a", "Pt is a"]);
-  const s2Open = pick([
-    "Pt is seen today for",
-    "Pt was evaluated today for",
-    "Pt is seen for",
-    "Today, pt is seen for",
-  ]);
-  const s3Open = pick([
-    "Currently, pt demonstrates",
-    "At this time, pt presents with",
-    "Pt currently demonstrates",
-    "Pt presents with",
-  ]);
-  const s4Open = pick(["Pt exhibits", "Pt demonstrates", "Pt displays", "Pt shows"]);
-  const s5Open = pick([
-    "Skilled HH PT services are medically necessary to",
-    "Skilled HH PT is medically necessary to",
-    "Skilled PT services are required to",
-    "Skilled HH PT intervention is indicated to",
-  ]);
-
-  return `
-Write an Assessment Summary for a Medicare home health physical therapy INITIAL EVALUATION.
-Output EXACTLY 6 sentences total, in one paragraph, no line breaks, no numbering, no bullets, no quotes.
-Sentence 6 MUST be exactly: Continued skilled HH PT remains indicated.
-
-Use this patient context (do not invent new diagnoses or demographics):
-- Age: ${ageTxt || "___"}
-- Gender: ${genderTxt || "___"}
-- Relevant Medical History (PMH): ${pmhTxt || "___"}
-- Primary problems/impairments: ${probsTxt}
-- Assistive device wording: ${adTxt}
-
-Required content rules:
-- Sentence 1: demographics + PMH (use only provided PMH; do not add).
-- Sentence 2: must include PT initial evaluation + home safety assessment + DME assessment + HEP education + fall safety precautions/fall prevention + education on proper use of ${adTxt} + education on pain/edema management + PT POC/goal planning to return toward PLOF.
-- Sentence 3: objective functional deficits (bed mobility, transfers, gait, balance, generalized weakness) and high fall risk linkage.
-- Sentence 4: safety awareness/balance reactions and home risk statement (high fall risk).
-- Sentence 5: skilled need/medical necessity statement describing skilled interventions (TherEx, functional training, gait/balance training, safety education) to improve function and reduce fall/injury risk.
-- Do NOT mention any visit counts (no "within 4 visits", no total visits).
-- Keep language professional, objective, and Medicare-appropriate.
-
-Sentence openers (use exactly these starters for sentences 1–5):
-1) ${s1Open}
-2) ${s2Open}
-3) ${s3Open}
-4) ${s4Open}
-5) ${s5Open}
-`.trim();
-}
 
 
 
@@ -403,15 +328,8 @@ async function isAlreadyOnHotbox(page) {
     .first()
     .isVisible()
     .catch(() => false);
-
-    // Additional common HotBox marker (DataTables length dropdown)
-    const hasLength = await frame
-      .locator("select[name='resultsTable_length']")
-      .first()
-      .isVisible()
-      .catch(() => false);
     
-    if (hasAnchor || hasSelect || hasLength) {
+    if (hasAnchor || hasSelect) {
       return true;
     }
   }
@@ -428,62 +346,8 @@ async function navigateToHotBox(page) {
   }
   
   log("➡️ Navigating to HotBox (robust mode)...");
-
-  // Helpful debug for post-save flows
-  try {
-    log("ℹ️ Current page URL before HotBox navigation:", page.url());
-  } catch {}
-
-  // Helper: wait/poll for HotBox markers to appear after navigation
-  async function waitForHotbox(timeoutMs = 12000) {
-    const deadline = Date.now() + timeoutMs;
-    while (Date.now() < deadline) {
-      if (await isAlreadyOnHotbox(page)) return true;
-      await wait(400);
-    }
-    return false;
-  }
-
-  // 0) Fastest/most reliable after Save: goBack() to HotBox (often the immediate previous page)
-  try {
-    for (let i = 0; i < 2; i++) {
-      await page.goBack({ waitUntil: "domcontentloaded", timeout: 8000 }).catch(() => null);
-      if (await waitForHotbox(9000)) {
-        log("✅ HotBox opened via browser back navigation.");
-        return;
-      }
-    }
-  } catch {}
-
-  // Determine the correct origin dynamically (some agencies use different origins/paths)
-  let origin = "https://www.kinnser.net";
-  try {
-    const u = new URL(page.url());
-    if (u && u.origin && u.origin.startsWith("http")) origin = u.origin;
-  } catch {}
   
   await wait(1000);
-
-  // 0) Prefer direct navigation first (most reliable after form save / iframe pages)
-  const directCandidates = [
-    `${origin}/hotbox.cfm?ts=${Date.now()}`,
-    `${origin}/secure/hotbox.cfm?ts=${Date.now()}`,
-    `${origin}/hotbox?ts=${Date.now()}`,
-  ];
-
-  for (const url of directCandidates) {
-    try {
-      log("➡️ HotBox direct URL attempt:", url);
-      await page.goto(url, { waitUntil: "domcontentloaded" });
-      // HotBox often loads nested frames after DOMContentLoaded
-      if (await waitForHotbox(12000)) {
-        log(`✅ HotBox opened via direct URL: ${url}`);
-        return;
-      }
-    } catch (e) {
-      log("⚠️ Direct URL attempt failed:", e?.message || String(e));
-    }
-  }
   
   // 2) Try direct "HotBox" link in main page
   try {
@@ -491,7 +355,7 @@ async function navigateToHotBox(page) {
     if (await hotboxLink.isVisible().catch(() => false)) {
       await hotboxLink.click({ timeout: 5000 }).catch(() => {});
       await wait(1200);
-      if (await waitForHotbox(12000)) {
+      if (await isAlreadyOnHotbox(page)) {
         log("✅ HotBox opened via direct link.");
         return;
       }
@@ -542,8 +406,8 @@ async function navigateToHotBox(page) {
       if (hotboxMenu) {
         await hotboxMenu.click({ force: true }).catch(() => {});
         await wait(1200);
-
-        if (await waitForHotbox(12000)) {
+        
+        if (await isAlreadyOnHotbox(page)) {
           log("✅ HotBox opened via Go To menu.");
           return;
         }
@@ -554,33 +418,19 @@ async function navigateToHotBox(page) {
   } else {
     log("⚠️ Could not find a 'Go To' menu. Trying fallbacks...");
   }
-
-  // 3.5) Fallback: click any link whose href contains "hotbox" (often present in headers/frames)
-  try {
-    for (const frame of page.frames()) {
-      const anyHotboxHref = frame.locator('a[href*="hotbox"]').first();
-      if (await anyHotboxHref.isVisible().catch(() => false)) {
-        await anyHotboxHref.click({ force: true, timeout: 5000 }).catch(() => {});
-        if (await waitForHotbox(12000)) {
-          log("✅ HotBox opened via href contains 'hotbox' link.");
-          return;
-        }
-      }
-    }
-  } catch {}
   
   // 4) Last resort: direct navigation attempts
   const candidates = [
-    `${origin}/hotbox.cfm`,
-    `${origin}/hotbox`,
-    `${origin}/secure/hotbox.cfm`,
+    "https://www.kinnser.net/hotbox.cfm",
+    "https://www.kinnser.net/hotbox",
+    "https://www.kinnser.net/secure/hotbox.cfm",
   ];
   
   for (const url of candidates) {
     try {
       await page.goto(url, { waitUntil: "domcontentloaded" });
       await wait(1500);
-      if (await waitForHotbox(12000)) {
+      if (await isAlreadyOnHotbox(page)) {
         log(`✅ HotBox opened via direct URL: ${url}`);
         return;
       }
@@ -1191,56 +1041,13 @@ function splitIntoSentences(paragraph) {
   .filter(Boolean);
 }
 
-
-// Ensure Clinical Statement always contains the required closing phrase, and avoid Kinnser truncation removing it.
-function enforceClinicalStatement(text, maxLen = 900) {
-  let t = String(text || "").replace(/\s+/g, " ").trim();
-  if (!t) return "";
-
-  const closing = "Continued skilled HH PT remains indicated.";
-
-  // Ensure closing phrase exists exactly.
-  if (!t.includes(closing)) {
-    // If it ends with the closing phrase missing period, normalize.
-    const closingNoPeriod = closing.replace(/\.$/, "");
-    if (t.trim().endsWith(closingNoPeriod)) {
-      t = t.trim().replace(new RegExp(`${closingNoPeriod}$`), closing);
-    } else {
-      // Append as a final sentence
-      if (!/[.!?]$/.test(t)) t += ".";
-      t = `${t} ${closing}`.replace(/\s+/g, " ").trim();
-    }
-  }
-
-  // Hard length guard: preserve the closing phrase by trimming earlier text if needed.
-  if (t.length > maxLen) {
-    const keep = closing.length + 1; // leading space
-    const headMax = Math.max(0, maxLen - keep);
-    let head = t.slice(0, headMax).trim();
-    head = head.replace(/[.!?\s]*$/, "");
-    if (head && !/[.!?]$/.test(head)) head += ".";
-    t = `${head} ${closing}`.replace(/\s+/g, " ").trim();
-  }
-
-  return t;
-}
-
 function isValidSixSentencePtParagraph(text) {
   const sentences = splitIntoSentences(text);
-  if (sentences.length !== 6) return false;
-
-  // Sentences 1-5 must start with "Pt" (capital P)
-  for (let i = 0; i < 5; i++) {
-    if (!/^Pt\b/.test(sentences[i])) return false;
-  }
-
-  // Sentence 6 must be EXACT required closing phrase
-  if (sentences[5].trim() !== "Continued skilled HH PT remains indicated.") return false;
-
-  // No pronouns
-  if (/\b(he|she|they|his|her|their)\b/i.test(text)) return false;
-
-  return true;
+  return (
+          sentences.length === 6 &&
+          sentences.every((s) => /^Pt\b/.test(s)) &&
+          !/\b(he|she|they|his|her|their)\b/i.test(text)
+          );
 }
 
 function buildEvalClinicalStatementFallback(structured) {
@@ -1259,7 +1066,7 @@ function buildEvalClinicalStatementFallback(structured) {
   const s3 = `Pt home environment and CG support were assessed, and safety hazards were addressed as indicated to promote safe mobility.`;
   const s4 = `Pt requires skilled HH PT to provide clinical assessment, HEP instruction, DME education, fall-prevention training, and CG training for safe mobility and transfers.`;
   const s5 = `Pt POC will emphasize TherEx, TherAct, gait training, balance training, and functional training with ongoing fall-risk reduction strategies.`;
-  const s6 = `Continued skilled HH PT remains indicated.`;
+  const s6 = `Pt requires continued skilled HH PT per POC to improve safety, mobility, and ADL performance.`;
   return [s1, s2, s3, s4, s5, s6].join(" ");
 }
 
@@ -1376,47 +1183,42 @@ function parseStructuredFromFreeText(aiNotes = "") {
   result.living = result.living || {};
   
   function cleanInlineValue(raw) {
-    let out = String(raw || "").trim();
-    if (!out) return "";
-    
-    // Cut off glued-on headers/sections if they appear on the same line
-    const stopTokens = [
-      "safety narrative",
-      "safety / sanitation hazards",
-      "safety hazards",
-      "sanitation hazards",
-      "evaluation of living situation",
-      "evaluation of living",
-      "living situation",
-      "patient lives",
-      "assistance is available",
-      "steps count",
-      "steps / stairs",
-      "dme",
-      "other:",
-      "hazard found",
-      "no hazard",
-      "no hazards identified",
-      "no hazards"
-    ];
-    
-    const lower = out.toLowerCase();
-    for (const token of stopTokens) {
-      const idx = lower.indexOf(token);
-      if (idx > 0) {
-        out = out.slice(0, idx).trim();
-        break;
-      }
+  let out = String(raw || "").trim();
+  if (!out) return "";
+
+  const stopTokens = [
+    "safety narrative",
+    "safety / sanitation hazards",
+    "safety hazards",
+    "sanitation hazards",
+    "evaluation of living situation",
+    "evaluation of living",
+    "living situation",
+    "patient lives",
+    "assistance is available",
+    "steps count",
+    "steps / stairs",
+    "dme",
+    "other:",
+    "hazard found",
+    "no hazard",
+    "no hazards identified",
+    "no hazards"
+  ];
+
+  const lower = out.toLowerCase();
+  for (const token of stopTokens) {
+    const idx = lower.indexOf(token);
+    if (idx > 0) {
+      out = out.slice(0, idx).trim();
+      break;
     }
-    
-    // Keep only the first sentence-like segment (prevents: "Family/daughter. No hazard found.")
-    out = out.split(/[.;|]/)[0].trim();
-    
-    // Collapse internal whitespace only
-    out = out.replace(/\s+/g, " ").trim();
-    
-    return out;
   }
+
+  out = out.split(/[.;|]/)[0].trim();
+  out = out.replace(/\s+/g, " ").trim();
+  return out;
+}
   
   // ---------------------------------------------------------
   // Helper: map living situation text to 1 of 3 Kinnser options
@@ -1513,17 +1315,17 @@ function parseStructuredFromFreeText(aiNotes = "") {
   // Example: "Current assistance types: Family/daughter"
   // ---------------------------------------------------------
   const currAsstMatch =
-  text.match(/(?:^|\n)\s*current\s*(types?\s*of\s*)?assistance\s*(types)?\s*:\s*([^\n\r]+)/i);
-  
+    text.match(/(?:^|\n)\s*current\s*(types?\s*of\s*)?assistance\s*(types)?\s*:\s*([^\n\r]+)/i);
+
   if (currAsstMatch) {
+<<<<<<< HEAD
     const raw = (currAsstMatch[3] || "").trim();
     const cleaned = cleanInlineValue(raw);
     if (cleaned) {
-      result.living.currentAssistanceTypes = cleaned;
-      result.living.rawCurrentAssistanceLine = cleaned;
+      result.living.rawCurrentAssistanceLine = cleaned; // authoritative
     }
   }
-  
+
   // ---------------------------------------------------------
   // Safety Narrative: store ONLY content after the colon (no "Safety Narrative:" prefix)
   // ---------------------------------------------------------
@@ -1536,8 +1338,28 @@ function parseStructuredFromFreeText(aiNotes = "") {
     narrative = narrative.replace(/\s+/g, " ").trim();
     if (narrative) {
       result.living.safetyNarrative = narrative;
+=======
+    let raw = (currAsstMatch[3] || "").trim();
+    if (raw) {
+      // 1) If the note concatenates the next sentence/section on the same line, cut it off safely.
+      
+      // Cut off known "next section" phrases if they appear
+      raw = raw.split(/\bno\s+hazard\b/i)[0].trim();
+      raw = raw.split(/\bhazard\b/i)[0].trim();
+      
+      // Cut off at the first sentence boundary if extra text follows (".", ";", "|")
+      // Keeps "Family / Spouse" from "Family / Spouse. No hazard found."
+      raw = raw.split(/[.;|]/)[0].trim();
+      
+      // Normalize spacing only (does not change wording)
+      raw = raw.replace(/\s+/g, " ").trim();
+      
+      result.living.currentAssistanceTypes = raw;
+      result.living.rawCurrentAssistanceLine = raw;
+>>>>>>> f419544 (Update)
     }
   }
+
   
   // ---------------------------------------------------------
   // Living situation + helper extraction
@@ -1772,94 +1594,96 @@ function parseStructuredFromFreeText(aiNotes = "") {
   }
   
   // GOALS BLOCK (bounded; stops before Frequency/other headings)
-  function stripWithinVisits(line) {
-    return String(line || "")
-    .replace(/\s*\bwithin\s+(?:a\s+)?(?:total\s+of\s+)?\d{1,2}\s*visits?\b\.?/gi, "")
-    .replace(/\s{2,}/g, " ")
-    .trim();
-  }
+	  
+	function stripWithinVisits(line) {
+	  return String(line || "")
+	    .replace(/\s*\bwithin\s+(?:a\s+)?(?:total\s+of\s+)?\d{1,2}\s*visits?\b\.?/gi, "")
+	    .replace(/\s{2,}/g, " ")
+	    .trim();
+	}
+	
+	function extractWithinVisits(line) {
+	  const m = String(line || "").match(/\bwithin\s+(?:a\s+)?(?:total\s+of\s+)?(\d{1,2})\s*visits?\b/i);
+	  return m ? `${m[1]} visits` : "";
+	}
+	
+	function toLines(block) {
+	  return String(block || "")
+	    .split(/\r?\n/)
+	    .map(s => s.trim())
+	    .filter(Boolean)
+	    .map(s => s.replace(/^[-•]+\s*/, "").trim());
+	}
+	
+	// --- A) Try STG/LTG format first ---
+	const stgBlock =
+	  text.match(/(?:^|\n)\s*short[-\s]*term\s*goals?\s*\(stg\)\s*:\s*([\s\S]+?)(?=\n\s*long[-\s]*term\s*goals?\s*\(ltg\)\s*:|\n{2,}|$)/i);
+	
+	const ltgBlock =
+	  text.match(/(?:^|\n)\s*long[-\s]*term\s*goals?\s*\(ltg\)\s*:\s*([\s\S]+?)(?=\n{2,}|$)/i);
+	
+	if (stgBlock || ltgBlock) {
+	  const stgRawLines = toLines(stgBlock?.[1] || "");
+	  const ltgRawLines = toLines(ltgBlock?.[1] || "");
+	
+	  // Extract visit counts from first line that contains "within X visits"
+	  const stgWithin = extractWithinVisits(stgRawLines.find(l => /within\s+\d+\s*visits?/i.test(l)) || "");
+	  const ltgWithin = extractWithinVisits(ltgRawLines.find(l => /within\s+\d+\s*visits?/i.test(l)) || "");
+	
+	  if (stgWithin) result.plan.shortTermVisits = stgWithin;
+	  if (ltgWithin) result.plan.longTermVisits = ltgWithin;
+	
+	  const stgGoals = stgRawLines.map(stripWithinVisits).filter(Boolean);
+	  const ltgGoals = ltgRawLines.map(stripWithinVisits).filter(Boolean);
+	
+	  // Build ordered goalTexts for Kinnser rows: STG then LTG
+	  result.plan.goalTexts = [...stgGoals, ...ltgGoals].filter(Boolean);
+	} else {
+	  // --- B) Fallback to generic "Goals:" block (your original behavior) ---
+	  const goalsBlock = text.match(
+	    /(?:^|\n)\s*goals?\s*:\s*([\s\S]+?)(?=\n\s*(frequency|plan|dme|vital signs|bp|hr|rr|temp|living situation|person helping|assessment summary|clinical statement)\s*:|\n{2,}|$)/i
+	  );
+	
+	  if (goalsBlock) {
+	    const rawBlock = goalsBlock[1] || "";
+	
+	    // Capture visit counts (supports "within X visits" OR "total of X visits")
+	    const visitMatches = [...rawBlock.matchAll(/\b(?:within\s+(?:a\s+)?(?:total\s+of\s+)?)?(\d{1,2})\s*visits?\b/gi)];
+	    if (visitMatches[0]) result.plan.shortTermVisits = `${visitMatches[0][1]} visits`;
+	    if (visitMatches[1]) result.plan.longTermVisits = `${visitMatches[1][1]} visits`;
+	
+	    const rawLines = rawBlock
+	      .split(/\r?\n/)
+	      .map((l) => l.trim())
+	      .filter(Boolean);
+	
+	    const merged = [];
+	
+	    const isNewGoal = (line) =>
+	      /^(STG|LTG)\s*:/i.test(line) ||
+	      /^\d+\s*[:.)]/.test(line) ||
+	      /^-\s+/.test(line) ||
+	      /^Pt\s+will\b/i.test(line);
+	
+	    for (const line of rawLines) {
+	      if (/^\s*frequency\s*:/i.test(line)) break;
+	
+	      if (!merged.length) merged.push(line);
+	      else if (isNewGoal(line)) merged.push(line);
+	      else {
+	        merged[merged.length - 1] = `${merged[merged.length - 1]} ${line}`
+	          .replace(/\s{2,}/g, " ")
+	          .trim();
+	      }
+	    }
+	
+	    result.plan.goalTexts = merged
+	      .map((l) => stripWithinVisits(l))
+	      .filter(Boolean)
+	      .filter((l) => !/^\s*frequency\s*:/i.test(l));
+	  }
+	}
   
-  function extractWithinVisits(line) {
-    const m = String(line || "").match(/\bwithin\s+(?:a\s+)?(?:total\s+of\s+)?(\d{1,2})\s*visits?\b/i);
-    return m ? `${m[1]} visits` : "";
-  }
-  
-  function toLines(block) {
-    return String(block || "")
-    .split(/\r?\n/)
-    .map(s => s.trim())
-    .filter(Boolean)
-    .map(s => s.replace(/^[-•]+\s*/, "").trim());
-  }
-  
-  // --- A) Try STG/LTG format first ---
-  const stgBlock =
-  text.match(/(?:^|\n)\s*short[-\s]*term\s*goals?\s*\(stg\)\s*:\s*([\s\S]+?)(?=\n\s*long[-\s]*term\s*goals?\s*\(ltg\)\s*:|\n{2,}|$)/i);
-  
-  const ltgBlock =
-  text.match(/(?:^|\n)\s*long[-\s]*term\s*goals?\s*\(ltg\)\s*:\s*([\s\S]+?)(?=\n{2,}|$)/i);
-  
-  if (stgBlock || ltgBlock) {
-    const stgRawLines = toLines(stgBlock?.[1] || "");
-    const ltgRawLines = toLines(ltgBlock?.[1] || "");
-    
-    // Extract visit counts from first line that contains "within X visits"
-    const stgWithin = extractWithinVisits(stgRawLines.find(l => /within\s+\d+\s*visits?/i.test(l)) || "");
-    const ltgWithin = extractWithinVisits(ltgRawLines.find(l => /within\s+\d+\s*visits?/i.test(l)) || "");
-    
-    if (stgWithin) result.plan.shortTermVisits = stgWithin;
-    if (ltgWithin) result.plan.longTermVisits = ltgWithin;
-    
-    const stgGoals = stgRawLines.map(stripWithinVisits).filter(Boolean);
-    const ltgGoals = ltgRawLines.map(stripWithinVisits).filter(Boolean);
-    
-    // Build ordered goalTexts for Kinnser rows: STG then LTG
-    result.plan.goalTexts = [...stgGoals, ...ltgGoals].filter(Boolean);
-  } else {
-    // --- B) Fallback to generic "Goals:" block (your original behavior) ---
-    const goalsBlock = text.match(
-                                  /(?:^|\n)\s*goals?\s*:\s*([\s\S]+?)(?=\n\s*(frequency|plan|dme|vital signs|bp|hr|rr|temp|living situation|person helping|assessment summary|clinical statement)\s*:|\n{2,}|$)/i
-                                  );
-    
-    if (goalsBlock) {
-      const rawBlock = goalsBlock[1] || "";
-      
-      // Capture visit counts (supports "within X visits" OR "total of X visits")
-      const visitMatches = [...rawBlock.matchAll(/\b(?:within\s+(?:a\s+)?(?:total\s+of\s+)?)?(\d{1,2})\s*visits?\b/gi)];
-      if (visitMatches[0]) result.plan.shortTermVisits = `${visitMatches[0][1]} visits`;
-      if (visitMatches[1]) result.plan.longTermVisits = `${visitMatches[1][1]} visits`;
-      
-      const rawLines = rawBlock
-      .split(/\r?\n/)
-      .map((l) => l.trim())
-      .filter(Boolean);
-      
-      const merged = [];
-      
-      const isNewGoal = (line) =>
-      /^(STG|LTG)\s*:/i.test(line) ||
-      /^\d+\s*[:.)]/.test(line) ||
-      /^-\s+/.test(line) ||
-      /^Pt\s+will\b/i.test(line);
-      
-      for (const line of rawLines) {
-        if (/^\s*frequency\s*:/i.test(line)) break;
-        
-        if (!merged.length) merged.push(line);
-        else if (isNewGoal(line)) merged.push(line);
-        else {
-          merged[merged.length - 1] = `${merged[merged.length - 1]} ${line}`
-          .replace(/\s{2,}/g, " ")
-          .trim();
-        }
-      }
-      
-      result.plan.goalTexts = merged
-      .map((l) => stripWithinVisits(l))
-      .filter(Boolean)
-      .filter((l) => !/^\s*frequency\s*:/i.test(l));
-    }
-  }
   
   // FREQUENCY
   const freqLineMatch =
@@ -2040,7 +1864,7 @@ async function extractNoteDataFromAI(aiNotes, visitType = "Evaluation") {
       patientLivesValue: structured.living?.patientLivesValue || "0",
       assistanceAvailableValue: structured.living?.assistanceAvailableValue || "0",
       evaluationText: structured.living?.evaluationText || "",
-      safetyNarrative: structured.living?.safetyNarrative || "",
+			safetyNarrative: structured.living?.safetyNarrative || "",
       stepsPresent: structured.living?.stepsPresent || false,
       stepsCount: structured.living?.stepsCount || "",
       currentAssistanceTypes: structured.living?.currentAssistanceTypes || "",
@@ -2091,51 +1915,6 @@ async function extractNoteDataFromAI(aiNotes, visitType = "Evaluation") {
   } catch (err) {
     log("[Vitals Parser] Error parsing vitals:", err.message);
   }
-
-
-
-  // =========================
-  // ✅ Initial Eval Assessment Summary (6 sentences exact)
-  // Uses buildHHEvalAssessmentPrompt() and does NOT include raw note text (avoids PHI blocks).
-  // If generation fails or format invalid, falls back to deterministic 6-sentence statement.
-  // =========================
-  if (visitLabel === "PT INITIAL PT EVALUATION" && process.env.OPENAI_API_KEY) {
-    try {
-      // Build concise problem list from parsed deficits (kept generic to avoid PHI and keep within field limits)
-      const probs = [];
-      if (structured?.func?.bedMobilityAssist) probs.push("impaired bed mobility");
-      if (structured?.func?.transfersAssist) probs.push("impaired transfers");
-      if (structured?.func?.gaitAssist || structured?.func?.gaitDistanceFt) probs.push("impaired gait");
-      probs.push("impaired balance");
-      probs.push("generalized weakness");
-
-      const primaryProblems = Array.from(new Set(probs)).join(", ");
-      const assistiveDeviceText =
-        (structured?.func?.gaitAD && String(structured.func.gaitAD).trim()) ||
-        (structured?.dme?.other && String(structured.dme.other).trim()) ||
-        "AD";
-
-      const assessmentPrompt = buildHHEvalAssessmentPrompt({
-        age: demo?.age || "",
-        gender: demo?.sex || "",
-        relevantMedicalHistory: defaults.relevantHistory || "",
-        primaryProblems,
-        assistiveDeviceText,
-      });
-
-      const stmt = await callOpenAIText(assessmentPrompt, 30000);
-      const stmtClean = String(stmt || "").replace(/\s+/g, " ").trim();
-
-      if (isValidSixSentencePtParagraph(stmtClean)) {
-        defaults.clinicalStatement = stmtClean;
-      } else {
-        defaults.clinicalStatement = buildEvalClinicalStatementFallback(structured);
-      }
-    } catch (e) {
-      log("⚠️ Assessment summary generation failed; using fallback:", e?.message || String(e));
-      defaults.clinicalStatement = buildEvalClinicalStatementFallback(structured);
-    }
-  }
   // =========================
   // ✅ SAFEGUARD: never send identifiers/secrets to OpenAI
   // =========================
@@ -2167,7 +1946,7 @@ Extract keys:
 - "plan": { "frequency","shortTermVisits","longTermVisits","goalTexts","planText" }
 
 If VISIT_TYPE is "PT INITIAL PT EVALUATION":
-Write EXACTLY 6 sentences, ONE paragraph. Sentences 1-5 must start with "Pt". Sentence 6 MUST be exactly: Continued skilled HH PT remains indicated.
+Write EXACTLY 6 sentences, ONE paragraph, and EVERY sentence must start with "Pt".
 Sentence #1 MUST begin exactly like:
 "${demoLine} who presents with PMH consists of <PMH> and is referred for HH PT to address <primary deficits>."
 Rules:
@@ -2397,6 +2176,8 @@ async function fillVitalsAndNarratives(context, data) {
   //   - Clinical Statement / Assessment Summary: #frm_EASI1
   // ==========================
   
+  // NOTE: "Re-evaluation" contains the substring "evaluation".
+  // Be strict here, or we will incorrectly overwrite Re-eval/Visit/DC fields.
   const vt = (data?.visitType || "").toLowerCase();
   const isReeval = vt.includes("re-eval") || vt.includes("re-evaluation") || vt.includes("recert");
   const isDischarge = vt.includes("discharge") || vt === "dc" || vt.includes(" dc");
@@ -2422,7 +2203,7 @@ async function fillVitalsAndNarratives(context, data) {
   // Only fill Clinical Statement (frm_EASI1) here for INITIAL EVAL.
   // Re-eval has its own dedicated fill logic in ptReevalBot.js.
   if (isInitialEval) {
-    const clinicalStatementText = enforceClinicalStatement((data?.clinicalStatement || "").trim());
+    const clinicalStatementText = (data?.clinicalStatement || "").trim();
     if (clinicalStatementText) {
       const cs = await firstVisibleLocator(frame, [
         "#frm_EASI1",
@@ -2443,44 +2224,32 @@ async function fillVitalsAndNarratives(context, data) {
   log("✅ Vitals + narratives finished.");
 }
 
-/* =========================
- * Medical Dx
- * =======================*/
-async function fillMedDiagnosisAndSubjective(context, data) {
-  log("➡️ Filling Medical Dx (always overwrite; subjective removed)...");
+  /* =========================
+   * Medical Dx
+   * =======================*/
   
-  const frame = await findTemplateScope(context);
-  if (!frame) {
-    log("⚠️ Template frame not found for Dx");
-    return;
-  }
-  
-  const medDxInput = await firstVisibleLocator(frame, ["#frm_MedDiagText"]);
-  if (!medDxInput) {
-    log("⚠️ Could not find Medical Dx field (#frm_MedDiagText).");
-    log("🚫 Subjective skipped (intentionally not filled).");
-    return;
-  }
-  
-  // Always overwrite with whatever is currently in data.medicalDiagnosis
-  // (If this is empty, it will clear the field.)
-  const dx = String((data && data.medicalDiagnosis) || "").trim();
-  
-  try {
-    await medDxInput.scrollIntoViewIfNeeded().catch(() => {});
-    await medDxInput.click({ timeout: 5000 }).catch(() => {});
-    await medDxInput.fill("").catch(() => {});
-    if (dx) {
-      await medDxInput.type(dx, { delay: 20 }).catch(() => {});
+  async function fillMedDiagnosisAndSubjective(context, data) {
+    log("➡️ Filling Medical Dx only (subjective removed)...");
+    
+    const frame = await findTemplateScope(context);
+    if (!frame) {
+      log("⚠️ Template frame not found for Dx");
+      return;
     }
-    log("🧾 Medical Dx overwritten with:", dx);
-  } catch (e) {
-    log("⚠️ Medical Dx overwrite failed:", (e && e.message) || String(e));
+    
+    // Medical Diagnosis ONLY
+    if (data.medicalDiagnosis) {
+      const medDxInput = await firstVisibleLocator(frame, ["#frm_MedDiagText"]);
+      if (medDxInput) {
+        await medDxInput.fill("");
+        await medDxInput.type(data.medicalDiagnosis, { delay: 20 });
+        log("🧾 Medical Dx filled:", data.medicalDiagnosis);
+      }
+    }
+    
+    // Subjective removed — do nothing
+    log("🚫 Subjective skipped (intentionally not filled).");
   }
-  
-  log("🚫 Subjective skipped (intentionally not filled).");
-}
-
 
 /* =========================
  * Subjective
@@ -2967,21 +2736,26 @@ async function fillHomeSafetySection(context, data) {
   }
   
   // ---- Evaluation narrative (#frm_SafetySanHaz13) ----
-  try {
-    const evalArea = await firstVisibleLocator(frame, ["#frm_SafetySanHaz13"]);
-    await safeType(evalArea, living.evaluationText, "Living/Safety narrative (#frm_SafetySanHaz13)");
-  } catch (e) {
-    log("⚠️ Could not fill Evaluation of Living Situation:", e.message);
-  }
+ try {
+	  const evalArea = await firstVisibleLocator(frame, ["#frm_SafetySanHaz13"]);
+	  const narrative =
+	    (living.safetyNarrative || "").trim() ||
+	    (living.evaluationText || "").trim();
+
+	  await safeType(evalArea, narrative, "Living/Safety narrative (#frm_SafetySanHaz13)");
+	} catch (e) {
+	  log("⚠️ Could not fill Evaluation of Living Situation:", e.message);
+	}
+  
   // ---- Current Types of Assistance (#frm_CurrTypAsst) ----
   try {
     const currAssist = await firstVisibleLocator(frame, ["#frm_CurrTypAsst", "#frm_CurrentTypesAsst", "#frm_CurrAsstTypes", "textarea[id*=\"CurrTyp\"]", "textarea[name*=\"CurrTyp\"]", "textarea[id*=\"Asst\"][id*=\"Type\"]", "textarea[name*=\"Asst\"][name*=\"Type\"]"]);
     await safeSetValue(
-     currAssist,
-     normalizeAssistanceText(living.currentAssistanceTypes),
-     "Current assistance types (#frm_CurrTypAsst)",
-     60000
-    );
+		  currAssist,
+		  String(living.currentAssistanceTypes || "").trim(),
+		  "Current assistance types (#frm_CurrTypAsst)",
+		  60000
+		);
   } catch (e) {
     log("⚠️ Could not fill Current Types of Assistance:", e.message);
   }
@@ -3889,12 +3663,6 @@ async function clickSave(contextOrPage) {
     return false;
   }
 
-  // Prefer clicking Save inside the active template scope first (avoids clicking an unrelated Save button)
-  try {
-    const templateScope = await findTemplateScope(contextOrPage).catch(() => null);
-    if (templateScope && (await tryClick(templateScope, "templateScope"))) return true;
-  } catch {}
-
   // Try on main scope/page
   if (await tryClick(scope, "scope")) return true;
 
@@ -3909,104 +3677,6 @@ async function clickSave(contextOrPage) {
 }
 
 
-// =========================
-// Post-save verification (prevents false 'completed' when nothing persisted)
-// =========================
-function _normTimeDigits(t) {
-  const s = String(t || '').trim();
-  if (!s) return '';
-  // Accept '1715', '17:15', '5:15', etc.
-  const digits = s.replace(/[^0-9]/g, '');
-  if (digits.length == 3) return '0' + digits; // 515 -> 0515
-  if (digits.length >= 4) return digits.slice(-4);
-  return digits;
-}
-
-async function verifyPersistedAfterSave(context, { timeIn, timeOut, visitDate, relevantHistory, clinicalStatement } = {}) {
-  const frame = await findTemplateScope(context, { timeoutMs: 12000, pollMs: 300 });
-  if (!frame) throw new Error('VERIFY_FAILED: could not find template scope after save');
-
-  // Visit basics
-  const ti = await firstVisibleLocator(frame, ['#frm_timein', "input[name^='frm_timein']"]);
-  const to = await firstVisibleLocator(frame, ['#frm_timeout', "input[name^='frm_timeout']"]);
-  const vd = await firstVisibleLocator(frame, ['#frm_visitdate', "input[name^='frm_visitdate']"]);
-
-  const gotTI = ti ? (await ti.inputValue().catch(() => '')).trim() : '';
-  const gotTO = to ? (await to.inputValue().catch(() => '')).trim() : '';
-  const gotVD = vd ? (await vd.inputValue().catch(() => '')).trim() : '';
-
-  if (timeIn && _normTimeDigits(gotTI) != _normTimeDigits(timeIn)) {
-    throw new Error(`VERIFY_FAILED: Time In mismatch expected=${timeIn} got=${gotTI}`);
-  }
-  if (timeOut && _normTimeDigits(gotTO) != _normTimeDigits(timeOut)) {
-    throw new Error(`VERIFY_FAILED: Time Out mismatch expected=${timeOut} got=${gotTO}`);
-  }
-  if (visitDate) {
-    const wantVD = normalizeDateToMMDDYYYY(visitDate);
-    const gotVDnorm = normalizeDateToMMDDYYYY(gotVD);
-    if (wantVD && gotVDnorm && gotVDnorm != wantVD) {
-      throw new Error(`VERIFY_FAILED: Visit Date mismatch expected=${wantVD} got=${gotVD}`);
-    }
-  }
-
-  // Key narratives for Initial Eval
-  if (relevantHistory) {
-    const rh = await firstVisibleLocator(frame, ['#frm_RlvntMedHist', "textarea#frm_RlvntMedHist", "textarea[name='frm_RlvntMedHist']"]);
-    const gotRH = rh ? (await rh.inputValue().catch(() => '')).trim() : '';
-    if (!gotRH) throw new Error('VERIFY_FAILED: Relevant Medical History empty after save');
-  }
-
-  if (clinicalStatement) {
-    const cs = await firstVisibleLocator(frame, ['#frm_EASI1', "textarea#frm_EASI1", "textarea[name='frm_EASI1']"]);
-    const gotCS = cs ? (await cs.inputValue().catch(() => '')).trim() : '';
-    if (!gotCS) throw new Error('VERIFY_FAILED: Clinical Statement empty after save');
-    // Ensure required closing phrase exists (your hard requirement)
-    if (!/Continued skilled HH PT remains indicated\./.test(gotCS)) {
-      throw new Error('VERIFY_FAILED: Clinical Statement missing required closing phrase');
-    }
-  }
-
-  return true;
-}
-
-
-
-
-async function verifyPersistedAfterReopen(page, context, {
-  patientName,
-  visitDate,
-  taskType,
-  timeIn,
-  timeOut,
-  relevantHistory,
-  clinicalStatement,
-} = {}) {
-  log('🔁 Re-open verification: returning to HotBox and re-opening the same task to confirm server persistence...');
-
-  // Go back to HotBox explicitly (avoids relying on in-page nav)
-  try {
-    await page.goto('https://www.kinnser.net/hotbox.cfm', { waitUntil: 'domcontentloaded' }).catch(() => {});
-    await wait(1200);
-  } catch {}
-
-  await navigateToHotBox(page);
-  await setHotboxShow100(page);
-
-  await openHotboxPatientTask(page, patientName, visitDate, taskType);
-  await selectTemplateGW2(context);
-
-  // Now verify fields again in the active template scope
-  await verifyPersistedAfterSave(context, {
-    timeIn,
-    timeOut,
-    visitDate,
-    relevantHistory,
-    clinicalStatement,
-  });
-
-  log('✅ Re-open verification passed (server persistence confirmed).');
-  return true;
-}
 
 /* =========================
  * Misc helpers & exports
@@ -4122,40 +3792,7 @@ async function runPtEvaluationBot({
     // 19) Frequency + effective date
     await fillFrequencyAndDate(context, aiData, visitDate);
     
-    await clickSave(context);
-
-    // Verify persistence to avoid false 'completed' status when Save clicked the wrong control
-    try {
-      await verifyPersistedAfterSave(context, {
-        timeIn,
-        timeOut,
-        visitDate,
-        relevantHistory: aiData?.relevantHistory,
-        clinicalStatement: aiData?.clinicalStatement,
-      });
-      log('✅ Post-save verification passed (fields persisted).');
-
-      // Strong guarantee: re-open the task from HotBox and verify again.
-      try {
-        await verifyPersistedAfterReopen(page, context, {
-          patientName,
-          visitDate,
-          taskType,
-          timeIn,
-          timeOut,
-          relevantHistory: aiData?.relevantHistory,
-          clinicalStatement: aiData?.clinicalStatement,
-        });
-      } catch (e2) {
-        logErrSafe('❌ Re-open verification failed:', e2.message);
-        throw e2;
-      }
-
-    } catch (e) {
-      logErrSafe('❌ Post-save verification failed:', e.message);
-      throw e;
-    }
-
+    await clickSave(page);
     await wait(2000);
     
   } finally {
