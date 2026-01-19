@@ -73,15 +73,6 @@ async function safeSetValue(locator, value, label = "field", timeoutMs = 60000) 
   try {
     await locator.fill("", { timeout: timeoutMs }).catch(() => {});
     await locator.fill(v, { timeout: timeoutMs });
-
-  // Ensure Kinnser/WellSky listeners fire (some fields persist only on change/blur)
-  await locator.evaluate((el) => {
-    try {
-      el.dispatchEvent(new Event('input', { bubbles: true }));
-      el.dispatchEvent(new Event('change', { bubbles: true }));
-      el.dispatchEvent(new Event('blur', { bubbles: true }));
-    } catch {}
-  });
   } catch (e) {
     // Fallback: direct JS assignment (more reliable in some WellSky fields)
     await locator.evaluate((el, val) => {
@@ -1013,14 +1004,31 @@ function parseAssistLevelBlock(line = "") {
  * =======================*/
 
 function sanitizeMedicalDiagnosis(dx) {
-  // Pass-through: user requested Medical Dx be copied as-is from note text
-  return String(dx ?? "").trim();
+  const s = (dx || "").trim();
+  if (!s) return "";
+  
+  // If it looks like a PMH list, do NOT push it into Medical Dx.
+  const commaCount = (s.match(/,/g) || []).length;
+  if (s.length > 90 || commaCount >= 4) return "";
+  
+  // Strip obvious non-dx narrative
+  if (/seen for|order from|training|caregiver|cg\b/i.test(s)) return "";
+  
+  return s;
 }
 
 function sanitizeRelevantHistory(pmh) {
-  // Pass-through: user requested Relevant Medical History be copied as-is
-  // Keep simple trim; do not drop content.
-  return String(pmh ?? "").trim();
+  let s = (pmh || "").trim();
+  if (!s) return "";
+  
+  // Remove age/sex lead-in & eval narrative if it sneaks in
+  s = s.replace(/\b\d{1,3}\s*y\/o\b.*?(female|male)\b[:,]?\s*/i, "");
+  s = s.replace(/\bseen for\b.*$/i, "").trim();
+  
+  // If still looks like referral narrative, skip it
+  if (s.length > 140 && /order|training|evaluation|seen for/i.test(s)) return "";
+  
+  return s.replace(/\s+/g, " ").trim();
 }
 
 function splitIntoSentences(paragraph) {
@@ -1083,9 +1091,7 @@ function parseNeuroFromText(text = "") {
 
 
 function parseStructuredFromFreeText(aiNotes = "") {
-  const DEFAULT_LIVING_TEXT =
-  "Pt lives in a SSH with family providing care around the clock. The home has hard/carpet surface flooring, bath tub. No hazard found.";
-  
+  // Copy-only defaults: do not invent living narrative or CG support
   const result = {
     medicalDiagnosis: "",
     relevantHistory: "",
@@ -1096,14 +1102,12 @@ function parseStructuredFromFreeText(aiNotes = "") {
     patientGoals: "",
     vitalsComment: "",
     living: {
-      evaluationText: DEFAULT_LIVING_TEXT,
-      patientLivesValue: inferPatientLivesValue(DEFAULT_LIVING_TEXT),
-      assistanceAvailableValue: inferAssistanceValue(DEFAULT_LIVING_TEXT),
+      evaluationText: "",
+      patientLivesValue: "0",
+      assistanceAvailableValue: "0",
       stepsPresent: false,
       stepsCount: "",
-      currentAssistanceTypes: DEFAULT_LIVING_TEXT.toLowerCase().includes("family")
-      ? "Family / CG"
-      : "",
+      currentAssistanceTypes: "",
       hasPets: false,
       rawLivingLine: "",
       rawHelperLine: "",
@@ -1310,32 +1314,17 @@ function parseStructuredFromFreeText(aiNotes = "") {
     text.match(/(?:^|\n)\s*current\s*(types?\s*of\s*)?assistance\s*(types)?\s*:\s*([^\n\r]+)/i);
 
   if (currAsstMatch) {
-
     const raw = (currAsstMatch[3] || "").trim();
     const cleaned = cleanInlineValue(raw);
     if (cleaned) {
-      // Authoritative: use explicit label as-is (only trimming/stop-token cleanup)
+      // Keep EXACT user-entered text (as-is, lightly cleaned) for Kinnser fill
       result.living.currentAssistanceTypes = cleaned;
       result.living.rawCurrentAssistanceLine = cleaned;
     }
   }
 
-  // ---------------------------------------------------------
-  // Safety Narrative: store ONLY content after the colon (no prefix)
-  // ---------------------------------------------------------
-  const safetyNarrMatch =
-    text.match(/(?:^|\n)\s*safety\s*narrative\s*:\s*([\s\S]+?)(?=\n\s*[a-zA-Z][^:\n]{0,60}\s*:\s*|\n{2,}|$)/i);
 
-  if (safetyNarrMatch) {
-    let narrative = (safetyNarrMatch[1] || "").trim();
-    narrative = narrative.replace(/^\s*safety\s*narrative\s*:\s*/i, "").trim();
-    narrative = narrative.replace(/\s+/g, " ").trim();
-    if (narrative) {
-      result.living.safetyNarrative = narrative;
-    }
-  }
 
-  
   // ---------------------------------------------------------
   // Living situation + helper extraction
   // ---------------------------------------------------------
@@ -1709,9 +1698,9 @@ function parseStructuredFromFreeText(aiNotes = "") {
   // ROM / Strength
   result.romStrength = parseRomAndStrength(text);
   
-  // CLINICAL STATEMENT fallback
+  // CLINICAL STATEMENT fallback (only if not already captured via explicit label)
   const topPara = text.trim().split(/\n{2,}/)[0];
-  if (topPara && topPara.length > 40) {
+  if (!result.clinicalStatement && topPara && topPara.length > 40) {
     result.clinicalStatement = topPara.trim();
   }
   
@@ -2158,27 +2147,24 @@ async function fillVitalsAndNarratives(context, data) {
   const isDischarge = vt.includes("discharge") || vt === "dc" || vt.includes(" dc");
   const isVisit = vt.includes("visit") && !isReeval && !isDischarge;
   const isInitialEval = !vt || (vt.includes("evaluation") && !isReeval && !isDischarge && !isVisit);
-  // Relevant Medical History: fill whenever present (copy as-is)
-  const relevantHistoryText = (data?.relevantHistory || "").trim();
-  if (relevantHistoryText) {
-    const relHist = await firstVisibleLocator(frame, [
-      "#frm_RlvntMedHist",
-      "textarea#frm_RlvntMedHist",
-      "textarea[name='frm_RlvntMedHist']",
-    ]);
-    if (relHist) {
-      await safeFillLargeText(relHist, relevantHistoryText, "frm_RlvntMedHist");
-      // Extra nudge for WellSky persistence: blur + short settle
-      await relHist.evaluate((el) => { try { el.dispatchEvent(new Event('blur', { bubbles: true })); } catch {} });
-      await wait(150).catch(() => {});
-      log("🧾 Relevant Medical History filled.");
-    } else {
-      log("⚠️ Could not find frm_RlvntMedHist on the template.");
+  
+  // Only fill PMH if explicitly present (prevents overwrite on Re-eval)
+  if (isInitialEval) {
+    const relevantHistoryText = (data?.relevantHistory || "").trim();
+    if (relevantHistoryText) {
+      const relHist = await firstVisibleLocator(frame, [
+        "#frm_RlvntMedHist",
+        "textarea#frm_RlvntMedHist",
+        "textarea[name='frm_RlvntMedHist']",
+      ]);
+      if (relHist) {
+        await safeFillLargeText(relHist, relevantHistoryText, "frm_RlvntMedHist");
+        log("🧾 Relevant Medical History filled.");
+      }
     }
   }
-
-
-// Only fill Clinical Statement (frm_EASI1) here for INITIAL EVAL.
+  
+  // Only fill Clinical Statement (frm_EASI1) here for INITIAL EVAL.
   // Re-eval has its own dedicated fill logic in ptReevalBot.js.
   if (isInitialEval) {
     const clinicalStatementText = (data?.clinicalStatement || "").trim();
