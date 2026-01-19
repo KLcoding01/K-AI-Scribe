@@ -73,6 +73,15 @@ async function safeSetValue(locator, value, label = "field", timeoutMs = 60000) 
   try {
     await locator.fill("", { timeout: timeoutMs }).catch(() => {});
     await locator.fill(v, { timeout: timeoutMs });
+
+  // Ensure Kinnser/WellSky listeners fire (some fields persist only on change/blur)
+  await locator.evaluate((el) => {
+    try {
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+      el.dispatchEvent(new Event('blur', { bubbles: true }));
+    } catch {}
+  });
   } catch (e) {
     // Fallback: direct JS assignment (more reliable in some WellSky fields)
     await locator.evaluate((el, val) => {
@@ -1179,23 +1188,7 @@ function parseStructuredFromFreeText(aiNotes = "") {
   
   if (!aiNotes) return result;
   const text = String(aiNotes ?? "");
-
-  // -------------------------
-  // MEDICAL DX (structured parse from note; no OpenAI dependency)
-  // -------------------------
-  const medDxMatch =
-    text.match(new RegExp('(?:^|\\n)\\s*medical\\s*(?:dx|diagnosis)\\s*:\\s*([^\\n\\r]+)', 'i')) ||
-    text.match(new RegExp('(?:^|\\n)\\s*diagnosis\\s*\\(\\s*dx\\s*\\)\\s*:\\s*([^\\n\\r]+)', 'i')) ||
-    text.match(new RegExp('(?:^|\\n)\\s*dx\\s*:\\s*([^\\n\\r]+)', 'i')) ||
-    text.match(new RegExp('(?:^|\\n)\\s*diagnosis\\s*:\\s*([^\\n\\r]+)', 'i'));
-
-  if (medDxMatch) {
-    const rawDx = cleanInlineValue(medDxMatch[1] || "");
-    const dx = (typeof sanitizeMedicalDiagnosis === "function")
-      ? sanitizeMedicalDiagnosis(rawDx)
-      : String(rawDx || "").trim();
-    if (dx) result.medicalDiagnosis = dx;
-  }
+  
   result.living = result.living || {};
   
   function cleanInlineValue(raw) {
@@ -1327,26 +1320,28 @@ function parseStructuredFromFreeText(aiNotes = "") {
   }
   
   // ---------------------------------------------------------
-  // Explicit label: Current assistance types (AS-IS, cleaned) — highest priority
-  // Example: "Current assistance types: Family/spouse"
+  // Explicit label: Current assistance types (AS-IS, cleaned) — single owner
+  // Example: "Current assistance types: Family/daughter"
   // ---------------------------------------------------------
   const currAsstMatch =
-    text.match(new RegExp('(?:^\n|\n)\s*current\s*(types?\s*of\s*)?assistance\s*(types)?\s*:\s*([^\n\r]+)', 'i'));
+    text.match(/(?:^|\n)\s*current\s*(types?\s*of\s*)?assistance\s*(types)?\s*:\s*([^\n\r]+)/i);
 
   if (currAsstMatch) {
-    const raw = cleanInlineValue(currAsstMatch[3] || "");
-    if (raw) {
-      // Keep EXACT user-entered text for Kinnser fill
-      result.living.currentAssistanceTypes = raw;
-      result.living.rawCurrentAssistanceLine = raw;
+
+    const raw = (currAsstMatch[3] || "").trim();
+    const cleaned = cleanInlineValue(raw);
+    if (cleaned) {
+      // Authoritative: use explicit label as-is (only trimming/stop-token cleanup)
+      result.living.currentAssistanceTypes = cleaned;
+      result.living.rawCurrentAssistanceLine = cleaned;
     }
   }
 
   // ---------------------------------------------------------
-  // Safety Narrative: store ONLY content after the colon (no "Safety Narrative:" prefix)
+  // Safety Narrative: store ONLY content after the colon (no prefix)
   // ---------------------------------------------------------
   const safetyNarrMatch =
-    text.match(new RegExp('(?:^|\n)\s*safety\s*narrative\s*:\s*([\s\S]+?)(?=\n\s*[a-zA-Z][^:\n]{0,60}\s*:\s*|\n{2,}|$)', 'i'));
+    text.match(/(?:^|\n)\s*safety\s*narrative\s*:\s*([\s\S]+?)(?=\n\s*[a-zA-Z][^:\n]{0,60}\s*:\s*|\n{2,}|$)/i);
 
   if (safetyNarrMatch) {
     let narrative = (safetyNarrMatch[1] || "").trim();
@@ -1357,6 +1352,7 @@ function parseStructuredFromFreeText(aiNotes = "") {
     }
   }
 
+  
   // ---------------------------------------------------------
   // Living situation + helper extraction
   // ---------------------------------------------------------
