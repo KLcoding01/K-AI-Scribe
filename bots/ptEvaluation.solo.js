@@ -38,7 +38,7 @@ function logErrSafe(...args) { return logErr(...args); }
 
 const { chromium } = require("playwright");
 const path = require("path");
-const { callOpenAIJSON } = require("./openaiClient");
+const { callOpenAIJSON, callOpenAIText } = require("./openaiClient");
 
 require("dotenv").config({
   path: path.resolve(__dirname, "../.env"),
@@ -56,6 +56,81 @@ const PASSWORD = process.env.KINNSER_PASSWORD;
  * =======================*/
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+
+// ------------------------------------------------------------
+// HH PT Evaluation Assessment Summary Prompt (6 sentences exact)
+// - Randomized sentence openers (chosen in JS, not by the model)
+// - Always ends with: "Continued skilled HH PT remains indicated."
+// ------------------------------------------------------------
+function buildHHEvalAssessmentPrompt({
+  age,
+  gender,
+  relevantMedicalHistory,
+  primaryProblems,
+  assistiveDeviceText,
+} = {}) {
+  const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
+
+  const ageTxt = String(age ?? "").trim();
+  const genderTxt = String(gender ?? "").trim();
+  const pmhTxt = String(relevantMedicalHistory ?? "").trim();
+  const probsTxt = String(
+    primaryProblems ??
+      "generalized weakness with impaired bed mobility, transfers, gait, and balance"
+  ).trim();
+  const adTxt = String(assistiveDeviceText ?? "AD").trim();
+
+  const s1Open = pick(["Pt is a", "Pt is a pleasant", "Pt is a", "Pt is a"]);
+  const s2Open = pick([
+    "Pt is seen today for",
+    "Pt was evaluated today for",
+    "Pt is seen for",
+    "Today, pt is seen for",
+  ]);
+  const s3Open = pick([
+    "Currently, pt demonstrates",
+    "At this time, pt presents with",
+    "Pt currently demonstrates",
+    "Pt presents with",
+  ]);
+  const s4Open = pick(["Pt exhibits", "Pt demonstrates", "Pt displays", "Pt shows"]);
+  const s5Open = pick([
+    "Skilled HH PT services are medically necessary to",
+    "Skilled HH PT is medically necessary to",
+    "Skilled PT services are required to",
+    "Skilled HH PT intervention is indicated to",
+  ]);
+
+  return `
+Write an Assessment Summary for a Medicare home health physical therapy INITIAL EVALUATION.
+Output EXACTLY 6 sentences total, in one paragraph, no line breaks, no numbering, no bullets, no quotes.
+Sentence 6 MUST be exactly: Continued skilled HH PT remains indicated.
+
+Use this patient context (do not invent new diagnoses or demographics):
+- Age: ${ageTxt || "___"}
+- Gender: ${genderTxt || "___"}
+- Relevant Medical History (PMH): ${pmhTxt || "___"}
+- Primary problems/impairments: ${probsTxt}
+- Assistive device wording: ${adTxt}
+
+Required content rules:
+- Sentence 1: demographics + PMH (use only provided PMH; do not add).
+- Sentence 2: must include PT initial evaluation + home safety assessment + DME assessment + HEP education + fall safety precautions/fall prevention + education on proper use of ${adTxt} + education on pain/edema management + PT POC/goal planning to return toward PLOF.
+- Sentence 3: objective functional deficits (bed mobility, transfers, gait, balance, generalized weakness) and high fall risk linkage.
+- Sentence 4: safety awareness/balance reactions and home risk statement (high fall risk).
+- Sentence 5: skilled need/medical necessity statement describing skilled interventions (TherEx, functional training, gait/balance training, safety education) to improve function and reduce fall/injury risk.
+- Do NOT mention any visit counts (no "within 4 visits", no total visits).
+- Keep language professional, objective, and Medicare-appropriate.
+
+Sentence openers (use exactly these starters for sentences 1–5):
+1) ${s1Open}
+2) ${s2Open}
+3) ${s3Open}
+4) ${s4Open}
+5) ${s5Open}
+`.trim();
+}
 
 
 
@@ -1041,13 +1116,56 @@ function splitIntoSentences(paragraph) {
   .filter(Boolean);
 }
 
+
+// Ensure Clinical Statement always contains the required closing phrase, and avoid Kinnser truncation removing it.
+function enforceClinicalStatement(text, maxLen = 900) {
+  let t = String(text || "").replace(/\s+/g, " ").trim();
+  if (!t) return "";
+
+  const closing = "Continued skilled HH PT remains indicated.";
+
+  // Ensure closing phrase exists exactly.
+  if (!t.includes(closing)) {
+    // If it ends with the closing phrase missing period, normalize.
+    const closingNoPeriod = closing.replace(/\.$/, "");
+    if (t.trim().endsWith(closingNoPeriod)) {
+      t = t.trim().replace(new RegExp(`${closingNoPeriod}$`), closing);
+    } else {
+      // Append as a final sentence
+      if (!/[.!?]$/.test(t)) t += ".";
+      t = `${t} ${closing}`.replace(/\s+/g, " ").trim();
+    }
+  }
+
+  // Hard length guard: preserve the closing phrase by trimming earlier text if needed.
+  if (t.length > maxLen) {
+    const keep = closing.length + 1; // leading space
+    const headMax = Math.max(0, maxLen - keep);
+    let head = t.slice(0, headMax).trim();
+    head = head.replace(/[.!?\s]*$/, "");
+    if (head && !/[.!?]$/.test(head)) head += ".";
+    t = `${head} ${closing}`.replace(/\s+/g, " ").trim();
+  }
+
+  return t;
+}
+
 function isValidSixSentencePtParagraph(text) {
   const sentences = splitIntoSentences(text);
-  return (
-          sentences.length === 6 &&
-          sentences.every((s) => /^Pt\b/.test(s)) &&
-          !/\b(he|she|they|his|her|their)\b/i.test(text)
-          );
+  if (sentences.length !== 6) return false;
+
+  // Sentences 1-5 must start with "Pt" (capital P)
+  for (let i = 0; i < 5; i++) {
+    if (!/^Pt\b/.test(sentences[i])) return false;
+  }
+
+  // Sentence 6 must be EXACT required closing phrase
+  if (sentences[5].trim() !== "Continued skilled HH PT remains indicated.") return false;
+
+  // No pronouns
+  if (/\b(he|she|they|his|her|their)\b/i.test(text)) return false;
+
+  return true;
 }
 
 function buildEvalClinicalStatementFallback(structured) {
@@ -1066,7 +1184,7 @@ function buildEvalClinicalStatementFallback(structured) {
   const s3 = `Pt home environment and CG support were assessed, and safety hazards were addressed as indicated to promote safe mobility.`;
   const s4 = `Pt requires skilled HH PT to provide clinical assessment, HEP instruction, DME education, fall-prevention training, and CG training for safe mobility and transfers.`;
   const s5 = `Pt POC will emphasize TherEx, TherAct, gait training, balance training, and functional training with ongoing fall-risk reduction strategies.`;
-  const s6 = `Pt requires continued skilled HH PT per POC to improve safety, mobility, and ADL performance.`;
+  const s6 = `Continued skilled HH PT remains indicated.`;
   return [s1, s2, s3, s4, s5, s6].join(" ");
 }
 
@@ -1898,6 +2016,51 @@ async function extractNoteDataFromAI(aiNotes, visitType = "Evaluation") {
   } catch (err) {
     log("[Vitals Parser] Error parsing vitals:", err.message);
   }
+
+
+
+  // =========================
+  // ✅ Initial Eval Assessment Summary (6 sentences exact)
+  // Uses buildHHEvalAssessmentPrompt() and does NOT include raw note text (avoids PHI blocks).
+  // If generation fails or format invalid, falls back to deterministic 6-sentence statement.
+  // =========================
+  if (visitLabel === "PT INITIAL PT EVALUATION" && process.env.OPENAI_API_KEY) {
+    try {
+      // Build concise problem list from parsed deficits (kept generic to avoid PHI and keep within field limits)
+      const probs = [];
+      if (structured?.func?.bedMobilityAssist) probs.push("impaired bed mobility");
+      if (structured?.func?.transfersAssist) probs.push("impaired transfers");
+      if (structured?.func?.gaitAssist || structured?.func?.gaitDistanceFt) probs.push("impaired gait");
+      probs.push("impaired balance");
+      probs.push("generalized weakness");
+
+      const primaryProblems = Array.from(new Set(probs)).join(", ");
+      const assistiveDeviceText =
+        (structured?.func?.gaitAD && String(structured.func.gaitAD).trim()) ||
+        (structured?.dme?.other && String(structured.dme.other).trim()) ||
+        "AD";
+
+      const assessmentPrompt = buildHHEvalAssessmentPrompt({
+        age: demo?.age || "",
+        gender: demo?.sex || "",
+        relevantMedicalHistory: defaults.relevantHistory || "",
+        primaryProblems,
+        assistiveDeviceText,
+      });
+
+      const stmt = await callOpenAIText(assessmentPrompt, 30000);
+      const stmtClean = String(stmt || "").replace(/\s+/g, " ").trim();
+
+      if (isValidSixSentencePtParagraph(stmtClean)) {
+        defaults.clinicalStatement = stmtClean;
+      } else {
+        defaults.clinicalStatement = buildEvalClinicalStatementFallback(structured);
+      }
+    } catch (e) {
+      log("⚠️ Assessment summary generation failed; using fallback:", e?.message || String(e));
+      defaults.clinicalStatement = buildEvalClinicalStatementFallback(structured);
+    }
+  }
   // =========================
   // ✅ SAFEGUARD: never send identifiers/secrets to OpenAI
   // =========================
@@ -1929,7 +2092,7 @@ Extract keys:
 - "plan": { "frequency","shortTermVisits","longTermVisits","goalTexts","planText" }
 
 If VISIT_TYPE is "PT INITIAL PT EVALUATION":
-Write EXACTLY 6 sentences, ONE paragraph, and EVERY sentence must start with "Pt".
+Write EXACTLY 6 sentences, ONE paragraph. Sentences 1-5 must start with "Pt". Sentence 6 MUST be exactly: Continued skilled HH PT remains indicated.
 Sentence #1 MUST begin exactly like:
 "${demoLine} who presents with PMH consists of <PMH> and is referred for HH PT to address <primary deficits>."
 Rules:
@@ -2184,7 +2347,7 @@ async function fillVitalsAndNarratives(context, data) {
   // Only fill Clinical Statement (frm_EASI1) here for INITIAL EVAL.
   // Re-eval has its own dedicated fill logic in ptReevalBot.js.
   if (isInitialEval) {
-    const clinicalStatementText = (data?.clinicalStatement || "").trim();
+    const clinicalStatementText = enforceClinicalStatement((data?.clinicalStatement || "").trim());
     if (clinicalStatementText) {
       const cs = await firstVisibleLocator(frame, [
         "#frm_EASI1",
