@@ -872,68 +872,22 @@ async function fillVisitBasics(context, { timeIn, timeOut, visitDate }) {
  * =======================*/
 
 function inferPatientLivesValue(livingText = "") {
-  const t = String(livingText || "").toLowerCase();
-  if (!t.trim()) return "0";
-
-  // 3 = congregate situation (facility-type settings)
-  const congregateSignals = [
-    "assisted living",
-    "alf",
-    "board and care",
-    "board & care",
-    "b&c",
-    "room and board",
-    "congregate",
-    "facility",
-    "snf",
-    "skilled nursing",
-    "nursing home",
-    "memory care",
-    "group home",
-    "rcfe",
-    "residential care"
-  ];
-  if (congregateSignals.some((k) => t.includes(k))) return "3";
-
-  // 1 = alone (requires explicit/strong language)
-  const aloneSignals = [
-    "lives alone",
-    "living alone",
-    " alone",
-    "by self",
-    "on own",
-    "no one",
-    "no help",
-    "no assistance",
-    "without help"
-  ];
-
-  // 2 = with other person(s) in home (signals of cohabitation/support)
-  const withOthersSignals = [
-    "lives with",
-    "with family",
-    "family",
-    "spouse",
-    "husband",
-    "wife",
-    "partner",
-    "roommate",
-    "roommates",
-    "caregiver",
-    "cg",
-    "staff",
-    "shared room",
-    "share room",
-    "shared home",
-    "share home"
-  ];
-
-  const aloneHit = aloneSignals.some((k) => t.includes(k));
-  const withHit = withOthersSignals.some((k) => t.includes(k));
-
-  if (aloneHit && !withHit) return "1";
-
-  // default = with others
+  const t = livingText.toLowerCase();
+  if (!t) return "0";
+  
+  if (
+      t.includes("assisted living") ||
+      t.includes("board and care") ||
+      t.includes("congregate")
+      ) {
+        return "3"; // in congregate situation
+      }
+  
+  if (t.includes("alone") && !t.includes("24/7") && !t.includes("around the clock")) {
+    return "1"; // alone
+  }
+  
+  // default – with other persons in the home
   return "2";
 }
 
@@ -1225,7 +1179,23 @@ function parseStructuredFromFreeText(aiNotes = "") {
   
   if (!aiNotes) return result;
   const text = String(aiNotes ?? "");
-  
+
+  // -------------------------
+  // MEDICAL DX (structured parse from note; no OpenAI dependency)
+  // -------------------------
+  const medDxMatch =
+    text.match(new RegExp('(?:^|\\n)\\s*medical\\s*(?:dx|diagnosis)\\s*:\\s*([^\\n\\r]+)', 'i')) ||
+    text.match(new RegExp('(?:^|\\n)\\s*diagnosis\\s*\\(\\s*dx\\s*\\)\\s*:\\s*([^\\n\\r]+)', 'i')) ||
+    text.match(new RegExp('(?:^|\\n)\\s*dx\\s*:\\s*([^\\n\\r]+)', 'i')) ||
+    text.match(new RegExp('(?:^|\\n)\\s*diagnosis\\s*:\\s*([^\\n\\r]+)', 'i'));
+
+  if (medDxMatch) {
+    const rawDx = cleanInlineValue(medDxMatch[1] || "");
+    const dx = (typeof sanitizeMedicalDiagnosis === "function")
+      ? sanitizeMedicalDiagnosis(rawDx)
+      : String(rawDx || "").trim();
+    if (dx) result.medicalDiagnosis = dx;
+  }
   result.living = result.living || {};
   
   function cleanInlineValue(raw) {
@@ -1265,24 +1235,110 @@ function parseStructuredFromFreeText(aiNotes = "") {
   out = out.replace(/\s+/g, " ").trim();
   return out;
 }
+  
   // ---------------------------------------------------------
-  // Living situation mapping uses the global inferPatientLivesValue(...) helper (returns Kinnser option value)
+  // Helper: map living situation text to 1 of 3 Kinnser options
   // ---------------------------------------------------------
-
+  function inferPatientLivesValue(livingLine) {
+    const s = (livingLine || "").toLowerCase().trim();
+    
+    const ALONE = "Alone";
+    const WITH_OTHERS = "With other person(s) in the home";
+    const CONGREGATE = "In congregate situation, e.g., assisted living";
+    
+    // 1) CONGREGATE (highest priority)
+    const congregatePatterns = [
+      /\bcongregate\b/,
+      /\bassisted\s*living\b/,
+      /\balf\b/,
+      /\bboard\s*(and|&)\s*care\b/,
+      /\bb\s*&\s*c\b/,
+      /\broom\s*and\s*board\b/,
+      /\bgroup\s*home\b/,
+      /\bmemory\s*care\b/,
+      /\bnursing\s*home\b/,
+      /\bsnf\b/,
+      /\bskilled\s*nursing\b/,
+      /\bltc\b/,
+      /\blong[-\s]*term\s*care\b/,
+      /\bfacility\b/,
+      /\bcare\s*home\b/,
+      /\brcfe\b/,
+      /\bresidential\s*care\b/,
+      /\bretirement\s*home\b/
+    ];
+    if (congregatePatterns.some((re) => re.test(s))) return CONGREGATE;
+    
+    // 2) ALONE (explicit / strong indicators)
+    const alonePatterns = [
+      /\blives\s*alone\b/,
+      /\bliving\s*alone\b/,
+      /\balone\b/,
+      /\bby\s*(my|him|her)?\s*self\b/,
+      /\bon\s*(my|his|her)?\s*own\b/,
+      /\bno\s*one\b/,
+      /\bno\s*help\b/,
+      /\bno\s*assistance\b/,
+      /\bno\s*caregiver\b/,
+      /\bwithout\s*help\b/
+    ];
+    
+    if (alonePatterns.some((re) => re.test(s))) {
+      // Guard: if someone else is mentioned too, treat as WITH OTHERS
+      const withOthersGuard = [
+        /\blives\s*with\b/,
+        /\bwith\b/,
+        /\bfamily\b/,
+        /\bspouse\b/,
+        /\bhusband\b/,
+        /\bwife\b/,
+        /\bpartner\b/,
+        /\broommate(s)?\b/,
+        /\bfriend\b/,
+        /\bcaregiver\b/,
+        /\bcg\b/,
+        /\bstaff\b/,
+        /\bshared?\s*(room|home)\b/,
+        /\bshare\s*(a\s*)?(room|home)\b/
+      ];
+      if (!withOthersGuard.some((re) => re.test(s))) return ALONE;
+    }
+    
+    // 3) WITH OTHER PERSON(S)
+    const withOthersPatterns = [
+      /\blives\s*with\b/,
+      /\bwith\b/,
+      /\bfamily\b/,
+      /\bspouse\b/,
+      /\bhusband\b/,
+      /\bwife\b/,
+      /\bpartner\b/,
+      /\broommate(s)?\b/,
+      /\bfriend\b/,
+      /\bcaregiver\b/,
+      /\bcg\b/,
+      /\bstaff\b/,
+      /\bshared?\s*(room|home)\b/,
+      /\bshare\s*(a\s*)?(room|home)\b/
+    ];
+    if (withOthersPatterns.some((re) => re.test(s))) return WITH_OTHERS;
+    
+    return WITH_OTHERS;
+  }
+  
   // ---------------------------------------------------------
-  // Explicit label: Current assistance types (AS-IS, cleaned) — single owner
-  // Example: "Current assistance types: Family/daughter"
+  // Explicit label: Current assistance types (AS-IS, cleaned) — highest priority
+  // Example: "Current assistance types: Family/spouse"
   // ---------------------------------------------------------
   const currAsstMatch =
-    text.match(/(?:^|\n)\s*current\s*(types?\s*of\s*)?assistance\s*(types)?\s*:\s*([^\n\r]+)/i);
+    text.match(new RegExp('(?:^\n|\n)\s*current\s*(types?\s*of\s*)?assistance\s*(types)?\s*:\s*([^\n\r]+)', 'i'));
 
   if (currAsstMatch) {
-    const raw = (currAsstMatch[3] || "").trim();
-    const cleaned = cleanInlineValue(raw);
-    if (cleaned) {
-      // Keep EXACT user-entered text (as-is) for Kinnser fill
-      result.living.currentAssistanceTypes = cleaned;
-      result.living.rawCurrentAssistanceLine = cleaned;
+    const raw = cleanInlineValue(currAsstMatch[3] || "");
+    if (raw) {
+      // Keep EXACT user-entered text for Kinnser fill
+      result.living.currentAssistanceTypes = raw;
+      result.living.rawCurrentAssistanceLine = raw;
     }
   }
 
@@ -1290,7 +1346,7 @@ function parseStructuredFromFreeText(aiNotes = "") {
   // Safety Narrative: store ONLY content after the colon (no "Safety Narrative:" prefix)
   // ---------------------------------------------------------
   const safetyNarrMatch =
-  text.match(/(?:^|\n)\s*safety\s*narrative\s*:\s*([\s\S]+?)(?=\n\s*[a-zA-Z][^:\n]{0,60}\s*:\s*|\n{2,}|$)/i);
+    text.match(new RegExp('(?:^|\n)\s*safety\s*narrative\s*:\s*([\s\S]+?)(?=\n\s*[a-zA-Z][^:\n]{0,60}\s*:\s*|\n{2,}|$)', 'i'));
 
   if (safetyNarrMatch) {
     let narrative = (safetyNarrMatch[1] || "").trim();
@@ -1300,7 +1356,6 @@ function parseStructuredFromFreeText(aiNotes = "") {
       result.living.safetyNarrative = narrative;
     }
   }
-
 
   // ---------------------------------------------------------
   // Living situation + helper extraction
