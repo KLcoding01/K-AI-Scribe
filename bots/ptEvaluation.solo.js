@@ -38,7 +38,7 @@ function logErrSafe(...args) { return logErr(...args); }
 
 const { chromium } = require("playwright");
 const path = require("path");
-const { callOpenAIJSON, callOpenAIText, buildHHEvalAssessmentPrompt } = require("./openaiClient");
+const { callOpenAIJSON } = require("./openaiClient");
 
 require("dotenv").config({
   path: path.resolve(__dirname, "../.env"),
@@ -985,32 +985,20 @@ function parseAssistLevelBlock(line = "") {
     result.device = devMatch[1].trim();
   }
   
-
-  // distance / reps
-  // Supports: "x 150 ft", "150 ft", "150", "x 3", etc.
-  const distMatch1 = rest.match(/x\s*(\d+)\s*(ft|feet)?/i);
-  if (distMatch1) {
-    result.distanceFt = distMatch1[1];
+  // distance or reps  e.g. "x 150", "x 3"
+  const distMatch = rest.match(/x\s*(\d+)\s*(ft|feet)?/i);
+  if (distMatch) {
+    result.distanceFt = distMatch[1];
   }
-  // Also accept plain "150 ft" without an "x"
-  if (!result.distanceFt) {
-    const distMatch2 = rest.match(/(\d+)\s*(ft|feet)/i);
-    if (distMatch2) result.distanceFt = distMatch2[1];
-  }
-
-  const repsMatch = rest.match(/x\s*(\d+)(?!\s*(ft|feet))/i);
+  
+  const repsMatch = rest.match(/x\s*(\d+)\b(?!\s*(ft|feet))/i);
   if (repsMatch) {
     result.reps = repsMatch[1];
   }
-
-  // If no device captured but we have a "with ..." later, grab it
-  if (!result.device) {
-    const dev2 = rest.match(/(?:with|w\/)\s+(.+)$/i);
-    if (dev2) result.device = dev2[1].trim();
-  }
-
+  
   return result;
 }
+
 /* =========================
  * AI/Regex safety helpers (prevents wrong transfers)
  * =======================*/
@@ -1191,7 +1179,23 @@ function parseStructuredFromFreeText(aiNotes = "") {
   
   if (!aiNotes) return result;
   const text = String(aiNotes ?? "");
-  
+
+  // -------------------------
+  // MEDICAL DX (structured parse from note; no OpenAI dependency)
+  // -------------------------
+  const medDxMatch =
+    text.match(new RegExp('(?:^|\\n)\\s*medical\\s*(?:dx|diagnosis)\\s*:\\s*([^\\n\\r]+)', 'i')) ||
+    text.match(new RegExp('(?:^|\\n)\\s*diagnosis\\s*\\(\\s*dx\\s*\\)\\s*:\\s*([^\\n\\r]+)', 'i')) ||
+    text.match(new RegExp('(?:^|\\n)\\s*dx\\s*:\\s*([^\\n\\r]+)', 'i')) ||
+    text.match(new RegExp('(?:^|\\n)\\s*diagnosis\\s*:\\s*([^\\n\\r]+)', 'i'));
+
+  if (medDxMatch) {
+    const rawDx = cleanInlineValue(medDxMatch[1] || "");
+    const dx = (typeof sanitizeMedicalDiagnosis === "function")
+      ? sanitizeMedicalDiagnosis(rawDx)
+      : String(rawDx || "").trim();
+    if (dx) result.medicalDiagnosis = dx;
+  }
   result.living = result.living || {};
   
   function cleanInlineValue(raw) {
@@ -1323,17 +1327,18 @@ function parseStructuredFromFreeText(aiNotes = "") {
   }
   
   // ---------------------------------------------------------
-  // Explicit label: Current assistance types (AS-IS, cleaned) — single owner
-  // Example: "Current assistance types: Family/daughter"
+  // Explicit label: Current assistance types (AS-IS, cleaned) — highest priority
+  // Example: "Current assistance types: Family/spouse"
   // ---------------------------------------------------------
   const currAsstMatch =
-    text.match(/(?:^|\n)\s*current\s*(types?\s*of\s*)?assistance\s*(types)?\s*:\s*([^\n\r]+)/i);
+    text.match(new RegExp('(?:^\n|\n)\s*current\s*(types?\s*of\s*)?assistance\s*(types)?\s*:\s*([^\n\r]+)', 'i'));
 
   if (currAsstMatch) {
-    const raw = (currAsstMatch[3] || "").trim();
-    const cleaned = cleanInlineValue(raw);
-    if (cleaned) {
-      result.living.rawCurrentAssistanceLine = cleaned; // authoritative
+    const raw = cleanInlineValue(currAsstMatch[3] || "");
+    if (raw) {
+      // Keep EXACT user-entered text for Kinnser fill
+      result.living.currentAssistanceTypes = raw;
+      result.living.rawCurrentAssistanceLine = raw;
     }
   }
 
@@ -1341,35 +1346,17 @@ function parseStructuredFromFreeText(aiNotes = "") {
   // Safety Narrative: store ONLY content after the colon (no "Safety Narrative:" prefix)
   // ---------------------------------------------------------
   const safetyNarrMatch =
-  text.match(/(?:^|\n)\s*safety\s*narrative\s*:\s*([\s\S]+?)(?=\n\s*[a-zA-Z][^:\n]{0,60}\s*:\s*|\n{2,}|$)/i);
-  
+    text.match(new RegExp('(?:^|\n)\s*safety\s*narrative\s*:\s*([\s\S]+?)(?=\n\s*[a-zA-Z][^:\n]{0,60}\s*:\s*|\n{2,}|$)', 'i'));
+
   if (safetyNarrMatch) {
     let narrative = (safetyNarrMatch[1] || "").trim();
     narrative = narrative.replace(/^\s*safety\s*narrative\s*:\s*/i, "").trim();
     narrative = narrative.replace(/\s+/g, " ").trim();
     if (narrative) {
       result.living.safetyNarrative = narrative;
-    let raw = (currAsstMatch[3] || "").trim();
-    if (raw) {
-      // 1) If the note concatenates the next sentence/section on the same line, cut it off safely.
-      
-      // Cut off known "next section" phrases if they appear
-      raw = raw.split(/\bno\s+hazard\b/i)[0].trim();
-      raw = raw.split(/\bhazard\b/i)[0].trim();
-      
-      // Cut off at the first sentence boundary if extra text follows (".", ";", "|")
-      // Keeps "Family / Spouse" from "Family / Spouse. No hazard found."
-      raw = raw.split(/[.;|]/)[0].trim();
-      
-      // Normalize spacing only (does not change wording)
-      raw = raw.replace(/\s+/g, " ").trim();
-      
-      result.living.currentAssistanceTypes = raw;
-      result.living.rawCurrentAssistanceLine = raw;
     }
   }
 
-  
   // ---------------------------------------------------------
   // Living situation + helper extraction
   // ---------------------------------------------------------
@@ -2010,8 +1997,6 @@ ${text}
   
   return {
     visitType,
-    demoAge: (demo && demo.age) ? String(demo.age) : "",
-    demoSex: (demo && demo.sex) ? String(demo.sex) : "",
     hasExplicitPMH: structured.hasExplicitPMH,
     relevantHistory: (parsed.relevantHistory || defaults.relevantHistory || "").trim(),
     clinicalStatement: (parsed.clinicalStatement || defaults.clinicalStatement || "").trim(),
@@ -2212,36 +2197,9 @@ async function fillVitalsAndNarratives(context, data) {
   }
   
   // Only fill Clinical Statement (frm_EASI1) here for INITIAL EVAL.
-  // If the note says "Generate..." (or is blank), we generate via OpenAI ONLY for frm_EASI1.
+  // Re-eval has its own dedicated fill logic in ptReevalBot.js.
   if (isInitialEval) {
-    let clinicalStatementText = String(data?.clinicalStatement || "").trim();
-
-    const shouldGenerate = !clinicalStatementText || /generate/i.test(clinicalStatementText) || /6\s*sentences/i.test(clinicalStatementText);
-
-    if (shouldGenerate) {
-      try {
-        const prompt = buildHHEvalAssessmentPrompt({
-          age: data?.demoAge || "",
-          gender: data?.demoSex || "",
-          relevantMedicalHistory: String(data?.relevantHistory || "").trim(),
-          primaryProblems: "weakness, impaired balance, impaired gait, and reduced functional mobility",
-          assistiveDeviceText: String(data?.func?.gaitAD || "AD").trim() || "AD",
-        });
-
-        const gen = await callOpenAIText(prompt, 45000);
-        if (gen && String(gen).trim()) {
-          clinicalStatementText = String(gen).replace(/\s+/g, " ").trim();
-          log("🤖 Assessment Summary generated via OpenAI (frm_EASI1)");
-        } else {
-          log("⚠️ OpenAI returned empty Assessment Summary; leaving frm_EASI1 blank");
-          clinicalStatementText = "";
-        }
-      } catch (e) {
-        logErrSafe("⚠️ OpenAI summary generation failed; leaving frm_EASI1 blank:", e?.message || String(e));
-        clinicalStatementText = "";
-      }
-    }
-
+    const clinicalStatementText = (data?.clinicalStatement || "").trim();
     if (clinicalStatementText) {
       const cs = await firstVisibleLocator(frame, [
         "#frm_EASI1",
@@ -2254,8 +2212,6 @@ async function fillVitalsAndNarratives(context, data) {
       } else {
         log("⚠️ Could not find frm_EASI1 on the template.");
       }
-    } else {
-      log("🚫 Clinical statement blank; frm_EASI1 not filled.");
     }
   } else {
     log("🚫 Clinical statement skipped here (not Initial Evaluation).");
@@ -3044,7 +3000,8 @@ let stText = "";
   for (let i = 0; i < goalSelectors.length; i++) {
     const field = await firstVisibleLocator(frame, [goalSelectors[i]]);
     if (field && goalTexts[i]) {
-      await safeSetValue(field, goalTexts[i], `Goal ${i+1} (#frm_TrtmntGoalTxt${i+1})`, 60000);
+      await field.fill("");
+      await field.type(goalTexts[i], { delay: 15 });
     }
   }
   
@@ -3062,7 +3019,8 @@ let stText = "";
   for (let i = 0; i < timeSelectors.length; i++) {
     const field = await firstVisibleLocator(frame, [timeSelectors[i]]);
     if (field && timeVals[i]) {
-      await safeSetValue(field, timeVals[i], `Goal timeframe ${i+1} (#frm_TrtmntGoalTime${i+1})`, 60000);
+      await field.fill("");
+      await field.type(timeVals[i], { delay: 10 });
     }
   }
   
@@ -3839,5 +3797,3 @@ async function runPtEvaluationBot({
 }
 
 module.exports = { runPtEvaluationBot };
-
-}
