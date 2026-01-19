@@ -38,7 +38,7 @@ function logErrSafe(...args) { return logErr(...args); }
 
 const { chromium } = require("playwright");
 const path = require("path");
-const { callOpenAIJSON } = require("./openaiClient");
+const { callOpenAIJSON, callOpenAIText } = require("./openaiClient");
 
 require("dotenv").config({
   path: path.resolve(__dirname, "../.env"),
@@ -57,6 +57,92 @@ const PASSWORD = process.env.KINNSER_PASSWORD;
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+// ------------------------------------------------------------
+// HH PT Evaluation Assessment Summary Prompt (6 sentences exact)
+// - Randomized sentence openers (chosen in JS, not by the model)
+// - Always ends with: "Continued skilled HH PT remains indicated."
+// ------------------------------------------------------------
+function buildHHEvalAssessmentPrompt({
+  age,
+  gender,
+  relevantMedicalHistory,
+  primaryProblems,
+  assistiveDeviceText,
+} = {}) {
+  const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
+  
+  const ageTxt = String(age ?? "").trim();
+  const genderTxt = String(gender ?? "").trim();
+  const pmhTxt = String(relevantMedicalHistory ?? "").trim();
+  const probsTxt = String(primaryProblems ?? "generalized weakness with impaired bed mobility, transfers, gait, and balance").trim();
+  const adTxt = String(assistiveDeviceText ?? "AD").trim();
+  
+  const s1Open = pick([
+    "Pt is a",
+    "Pt is a pleasant",
+    "Pt is a",
+    "Pt is a",
+  ]);
+  
+  const s2Open = pick([
+    "Pt is seen today for",
+    "Pt was evaluated today for",
+    "Pt is seen for",
+    "Today, pt is seen for",
+  ]);
+  
+  const s3Open = pick([
+    "Currently, pt demonstrates",
+    "At this time, pt presents with",
+    "Pt currently demonstrates",
+    "Pt presents with",
+  ]);
+  
+  const s4Open = pick([
+    "Pt exhibits",
+    "Pt demonstrates",
+    "Pt displays",
+    "Pt shows",
+  ]);
+  
+  const s5Open = pick([
+    "Skilled HH PT services are medically necessary to",
+    "Skilled HH PT is medically necessary to",
+    "Skilled PT services are required to",
+    "Skilled HH PT intervention is indicated to",
+  ]);
+  
+  return `
+Write an Assessment Summary for a Medicare home health physical therapy INITIAL EVALUATION.
+Output EXACTLY 6 sentences total, in one paragraph, no line breaks, no numbering, no bullets, no quotes.
+Sentence 6 MUST be exactly: Continued skilled HH PT remains indicated.
+
+Use this patient context (do not invent new diagnoses or demographics):
+- Age: ${ageTxt || "___"}
+- Gender: ${genderTxt || "___"}
+- Relevant Medical History (PMH): ${pmhTxt || "___"}
+- Primary problems/impairments: ${probsTxt}
+- Assistive device wording: ${adTxt}
+
+Required content rules:
+- Sentence 1: demographics + PMH (use only provided PMH; do not add).
+- Sentence 2: must include PT initial evaluation + home safety assessment + DME assessment + HEP education + fall safety precautions/fall prevention + education on proper use of ${adTxt} + education on pain/edema management + PT POC/goal planning to return toward PLOF.
+- Sentence 3: objective functional deficits (bed mobility, transfers, gait, balance, generalized weakness) and high fall risk linkage.
+- Sentence 4: safety awareness/balance reactions and home risk statement (high fall risk).
+- Sentence 5: skilled need/medical necessity statement describing skilled interventions (TherEx, functional training, gait/balance training, safety education) to improve function and reduce fall/injury risk.
+- Do NOT mention any visit counts (no "within 4 visits", no total visits).
+- Keep language professional, objective, and Medicare-appropriate.
+
+Sentence openers (use exactly these starters for sentences 1–5):
+1) ${s1Open}
+2) ${s2Open}
+3) ${s3Open}
+4) ${s4Open}
+5) ${s5Open}
+`.trim();
+}
+
+
 
 
 /* =========================
@@ -65,10 +151,10 @@ const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 async function safeSetValue(locator, value, label = "field", timeoutMs = 60000) {
   const v = String(value ?? "");
   if (!locator) throw new Error(`safeSetValue: locator missing for ${label}`);
-
+  
   await locator.scrollIntoViewIfNeeded().catch(() => {});
   await locator.click({ timeout: 5000 }).catch(() => {});
-
+  
   // Attempt fill (fastest)
   try {
     await locator.fill("", { timeout: timeoutMs }).catch(() => {});
@@ -82,12 +168,12 @@ async function safeSetValue(locator, value, label = "field", timeoutMs = 60000) 
       el.dispatchEvent(new Event("blur", { bubbles: true }));
     }, v);
   }
-
+  
   let persisted = (await locator.inputValue().catch(() => "")).trim();
   if (v.trim() && !persisted) {
     throw new Error(`ASSERT FAIL: ${label} did not persist after set`);
   }
-
+  
   // Detect truncation (common in long PMH fields). Retry via JS and warn if still truncated.
   if (v.trim() && persisted && persisted !== v.trim()) {
     await locator.evaluate((el, val) => {
@@ -96,14 +182,14 @@ async function safeSetValue(locator, value, label = "field", timeoutMs = 60000) 
       el.dispatchEvent(new Event("change", { bubbles: true }));
       el.dispatchEvent(new Event("blur", { bubbles: true }));
     }, v);
-
+    
     const persisted2 = (await locator.inputValue().catch(() => "")).trim();
     if (persisted2 && persisted2 !== v.trim()) {
       log(`⚠️ ${label} appears truncated: wanted ${v.trim().length} chars, got ${persisted2.length} chars`);
     }
     persisted = persisted2 || persisted;
   }
-
+  
   return persisted;
 }
 
@@ -493,8 +579,8 @@ async function setHotboxShow100(page) {
 
 async function openHotboxPatientTask(page, patientName, visitDate, taskType) {
   log(
-              `➡️ Searching Hotbox for patient "${patientName}" on "${visitDate}" with task "${taskType}"...`
-              );
+      `➡️ Searching Hotbox for patient "${patientName}" on "${visitDate}" with task "${taskType}"...`
+      );
   
   if (!patientName || !visitDate || !taskType) {
     throw new Error("❌ openHotboxPatientTask requires patientName, visitDate, and taskType.");
@@ -642,7 +728,7 @@ async function openHotboxPatientTask(page, patientName, visitDate, taskType) {
       `❌ No Hotbox row found for any date variant ${JSON.stringify(
         dateVariants
       )}, task "${taskType}", and name "${patientName}".`
-                );
+        );
     throw new Error("Hotbox row not found for date + task + name (fuzzy match).");
   }
   
@@ -747,10 +833,6 @@ async function findTemplateScope(target, opts = {}) {
   return null;
 }
 
-// =========================
-// GW2 + Visit Basics (select template -> fill basics -> SAVE) BEFORE next steps
-// =========================
-
 async function selectTemplateGW2(context) {
   log("➡️ Selecting GW2...");
   
@@ -782,6 +864,10 @@ async function selectTemplateGW2(context) {
   log("⚠️ GW2 not found");
 }
 
+/* =========================
+ * Visit basics (ID + times + date)
+ * =======================*/
+
 async function fillVisitBasics(context, { timeIn, timeOut, visitDate }) {
   log("➡️ Filling visit basics...");
   
@@ -793,7 +879,6 @@ async function fillVisitBasics(context, { timeIn, timeOut, visitDate }) {
     return;
   }
   
-  // Patient identity confirmed
   try {
     const box = frame.getByLabel("Patient identity confirmed");
     if (await box.isVisible().catch(() => false)) {
@@ -802,7 +887,6 @@ async function fillVisitBasics(context, { timeIn, timeOut, visitDate }) {
     }
   } catch {}
   
-  // Time In
   const timeInInput = await firstVisibleLocator(frame, [
     "#frm_timein",
     "input[name^='frm_timein']",
@@ -811,17 +895,16 @@ async function fillVisitBasics(context, { timeIn, timeOut, visitDate }) {
     await timeInInput.fill("");
     await timeInInput.type(timeIn, { delay: 40 });
     log("⏱ Time In filled:", timeIn);
-    
+    // Verify persisted value (prevents false positives when typing into a stale/hidden iframe)
     try {
       const v = (await timeInInput.inputValue().catch(() => "")).trim();
       if (!v) throw new Error("empty");
       log("✅ Verified Time In persisted:", v);
-    } catch {
+    } catch (e) {
       throw new Error("ASSERT FAIL: Time In did not persist in active form");
     }
   }
   
-  // Time Out
   const timeOutInput = await firstVisibleLocator(frame, [
     "#frm_timeout",
     "input[name^='frm_timeout']",
@@ -830,19 +913,24 @@ async function fillVisitBasics(context, { timeIn, timeOut, visitDate }) {
     await timeOutInput.fill("");
     await timeOutInput.type(timeOut, { delay: 40 });
     log("⏱ Time Out filled:", timeOut);
-    
+    // Verify persisted value (prevents false positives when typing into a stale/hidden iframe)
     try {
       const v = (await timeOutInput.inputValue().catch(() => "")).trim();
       if (!v) throw new Error("empty");
       log("✅ Verified Time Out persisted:", v);
-    } catch {
+    } catch (e) {
       throw new Error("ASSERT FAIL: Time Out did not persist in active form");
     }
   }
   
-  // Visit Date (normalized MM/DD/YYYY)
+  // Normalize visit date to MM/DD/YYYY before typing
   const normalizedDate = normalizeDateToMMDDYYYY(visitDate);
-  log("📅 Visit Date (raw → normalized):", visitDate, "→", normalizedDate);
+  log(
+      "📅 Visit Date (raw → normalized):",
+      visitDate,
+      "→",
+      normalizedDate
+      );
   
   const dateInput = await firstVisibleLocator(frame, [
     "#frm_visitdate",
@@ -852,53 +940,18 @@ async function fillVisitBasics(context, { timeIn, timeOut, visitDate }) {
     await dateInput.fill("");
     await dateInput.type(normalizedDate, { delay: 40 });
     log("📅 Visit Date filled:", normalizedDate);
-    
+    // Verify persisted value (prevents false positives when typing into a stale/hidden iframe)
     try {
       const v = (await dateInput.inputValue().catch(() => "")).trim();
       if (!v) throw new Error("empty");
       log("✅ Verified Visit Date persisted:", v);
-    } catch {
+    } catch (e) {
       throw new Error("ASSERT FAIL: Visit Date did not persist in active form");
     }
   }
   
-  // ✅ REQUIRED: Save immediately after basics BEFORE moving on
-  await clickSave(frame);
-  
-  // ✅ Post-save re-assert
-  try {
-    const ti = timeInInput ? (await timeInInput.inputValue().catch(() => "")).trim() : "";
-    const to = timeOutInput ? (await timeOutInput.inputValue().catch(() => "")).trim() : "";
-    const vd = dateInput ? (await dateInput.inputValue().catch(() => "")).trim() : "";
-    
-    if (!ti || !to || !vd) {
-      throw new Error(`Post-save empty field(s): timeIn='${ti}', timeOut='${to}', visitDate='${vd}'`);
-    }
-    
-    log("✅ Post-save fields still present:", { timeIn: ti, timeOut: to, visitDate: vd });
-  } catch (e) {
-    throw new Error(`ASSERT FAIL: Visit basics did not persist after save: ${e?.message || e}`);
-  }
-  
-  log("✅ Visit basics step finished (saved).");
+  log("✅ Visit basics step finished");
 }
-
-// One-call wrapper you can use in your run flow:
-// await selectGW2FillBasicsAndSave(context, { timeIn, timeOut, visitDate });
-async function selectGW2FillBasicsAndSave(context, { timeIn, timeOut, visitDate }) {
-  // 1) Select GW2 template first
-  await selectTemplateGW2(context);
-  
-  // (Optional) small settle for template swap
-  await wait(1000);
-  
-  // 2) Fill basics in the active template scope
-  await fillVisitBasics(context, { timeIn, timeOut, visitDate });
-  
-  // 3) After this returns, you are safe to proceed to next sections
-  log("✅ GW2 selected + basics filled + saved. Proceed to next steps.");
-}
-
 
 /* =========================
  * Helper: infer living situation from text
@@ -969,14 +1022,14 @@ function parseStepsFromLiving(livingLine = "") {
 function normalizeAssistanceText(raw = "") {
   const t = String(raw || "").trim();
   if (!t) return "";
-
+  
   const low = t.toLowerCase();
-
+  
   // Standardize key cases
   if (low.includes("family") || low.includes("spouse")) return "Family / Spouse";
   if (low.includes("caregiver") || low.includes("cg") || low.includes("staff"))
     return "Caregivers / facility staff";
-
+  
   // Remove weird characters + collapse spaces
   return t.replace(/[^\x20-\x7E]/g, "").replace(/\s+/g, " ").trim();
 }
@@ -1076,10 +1129,12 @@ function splitIntoSentences(paragraph) {
 
 function isValidSixSentencePtParagraph(text) {
   const sentences = splitIntoSentences(text);
+  const last = sentences[sentences.length - 1] || "";
   return (
           sentences.length === 6 &&
           sentences.every((s) => /^Pt\b/.test(s)) &&
-          !/\b(he|she|they|his|her|their)\b/i.test(text)
+          !/\b(he|she|they|his|her|their)\b/i.test(text) &&
+          last.trim() === "Continued skilled HH PT remains indicated."
           );
 }
 
@@ -1099,7 +1154,7 @@ function buildEvalClinicalStatementFallback(structured) {
   const s3 = `Pt home environment and CG support were assessed, and safety hazards were addressed as indicated to promote safe mobility.`;
   const s4 = `Pt requires skilled HH PT to provide clinical assessment, HEP instruction, DME education, fall-prevention training, and CG training for safe mobility and transfers.`;
   const s5 = `Pt POC will emphasize TherEx, TherAct, gait training, balance training, and functional training with ongoing fall-risk reduction strategies.`;
-  const s6 = `Pt requires continued skilled HH PT per POC to improve safety, mobility, and ADL performance.`;
+  const s6 = `Continued skilled HH PT remains indicated.`;
   return [s1, s2, s3, s4, s5, s6].join(" ");
 }
 
@@ -1209,64 +1264,58 @@ function parseStructuredFromFreeText(aiNotes = "") {
     romStrength: null,
   };
   
+  
   if (!aiNotes) return result;
   const text = String(aiNotes ?? "");
   
-  // MEDICAL DX
-  const medDxMatch =
-  text.match(/medical\s*(dx|diagnosis)\s*:\s*(.+)/i) ||
-  text.match(/diagnosis\s*\(\s*dx\s*\)\s*:\s*(.+)/i) ||
-  text.match(/^\s*dx\s*:\s*(.+)\s*$/im) ||
-  text.match(/^\s*diagnosis\s*:\s*(.+)\s*$/im);
-  
-  if (medDxMatch) {
-    result.medicalDiagnosis = (medDxMatch[2] || medDxMatch[1] || "").trim();
-  }
-  if (result.medicalDiagnosis) {
-    result.medicalDiagnosis = sanitizeMedicalDiagnosis(result.medicalDiagnosis);
-  }
-  
-  // RELEVANT HISTORY
-  const pmhBlock =
-  text.match(
-             /(?:^|\n)\s*pmh\s*:\s*([\s\S]+?)(?=\n\s*(goals?|living situation|diagnosis|vital signs|orientation|dme|frequency)\s*:|\n{2,}|$)/i
-             ) ||
-  text.match(/(?:^|\n)\s*relevant medical history\s*:\s*([\s\S]+?)(?=\n{2,}|$)/i);
-  
-  if (pmhBlock) {
-    result.relevantHistory = pmhBlock[1].trim();
-    result.hasExplicitPMH = true;
-  }
-  
-  // PRIOR LEVEL
-  const priorMatch = text.match(
-                                /(?:^|\n)\s*prior level(?: of function(?:ing)?)?\s*:\s*([^\n\r]+)/i
-                                );
-  if (priorMatch) result.priorLevel = priorMatch[1].trim();
-  
-  // PATIENT GOALS
-  const goalsMatch =
-  text.match(/(?:^|\n)\s*goals for patient\s*:\s*([^\n\r]+)/i) ||
-  text.match(/(?:^|\n)\s*patient'?s goals?\s*:\s*([^\n\r]+)/i) ||
-  text.match(/(?:^|\n)\s*patient goals?\s*:\s*([^\n\r]+)/i);
-  
-  if (goalsMatch) result.patientGoals = goalsMatch[1].trim();
-  
-  // =========================
-  // CONSOLIDATED FIX BLOCK (drop-in)
-  // Fixes:
-  /// - Ensures result.living exists (prevents TypeError)
-  /// - Maps living situation to ONLY 3 Kinnser values
-  /// - Builds correct evaluationText ("in" vs "with")
-  /// - Uses explicit "Current assistance types:" AS-IS (highest priority)
-  /// - Uses helper/living inference ONLY as fallback
-  /// - Avoids duplicate pets + duplicate currAsst parsing
-  // =========================
-  
-  // Ensure nested objects exist (prevents: Cannot set properties of undefined)
   result.living = result.living || {};
   
+  function cleanInlineValue(raw) {
+    let out = String(raw || "").trim();
+    if (!out) return "";
+    
+    // Cut off glued-on headers/sections if they appear on the same line
+    const stopTokens = [
+      "safety narrative",
+      "safety / sanitation hazards",
+      "safety hazards",
+      "sanitation hazards",
+      "evaluation of living situation",
+      "evaluation of living",
+      "living situation",
+      "patient lives",
+      "assistance is available",
+      "steps count",
+      "steps / stairs",
+      "dme",
+      "other:",
+      "hazard found",
+      "no hazard",
+      "no hazards identified",
+      "no hazards"
+    ];
+    
+    const lower = out.toLowerCase();
+    for (const token of stopTokens) {
+      const idx = lower.indexOf(token);
+      if (idx > 0) {
+        out = out.slice(0, idx).trim();
+        break;
+      }
+    }
+    
+    // Keep only the first sentence-like segment (prevents: "Family/daughter. No hazard found.")
+    out = out.split(/[.;|]/)[0].trim();
+    
+    // Collapse internal whitespace only
+    out = out.replace(/\s+/g, " ").trim();
+    
+    return out;
+  }
+  
+  // ---------------------------------------------------------
   // Helper: map living situation text to 1 of 3 Kinnser options
+  // ---------------------------------------------------------
   function inferPatientLivesValue(livingLine) {
     const s = (livingLine || "").toLowerCase().trim();
     
@@ -1351,44 +1400,46 @@ function parseStructuredFromFreeText(aiNotes = "") {
     ];
     if (withOthersPatterns.some((re) => re.test(s))) return WITH_OTHERS;
     
-    // Fallback
     return WITH_OTHERS;
   }
   
-  // -------------------------
-  // Explicit label: Current assistance types (AS-IS) - highest priority
-  // -------------------------
+  // ---------------------------------------------------------
+  // Explicit label: Current assistance types (AS-IS, cleaned) — single owner
+  // Example: "Current assistance types: Family/daughter"
+  // ---------------------------------------------------------
   const currAsstMatch =
   text.match(/(?:^|\n)\s*current\s*(types?\s*of\s*)?assistance\s*(types)?\s*:\s*([^\n\r]+)/i);
   
   if (currAsstMatch) {
-    let raw = (currAsstMatch[3] || "").trim();
-    if (raw) {
-      // 1) If the note concatenates the next sentence/section on the same line, cut it off safely.
-      
-      // Cut off known "next section" phrases if they appear
-      raw = raw.split(/\bno\s+hazard\b/i)[0].trim();
-      raw = raw.split(/\bhazard\b/i)[0].trim();
-      
-      // Cut off at the first sentence boundary if extra text follows (".", ";", "|")
-      // Keeps "Family / Spouse" from "Family / Spouse. No hazard found."
-      raw = raw.split(/[.;|]/)[0].trim();
-      
-      // Normalize spacing only (does not change wording)
-      raw = raw.replace(/\s+/g, " ").trim();
-      
-      result.living.currentAssistanceTypes = raw;
-      result.living.rawCurrentAssistanceLine = raw;
+    const raw = (currAsstMatch[3] || "").trim();
+    const cleaned = cleanInlineValue(raw);
+    if (cleaned) {
+      result.living.currentAssistanceTypes = cleaned;
+      result.living.rawCurrentAssistanceLine = cleaned;
     }
   }
-
   
-  // -------------------------
+  // ---------------------------------------------------------
+  // Safety Narrative: store ONLY content after the colon (no "Safety Narrative:" prefix)
+  // ---------------------------------------------------------
+  const safetyNarrMatch =
+  text.match(/(?:^|\n)\s*safety\s*narrative\s*:\s*([\s\S]+?)(?=\n\s*[a-zA-Z][^:\n]{0,60}\s*:\s*|\n{2,}|$)/i);
+  
+  if (safetyNarrMatch) {
+    let narrative = (safetyNarrMatch[1] || "").trim();
+    narrative = narrative.replace(/^\s*safety\s*narrative\s*:\s*/i, "").trim();
+    narrative = narrative.replace(/\s+/g, " ").trim();
+    if (narrative) {
+      result.living.safetyNarrative = narrative;
+    }
+  }
+  
+  // ---------------------------------------------------------
   // Living situation + helper extraction
-  // -------------------------
+  // ---------------------------------------------------------
   const livingMatch =
   text.match(/(?:^|\n)\s*living situation\s*:\s*([^\n\r]+)/i) ||
-  // Capture the full phrase after "lives" (e.g., "with family", "in apartment", "alone")
+  // Capture full phrase after "lives" (e.g., "with family", "in apartment", "alone")
   text.match(/(?:^|\n)\s*lives\s+([^\n\r]+)/i);
   
   const helperMatch =
@@ -1404,7 +1455,7 @@ function parseStructuredFromFreeText(aiNotes = "") {
     (ll.startsWith("in") || ll.startsWith("with")) ? livingLine : "in " + livingLine
   }.`;
     
-    // ✅ Kinnser-limited living situation (3 options only)
+    // Kinnser-limited living situation (3 options only)
     result.living.patientLivesValue = inferPatientLivesValue(livingLine);
     
     // Existing helpers (must exist)
@@ -1546,14 +1597,6 @@ function parseStructuredFromFreeText(aiNotes = "") {
     result.living.noHazardsIdentified = yn === "yes";
   }
   
-  // SAFETY NARRATIVE (explicit field) – prefer over constructed line
-  const safetyNarrMatch =
-  text.match(/(?:^|\n)\s*safety narrative\s*:\s*([\s\S]+?)(?=\n\s*(pain assessment|pain|neuro|orientation|vital signs|dme|goals?|frequency|assessment summary|clinical statement)\s*:|\n{2,}|$)/i);
-  
-  if (safetyNarrMatch) {
-    const sn = (safetyNarrMatch[1] || "").trim();
-    if (sn) result.living.evaluationText = sn;
-  }
   // VITALS COMMENT
   const vitalsCommentMatch =
   text.match(/(?:^|\n)\s*(blood pressure comment|bp comment|vitals comment|vs comments?|comments)\s*:\s*(.+)/i);
@@ -1586,7 +1629,7 @@ function parseStructuredFromFreeText(aiNotes = "") {
     if (painLocPrimary) result.pain.primaryLocationText = painLocPrimary[1].trim();
     else if (painLoc) result.pain.primaryLocationText = painLoc[1].trim();
   }
-
+  
   
   const painInt = text.match(/(?:^|\n)\s*intensity\s*\(?.*?\)?\s*:\s*([0-9]{1,2})\b/i);
   if (painInt) result.pain.intensityValue = String(painInt[1]).trim();
@@ -1624,56 +1667,94 @@ function parseStructuredFromFreeText(aiNotes = "") {
   }
   
   // GOALS BLOCK (bounded; stops before Frequency/other headings)
-  const goalsBlock = text.match(
-                                /(?:^|\n)\s*goals?\s*:\s*([\s\S]+?)(?=\n\s*(frequency|plan|dme|vital signs|bp|hr|rr|temp|living situation|person helping|assessment summary|clinical statement)\s*:|\n{2,}|$)/i
-                                );
-  
-  if (goalsBlock) {
-    const rawBlock = goalsBlock[1] || "";
-    
-    // Capture visit counts BEFORE cleaning goal lines (supports "7 visits" or "total of 7 visits")
-    const visitMatches = [...rawBlock.matchAll(/\b(?:total\s+of\s+)?(\d{1,2})\s*visits?\b/gi)];
-    if (visitMatches[0]) result.plan.shortTermVisits = `${visitMatches[0][1]} visits`;
-    if (visitMatches[1]) result.plan.longTermVisits = `${visitMatches[1][1]} visits`;
-    
-    const rawLines = rawBlock
-    .split(/\r?\n/)
-    .map((l) => l.trim())
-    .filter(Boolean);
-    
-    const merged = [];
-    
-    const isNewGoal = (line) =>
-    /^(STG|LTG)\s*:/i.test(line) ||          // "STG:" / "LTG:"
-    /^\d+\s*[:.)]/.test(line) ||           // "1:" / "1." / "1)"
-    /^-\s+/.test(line) ||                   // "- goal"
-    /^Pt\s+will\b/i.test(line);            // fallback: "Pt will ..." starts a goal
-    
-    for (const line of rawLines) {
-      // HARD STOP: Frequency is not part of goals and nothing after it should be in goals
-      if (/^\s*frequency\s*:/i.test(line)) break;
-      
-      if (!merged.length) {
-        merged.push(line);
-        continue;
-      }
-      
-      if (isNewGoal(line)) {
-        merged.push(line);
-      } else {
-        merged[merged.length - 1] = `${merged[merged.length - 1]} ${line}`
-        .replace(/\s{2,}/g, " ")
-        .trim();
-      }
-    }
-    
-    // Final scrub: remove any accidental frequency line that slipped in
-    result.plan.goalTexts = merged
-    .map((l) => l.replace(/\s{2,}/g, " ").trim())
-    .filter(Boolean)
-    .filter((l) => !/^\s*frequency\s*:/i.test(l));
+  function stripWithinVisits(line) {
+    return String(line || "")
+    .replace(/\s*\bwithin\s+(?:a\s+)?(?:total\s+of\s+)?\d{1,2}\s*visits?\b\.?/gi, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
   }
   
+  function extractWithinVisits(line) {
+    const m = String(line || "").match(/\bwithin\s+(?:a\s+)?(?:total\s+of\s+)?(\d{1,2})\s*visits?\b/i);
+    return m ? `${m[1]} visits` : "";
+  }
+  
+  function toLines(block) {
+    return String(block || "")
+    .split(/\r?\n/)
+    .map(s => s.trim())
+    .filter(Boolean)
+    .map(s => s.replace(/^[-•]+\s*/, "").trim());
+  }
+  
+  // --- A) Try STG/LTG format first ---
+  const stgBlock =
+  text.match(/(?:^|\n)\s*short[-\s]*term\s*goals?\s*\(stg\)\s*:\s*([\s\S]+?)(?=\n\s*long[-\s]*term\s*goals?\s*\(ltg\)\s*:|\n{2,}|$)/i);
+  
+  const ltgBlock =
+  text.match(/(?:^|\n)\s*long[-\s]*term\s*goals?\s*\(ltg\)\s*:\s*([\s\S]+?)(?=\n{2,}|$)/i);
+  
+  if (stgBlock || ltgBlock) {
+    const stgRawLines = toLines(stgBlock?.[1] || "");
+    const ltgRawLines = toLines(ltgBlock?.[1] || "");
+    
+    // Extract visit counts from first line that contains "within X visits"
+    const stgWithin = extractWithinVisits(stgRawLines.find(l => /within\s+\d+\s*visits?/i.test(l)) || "");
+    const ltgWithin = extractWithinVisits(ltgRawLines.find(l => /within\s+\d+\s*visits?/i.test(l)) || "");
+    
+    if (stgWithin) result.plan.shortTermVisits = stgWithin;
+    if (ltgWithin) result.plan.longTermVisits = ltgWithin;
+    
+    const stgGoals = stgRawLines.map(stripWithinVisits).filter(Boolean);
+    const ltgGoals = ltgRawLines.map(stripWithinVisits).filter(Boolean);
+    
+    // Build ordered goalTexts for Kinnser rows: STG then LTG
+    result.plan.goalTexts = [...stgGoals, ...ltgGoals].filter(Boolean);
+  } else {
+    // --- B) Fallback to generic "Goals:" block (your original behavior) ---
+    const goalsBlock = text.match(
+                                  /(?:^|\n)\s*goals?\s*:\s*([\s\S]+?)(?=\n\s*(frequency|plan|dme|vital signs|bp|hr|rr|temp|living situation|person helping|assessment summary|clinical statement)\s*:|\n{2,}|$)/i
+                                  );
+    
+    if (goalsBlock) {
+      const rawBlock = goalsBlock[1] || "";
+      
+      // Capture visit counts (supports "within X visits" OR "total of X visits")
+      const visitMatches = [...rawBlock.matchAll(/\b(?:within\s+(?:a\s+)?(?:total\s+of\s+)?)?(\d{1,2})\s*visits?\b/gi)];
+      if (visitMatches[0]) result.plan.shortTermVisits = `${visitMatches[0][1]} visits`;
+      if (visitMatches[1]) result.plan.longTermVisits = `${visitMatches[1][1]} visits`;
+      
+      const rawLines = rawBlock
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter(Boolean);
+      
+      const merged = [];
+      
+      const isNewGoal = (line) =>
+      /^(STG|LTG)\s*:/i.test(line) ||
+      /^\d+\s*[:.)]/.test(line) ||
+      /^-\s+/.test(line) ||
+      /^Pt\s+will\b/i.test(line);
+      
+      for (const line of rawLines) {
+        if (/^\s*frequency\s*:/i.test(line)) break;
+        
+        if (!merged.length) merged.push(line);
+        else if (isNewGoal(line)) merged.push(line);
+        else {
+          merged[merged.length - 1] = `${merged[merged.length - 1]} ${line}`
+          .replace(/\s{2,}/g, " ")
+          .trim();
+        }
+      }
+      
+      result.plan.goalTexts = merged
+      .map((l) => stripWithinVisits(l))
+      .filter(Boolean)
+      .filter((l) => !/^\s*frequency\s*:/i.test(l));
+    }
+  }
   
   // FREQUENCY
   const freqLineMatch =
@@ -1854,6 +1935,7 @@ async function extractNoteDataFromAI(aiNotes, visitType = "Evaluation") {
       patientLivesValue: structured.living?.patientLivesValue || "0",
       assistanceAvailableValue: structured.living?.assistanceAvailableValue || "0",
       evaluationText: structured.living?.evaluationText || "",
+      safetyNarrative: structured.living?.safetyNarrative || "",
       stepsPresent: structured.living?.stepsPresent || false,
       stepsCount: structured.living?.stepsCount || "",
       currentAssistanceTypes: structured.living?.currentAssistanceTypes || "",
@@ -1972,6 +2054,29 @@ ${text}
     }
     
     if (visitLabel === "PT INITIAL PT EVALUATION") {
+      // Prefer a dedicated Assessment Summary generation prompt for Initial Eval (6 sentences, fixed closing phrase).
+      try {
+        if (typeof buildHHEvalAssessmentPrompt === "function" && typeof callOpenAIText === "function") {
+          const adTxt = structured?.func?.gaitAD || structured?.func?.gaitDevice || "AD";
+          const probsTxt = "generalized weakness with impaired bed mobility, transfers, gait, and balance";
+          const assessPrompt = buildHHEvalAssessmentPrompt({
+            age: demo?.age || "",
+            gender: demo?.sex || "",
+            relevantMedicalHistory: (parsed.relevantHistory || structured?.relevantHistory || defaults.relevantHistory || "").trim(),
+            primaryProblems: probsTxt,
+            assistiveDeviceText: adTxt,
+          });
+          
+          const assessed = await callOpenAIText(assessPrompt, 12000, { max_output_tokens: 900, temperature: 0 });
+          if (assessed && typeof isValidSixSentencePtParagraph === "function" && isValidSixSentencePtParagraph(assessed)) {
+            parsed.clinicalStatement = assessed.trim();
+          }
+        }
+      } catch (e) {
+        // If this fails, we fall back to the JSON-derived statement and/or deterministic fallback below.
+        log("⚠️ Assessment Summary generation skipped:", e.message);
+      }
+      
       const fallback =
       typeof buildEvalClinicalStatementFallback === "function"
       ? buildEvalClinicalStatementFallback(structured)
@@ -2165,8 +2270,6 @@ async function fillVitalsAndNarratives(context, data) {
   //   - Clinical Statement / Assessment Summary: #frm_EASI1
   // ==========================
   
-  // NOTE: "Re-evaluation" contains the substring "evaluation".
-  // Be strict here, or we will incorrectly overwrite Re-eval/Visit/DC fields.
   const vt = (data?.visitType || "").toLowerCase();
   const isReeval = vt.includes("re-eval") || vt.includes("re-evaluation") || vt.includes("recert");
   const isDischarge = vt.includes("discharge") || vt === "dc" || vt.includes(" dc");
@@ -2216,9 +2319,8 @@ async function fillVitalsAndNarratives(context, data) {
 /* =========================
  * Medical Dx
  * =======================*/
-
 async function fillMedDiagnosisAndSubjective(context, data) {
-  log("➡️ Filling Medical Dx only (subjective removed)...");
+  log("➡️ Filling Medical Dx (always overwrite; subjective removed)...");
   
   const frame = await findTemplateScope(context);
   if (!frame) {
@@ -2226,19 +2328,32 @@ async function fillMedDiagnosisAndSubjective(context, data) {
     return;
   }
   
-  // Medical Diagnosis ONLY
-  if (data.medicalDiagnosis) {
-    const medDxInput = await firstVisibleLocator(frame, ["#frm_MedDiagText"]);
-    if (medDxInput) {
-      await medDxInput.fill("");
-      await medDxInput.type(data.medicalDiagnosis, { delay: 20 });
-      log("🧾 Medical Dx filled:", data.medicalDiagnosis);
-    }
+  const medDxInput = await firstVisibleLocator(frame, ["#frm_MedDiagText"]);
+  if (!medDxInput) {
+    log("⚠️ Could not find Medical Dx field (#frm_MedDiagText).");
+    log("🚫 Subjective skipped (intentionally not filled).");
+    return;
   }
   
-  // Subjective removed — do nothing
+  // Always overwrite with whatever is currently in data.medicalDiagnosis
+  // (If this is empty, it will clear the field.)
+  const dx = String((data && data.medicalDiagnosis) || "").trim();
+  
+  try {
+    await medDxInput.scrollIntoViewIfNeeded().catch(() => {});
+    await medDxInput.click({ timeout: 5000 }).catch(() => {});
+    await medDxInput.fill("").catch(() => {});
+    if (dx) {
+      await medDxInput.type(dx, { delay: 20 }).catch(() => {});
+    }
+    log("🧾 Medical Dx overwritten with:", dx);
+  } catch (e) {
+    log("⚠️ Medical Dx overwrite failed:", (e && e.message) || String(e));
+  }
+  
   log("🚫 Subjective skipped (intentionally not filled).");
 }
+
 
 /* =========================
  * Subjective
@@ -2452,7 +2567,7 @@ async function fillPainSection(context, data) {
       }).catch(() => {});
       await wait(600); // allow Kinnser JS to reveal the "Other" textbox
     }
-
+    
     // "Other" description textbox (must pick "Other" first to render)
     // We support both known IDs AND a relative fallback to the first text input after the select.
     if (locationText) {
@@ -2464,7 +2579,7 @@ async function fillPainSection(context, data) {
         "xpath=//*[@id='frm_PainAsmtSitePrim']/following::input[1]",
         "xpath=//*[@id='frm_PainAsmtSitePrim']/following::textarea[1]",
       ]);
-
+      
       if (siteOther && (await siteOther.isVisible().catch(() => false))) {
         await safeSetValue(siteOther, locationText, "Pain Primary Location Other", 60000);
         log("📍 Pain location (Primary Other):", locationText);
@@ -2472,7 +2587,7 @@ async function fillPainSection(context, data) {
         log("⚠️ Primary pain 'Other' textbox not found after selecting Other.");
       }
     }
-// Pre-Therapy Intensity (existing)
+    // Pre-Therapy Intensity (existing)
     if (intensityVal) {
       const preIntensitySelect = await firstVisibleLocator(frame, [
         "#frm_PainAsmtSiteIntnstyPrimary1",
@@ -2731,16 +2846,15 @@ async function fillHomeSafetySection(context, data) {
   } catch (e) {
     log("⚠️ Could not fill Evaluation of Living Situation:", e.message);
   }
-  
   // ---- Current Types of Assistance (#frm_CurrTypAsst) ----
   try {
     const currAssist = await firstVisibleLocator(frame, ["#frm_CurrTypAsst", "#frm_CurrentTypesAsst", "#frm_CurrAsstTypes", "textarea[id*=\"CurrTyp\"]", "textarea[name*=\"CurrTyp\"]", "textarea[id*=\"Asst\"][id*=\"Type\"]", "textarea[name*=\"Asst\"][name*=\"Type\"]"]);
     await safeSetValue(
-      currAssist,
-      normalizeAssistanceText(living.currentAssistanceTypes),
-      "Current assistance types (#frm_CurrTypAsst)",
-      60000
-    );
+                       currAssist,
+                       normalizeAssistanceText(living.currentAssistanceTypes),
+                       "Current assistance types (#frm_CurrTypAsst)",
+                       60000
+                       );
   } catch (e) {
     log("⚠️ Could not fill Current Types of Assistance:", e.message);
   }
@@ -2928,17 +3042,17 @@ async function fillTreatmentGoalsAndPainPlan(context, data) {
   
   let goalTexts = [];
   
-
-// Clean goal text: remove embedded "within X visits" or similar visit-count phrasing.
-// (Visit counts belong in Time Frame column, not inside the goal sentence.)
-function scrubGoalText(s) {
-  return String(s || "")
+  
+  // Clean goal text: remove embedded "within X visits" or similar visit-count phrasing.
+  // (Visit counts belong in Time Frame column, not inside the goal sentence.)
+  function scrubGoalText(s) {
+    return String(s || "")
     .replace(/\bwithin\s+(?:a\s+)?(?:total\s+of\s+)?\d{1,2}\s*visits?\b\.?/gi, "")
     .replace(/\s{2,}/g, " ")
     .trim();
-}
-
-let stText = "";
+  }
+  
+  let stText = "";
   let ltText = "";
   
   if (instructionMode) {
@@ -3298,28 +3412,28 @@ async function fillFunctionalSection(context, data) {
 
 async function fillFrequencyAndDate(context, data, visitDate) {
   log("➡️ Filling Frequency + Effective Date...");
-
+  
   const frame = await findTemplateScope(context);
   if (!frame) {
     log("⚠️ Template frame not found for plan.");
     return;
   }
-
+  
   const plan = data.plan || {};
-
+  
   // --- Effective Date (frm_FreqDur1) ---
   try {
     const effField = await firstVisibleLocator(frame, ["#frm_FreqDur1"]);
     if (effField) {
       const effectiveRaw =
-        plan.effectiveDate && plan.effectiveDate !== "skip"
-          ? plan.effectiveDate
-          : visitDate;
-
+      plan.effectiveDate && plan.effectiveDate !== "skip"
+      ? plan.effectiveDate
+      : visitDate;
+      
       const effective = normalizeDateToMMDDYYYY(effectiveRaw);
-
+      
       log("📆 Effective date (raw → normalized):", effectiveRaw, "→", effective);
-
+      
       await effField.fill("").catch(() => {});
       await effField.fill(effective).catch(() => {});
       await effField.evaluate((el) => {
@@ -3331,25 +3445,25 @@ async function fillFrequencyAndDate(context, data, visitDate) {
   } catch (e) {
     log("⚠️ Could not fill Effective Date:", e?.message || String(e));
   }
-
+  
   // --- Frequency (frm_FreqDur2) ---
   try {
     if (plan.frequency) {
       const rawFreq = String(plan.frequency || "").trim();
-
+      
       const tokens = [...rawFreq.matchAll(/\b\d+w\d+\b/gi)]
-        .map((m) => m[0].toLowerCase())
-        .slice(0, 6);
-
+      .map((m) => m[0].toLowerCase())
+      .slice(0, 6);
+      
       const normFreq = tokens.length
-        ? tokens.join(", ")
-        : rawFreq
-            .replace(/[`"'<>]/g, "")
+      ? tokens.join(", ")
+      : rawFreq
+      .replace(/[`"'<>]/g, "")
             .replace(/\s+/g, " ")
             .trim();
-
+    
       log("🧾 Frequency raw → normalized:", rawFreq, "→", normFreq);
-
+    
       const freqField = await firstVisibleLocator(frame, ["#frm_FreqDur2"]);
       if (freqField) {
         await freqField.fill("").catch(() => {});
@@ -3364,234 +3478,234 @@ async function fillFrequencyAndDate(context, data, visitDate) {
     } else {
       log("ℹ️ No plan.frequency provided; skipping frequency fill.");
     }
-  } catch (e) {
+    } catch (e) {
     log("⚠️ Could not fill Frequency:", e?.message || String(e));
-  }
-}
-
-
-  
-  
-// =========================
-// ROM / Strength text parser
-// =========================
-
-function parseRomAndStrength(text) {
-  if (!text) return {};
-  
-  // Helper: strip the "for left and right" tail if present
-  const cleanup = (val) => {
+    }
+    }
+    
+    
+    
+    
+    // =========================
+    // ROM / Strength text parser
+    // =========================
+    
+    function parseRomAndStrength(text) {
+    if (!text) return {};
+    
+    // Helper: strip the "for left and right" tail if present
+    const cleanup = (val) => {
     if (!val) return null;
     return val.split(/for\s+left\s+and\s+right/i)[0].trim();
-  };
-  
-  // Use regex over the *entire* text, not per-line startsWith
-  const ueRomMatch = text.match(/gross\s+rom\s+for\s+ue[^:\-\n]*[:\-]\s*([^\n]+)/i);
-  const leRomMatch = text.match(/gross\s+rom\s+for\s+le[^:\-\n]*[:\-]\s*([^\n]+)/i);
-  const ueStrMatch = text.match(/gross\s+strength\s+for\s+ue[^:\-\n]*[:\-]\s*([^\n]+)/i);
-  const leStrMatch = text.match(/gross\s+strength\s+for\s+le[^:\-\n]*[:\-]\s*([^\n]+)/i);
-  
-  const ueRom       = cleanup(ueRomMatch && ueRomMatch[1]);
-  const leRom       = cleanup(leRomMatch && leRomMatch[1]);
-  const ueStrength  = cleanup(ueStrMatch && ueStrMatch[1]);
-  const leStrength  = cleanup(leStrMatch && leStrMatch[1]);
-  
-  const result = {};
-  if (ueRom || ueStrength) {
+    };
+    
+    // Use regex over the *entire* text, not per-line startsWith
+    const ueRomMatch = text.match(/gross\s+rom\s+for\s+ue[^:\-\n]*[:\-]\s*([^\n]+)/i);
+    const leRomMatch = text.match(/gross\s+rom\s+for\s+le[^:\-\n]*[:\-]\s*([^\n]+)/i);
+    const ueStrMatch = text.match(/gross\s+strength\s+for\s+ue[^:\-\n]*[:\-]\s*([^\n]+)/i);
+    const leStrMatch = text.match(/gross\s+strength\s+for\s+le[^:\-\n]*[:\-]\s*([^\n]+)/i);
+    
+    const ueRom       = cleanup(ueRomMatch && ueRomMatch[1]);
+    const leRom       = cleanup(leRomMatch && leRomMatch[1]);
+    const ueStrength  = cleanup(ueStrMatch && ueStrMatch[1]);
+    const leStrength  = cleanup(leStrMatch && leStrMatch[1]);
+    
+    const result = {};
+    if (ueRom || ueStrength) {
     result.ue = {
       rom: ueRom || null,
       strength: ueStrength || null,
     };
-  }
-  if (leRom || leStrength) {
+    }
+    if (leRom || leStrength) {
     result.le = {
       rom: leRom || null,
       strength: leStrength || null,
     };
-  }
-  
-  log("🧮 parseRomAndStrength parsed:", result);
-  return result;
-}
-
-
-/* =========================
- * ROM / Strength helpers
- * =======================*/
-
-// MUST be async because we use await inside
-async function fillRomRange(frame, firstId, lastId, romValue, strengthValue) {
-  for (let id = firstId; id <= lastId; id += 4) {
+    }
+    
+    log("🧮 parseRomAndStrength parsed:", result);
+    return result;
+    }
+    
+    
+    /* =========================
+    * ROM / Strength helpers
+    * =======================*/
+    
+    // MUST be async because we use await inside
+    async function fillRomRange(frame, firstId, lastId, romValue, strengthValue) {
+    for (let id = firstId; id <= lastId; id += 4) {
     const rRomSel = `#frm_ROM${id}`;
     const lRomSel = `#frm_ROM${id + 1}`;
     const rStrSel = `#frm_ROM${id + 2}`;
     const lStrSel = `#frm_ROM${id + 3}`;
-    
-    if (romValue) {
-      const rRom = frame.locator(rRomSel).first();
-      const lRom = frame.locator(lRomSel).first();
-      if (await rRom.isVisible().catch(() => false)) {
+        
+        if (romValue) {
+        const rRom = frame.locator(rRomSel).first();
+        const lRom = frame.locator(lRomSel).first();
+        if (await rRom.isVisible().catch(() => false)) {
         await rRom.fill("").catch(() => {});
         await rRom.type(romValue, { delay: 10 }).catch(() => {});
-      }
-      if (await lRom.isVisible().catch(() => false)) {
+        }
+        if (await lRom.isVisible().catch(() => false)) {
         await lRom.fill("").catch(() => {});
         await lRom.type(romValue, { delay: 10 }).catch(() => {});
-      }
-    }
-    
-    if (strengthValue) {
-      const rStr = frame.locator(rStrSel).first();
-      const lStr = frame.locator(lStrSel).first();
-      if (await rStr.isVisible().catch(() => false)) {
+        }
+        }
+        
+        if (strengthValue) {
+        const rStr = frame.locator(rStrSel).first();
+        const lStr = frame.locator(lStrSel).first();
+        if (await rStr.isVisible().catch(() => false)) {
         await rStr.fill("").catch(() => {});
         await rStr.type(strengthValue, { delay: 10 }).catch(() => {});
-      }
-      if (await lStr.isVisible().catch(() => false)) {
+        }
+        if (await lStr.isVisible().catch(() => false)) {
         await lStr.fill("").catch(() => {});
         await lStr.type(strengthValue, { delay: 10 }).catch(() => {});
-      }
-    }
-  }
-}
-
-// Fill Physical Assessment ROM / Strength from gross UE / LE info
-async function fillPhysicalRomStrength(context, romStrength) {
-  if (!romStrength) {
-    log("ℹ️ No romStrength data from AI.");
-    return;
-  }
-  
-  const frame = await findTemplateScope(context);
-  if (!frame) {
-    log("⚠️ Template frame not found for ROM/Strength.");
-    return;
-  }
-  
-  const { ue, le } = romStrength || {};
-  
-  log("🧮 ROM/Strength parsed:", romStrength);
-  
-  if ((ue && ue.rom) || (ue && ue.strength)) {
-    await fillRomRange(
+        }
+        }
+        }
+        }
+        
+        // Fill Physical Assessment ROM / Strength from gross UE / LE info
+        async function fillPhysicalRomStrength(context, romStrength) {
+        if (!romStrength) {
+        log("ℹ️ No romStrength data from AI.");
+        return;
+        }
+        
+        const frame = await findTemplateScope(context);
+        if (!frame) {
+        log("⚠️ Template frame not found for ROM/Strength.");
+        return;
+        }
+        
+        const { ue, le } = romStrength || {};
+        
+        log("🧮 ROM/Strength parsed:", romStrength);
+        
+        if ((ue && ue.rom) || (ue && ue.strength)) {
+        await fillRomRange(
                        frame,
                        1,   // frm_ROM1
                        40,  // frm_ROM40
                        ue.rom || null,
                        ue.strength || null
                        );
-  }
-  
-  if ((le && le.rom) || (le && le.strength)) {
-    await fillRomRange(
+        }
+        
+        if ((le && le.rom) || (le && le.strength)) {
+        await fillRomRange(
                        frame,
                        69,   // frm_ROM69
                        116,  // frm_ROM116
                        le.rom || null,
                        le.strength || null
                        );
-  }
-}
-// =========================
-// Save button helper (shared)
-// =========================
-async function clickSave(contextOrPage) {
-  // Accept: Page, Frame, BrowserContext, or wrapper { page }
-  let scope = contextOrPage?.page || contextOrPage;
-
-  // If they passed a BrowserContext, convert to a Page
-  if (scope && typeof scope.pages === "function" && typeof scope.locator !== "function") {
-    const pages = scope.pages();
-    if (pages && pages.length) scope = pages[0];
-  }
-
-  function normalizeScope(s) {
-    if (s && typeof s.locator === "function") return s; // Page/Frame
-    if (s?.page && typeof s.page.locator === "function") return s.page;
-    if (s?.frame && typeof s.frame.locator === "function") return s.frame;
-
-    if (s && typeof s.pages === "function") {
-      const pages = s.pages();
-      if (pages && pages.length && typeof pages[0].locator === "function") return pages[0];
-    }
-
-    throw new TypeError("clickSave(): scope must be Playwright Page/Frame/BrowserContext or {page}/{frame}");
-  }
-
-  const saveSelectors = [
-    "#btnSave",
-    "input#btnSave",
-    "button#btnSave",
-    "input[type='button'][value='Save']",
-    "input[type='submit'][value='Save']",
-    "xpath=//input[contains(@onclick, \"modifyForm('save'\") )]",
-    "xpath=//*[self::input or self::button][contains(translate(normalize-space(.),'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'save')]",
-  ];
-
-  // Heuristic: does popup message look like a validation failure?
-  function isBadDialogMessage(msg = "") {
-    const m = String(msg || "").toLowerCase();
-    return (
-      m.includes("error") ||
-      m.includes("required") ||
-      m.includes("missing") ||
-      m.includes("cannot") ||
-      m.includes("unable") ||
-      m.includes("invalid") ||
-      m.includes("please correct") ||
-      m.includes("must be") ||
-      m.includes("failed")
-    );
-  }
-
-  async function assertNoOnPageErrors(pageOrFrame) {
-    // WellSky/Kinnser error containers — keep this tight to avoid false positives
-    const errorSelectors = [
-      ".validation-summary-errors",
-      ".validation-summary",
-      ".field-validation-error",
-      "#error",
-      "#errors",
-      "text=/please correct/i",
-      "text=/validation/i",
-      "text=/required/i",
-      "text=/unable to save/i",
-      "text=/error occurred/i",
-    ];
-
-    for (const sel of errorSelectors) {
-      const loc = pageOrFrame.locator(sel).first();
-      const visible = await loc.isVisible().catch(() => false);
-      if (!visible) continue;
-
-      const txt = (await loc.innerText().catch(() => "")).trim();
-
-      // Only fail if there is meaningful error text (avoid empty containers)
-      if (txt && txt.length >= 3) {
+        }
+        }
+        // =========================
+        // Save button helper (shared)
+        // =========================
+        async function clickSave(contextOrPage) {
+        // Accept: Page, Frame, BrowserContext, or wrapper { page }
+        let scope = contextOrPage?.page || contextOrPage;
+        
+        // If they passed a BrowserContext, convert to a Page
+        if (scope && typeof scope.pages === "function" && typeof scope.locator !== "function") {
+        const pages = scope.pages();
+        if (pages && pages.length) scope = pages[0];
+        }
+        
+        function normalizeScope(s) {
+        if (s && typeof s.locator === "function") return s; // Page/Frame
+        if (s?.page && typeof s.page.locator === "function") return s.page;
+        if (s?.frame && typeof s.frame.locator === "function") return s.frame;
+        
+        if (s && typeof s.pages === "function") {
+        const pages = s.pages();
+        if (pages && pages.length && typeof pages[0].locator === "function") return pages[0];
+        }
+        
+        throw new TypeError("clickSave(): scope must be Playwright Page/Frame/BrowserContext or {page}/{frame}");
+        }
+        
+        const saveSelectors = [
+        "#btnSave",
+        "input#btnSave",
+        "button#btnSave",
+        "input[type='button'][value='Save']",
+        "input[type='submit'][value='Save']",
+        "xpath=//input[contains(@onclick, \"modifyForm('save'\") )]",
+        "xpath=//*[self::input or self::button][contains(translate(normalize-space(.),'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'save')]",
+        ];
+        
+        // Heuristic: does popup message look like a validation failure?
+        function isBadDialogMessage(msg = "") {
+        const m = String(msg || "").toLowerCase();
+        return (
+        m.includes("error") ||
+        m.includes("required") ||
+        m.includes("missing") ||
+        m.includes("cannot") ||
+        m.includes("unable") ||
+        m.includes("invalid") ||
+        m.includes("please correct") ||
+        m.includes("must be") ||
+        m.includes("failed")
+        );
+        }
+        
+        async function assertNoOnPageErrors(pageOrFrame) {
+        // WellSky/Kinnser error containers — keep this tight to avoid false positives
+        const errorSelectors = [
+        ".validation-summary-errors",
+        ".validation-summary",
+        ".field-validation-error",
+        "#error",
+        "#errors",
+        "text=/please correct/i",
+        "text=/validation/i",
+        "text=/required/i",
+        "text=/unable to save/i",
+        "text=/error occurred/i",
+        ];
+        
+        for (const sel of errorSelectors) {
+        const loc = pageOrFrame.locator(sel).first();
+        const visible = await loc.isVisible().catch(() => false);
+        if (!visible) continue;
+        
+        const txt = (await loc.innerText().catch(() => "")).trim();
+        
+        // Only fail if there is meaningful error text (avoid empty containers)
+        if (txt && txt.length >= 3) {
         throw new Error(`SAVE_VALIDATION_ERROR: ${txt.slice(0, 500)}`);
       }
-    }
-  }
-
-  async function tryClick(s, label) {
-    const pageOrFrame = normalizeScope(s);
-
-    // For dialog listening we need the underlying Page object
-    const page = typeof pageOrFrame.page === "function" ? pageOrFrame.page() : pageOrFrame;
-
-    for (const sel of saveSelectors) {
+      }
+      }
+      
+      async function tryClick(s, label) {
+      const pageOrFrame = normalizeScope(s);
+      
+      // For dialog listening we need the underlying Page object
+      const page = typeof pageOrFrame.page === "function" ? pageOrFrame.page() : pageOrFrame;
+      
+      for (const sel of saveSelectors) {
       const loc = pageOrFrame.locator(sel).first();
       const visible = await loc.isVisible().catch(() => false);
       if (!visible) continue;
-
+      
       await loc.scrollIntoViewIfNeeded().catch(() => {});
-
+      
       // Start listening for dialog BEFORE clicking.
       const dialogPromise =
         typeof page.waitForEvent === "function"
           ? page.waitForEvent("dialog", { timeout: 8000 }).catch(() => null)
           : Promise.resolve(null);
-
+      
       try {
         await loc.click({ force: true, timeout: 8000 });
       } catch {
@@ -3599,37 +3713,37 @@ async function clickSave(contextOrPage) {
         await pageOrFrame.evaluate(() => {
           const byId = document.querySelector("#btnSave");
           if (byId) return byId.click();
-
+      
           const byOnclick = Array.from(document.querySelectorAll("input,button"))
             .find(el => (el.getAttribute("onclick") || "").includes("modifyForm('save')"));
           if (byOnclick) return byOnclick.click();
-
+      
           const byValue = Array.from(
             document.querySelectorAll("input[type='button'],input[type='submit'],button")
           ).find(el => ((el.value || el.textContent || "").trim().toLowerCase() === "save"));
           if (byValue) return byValue.click();
         });
       }
-
+      
       log(`✅ Clicked Save (${label}) using selector: ${sel}`);
-
-      // Wait a moment for Kinnser save routines
-      try {
+        
+        // Wait a moment for Kinnser save routines
+        try {
         if (typeof page.waitForLoadState === "function") {
           await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
         }
-      } catch {}
-
-      // If a dialog appeared, inspect its message.
-      const dlg = await dialogPromise;
-      if (dlg) {
+        } catch {}
+        
+        // If a dialog appeared, inspect its message.
+        const dlg = await dialogPromise;
+        if (dlg) {
         const msg = dlg.message?.() || "";
         log(`⚠️ Save popup detected: ${msg}`);
-
-        // The global dialog handler already accepts, but we try accepting safely anyway.
-        try { await dlg.accept(); } catch {}
-
-        if (isBadDialogMessage(msg)) {
+          
+          // The global dialog handler already accepts, but we try accepting safely anyway.
+          try { await dlg.accept(); } catch {}
+          
+          if (isBadDialogMessage(msg)) {
           throw new Error(`SAVE_POPUP_ERROR: ${msg}`);
         }
       } else {

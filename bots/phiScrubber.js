@@ -2,17 +2,65 @@
 
 /**
  * HIPAA guardrail:
- * - scrubPHI() removes common identifiers (best-effort)
- * - detectPHI() flags residual PHI-like patterns so gatekeeper can FAIL CLOSED
+ * - scrubPHI() removes common identifiers (best-effort) WITHOUT destroying clinical phrasing/templates.
+ * - detectPHI() flags residual PHI-like patterns so the gatekeeper can FAIL CLOSED.
  *
- * NOTE: This is intentionally conservative.
+ * Design goals:
+ * 1) Avoid over-redaction that breaks exercise names, clinical headings, and templates.
+ * 2) Prefer scrubbing in "labeled contexts" (e.g., "Name:", "DOB:", "MRN:") rather than any Title-Case pair.
+ * 3) Be conservative: it is better to miss some names than to destroy large portions of clinical content.
+ *
+ * NOTE:
+ * - This is not a perfect de-identification system; it is a pragmatic guardrail.
+ * - For template conversion/extraction, consider using an even lighter redactor (email/phone/ssn only).
  */
 
+function normalize(text = "") {
+  return String(text || "")
+  .replace(/\r\n/g, "\n")
+  .replace(/\r/g, "\n");
+}
+
+// ------------------------------------------------------------
+// Helpers
+// ------------------------------------------------------------
+
+function replaceLabeledLine(t, labelRe, replacementLine) {
+  // Replaces "Label: <anything until end-of-line>" with a safe line.
+  // Preserves the label, but overwrites the value.
+  const re = new RegExp(`(^|\\n)\\s*(${labelRe.source})\\s*[:#\\-]?\\s*.*?(?=\\n|$)`, "gi");
+  return t.replace(re, (m, p1, label) => `${p1}${label}: ${replacementLine}`);
+}
+
+function replaceLabeledValue(t, labels, valueReplacement) {
+  // Replace occurrences like "Label: value" where Label is one of labels (case-insensitive).
+  // Leaves label intact, replaces only the value up to EOL.
+  const labelPattern = labels.map(escapeRegExp).join("|");
+  const re = new RegExp(`(^|\\n)\\s*(${labelPattern})\\s*[:#\\-]?\\s*([^\\n]*)`, "gi");
+  return t.replace(re, (m, p1, label) => `${p1}${label}: ${valueReplacement}`);
+}
+
+function escapeRegExp(s) {
+  return String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function redactInlineAfter(t, prefixRe, tokenRe, replacement) {
+  // Example: "Email: foo@bar.com" -> "Email: [EMAIL]"
+  // Only replaces tokens that appear after a known prefix.
+  const re = new RegExp(`(${prefixRe.source})(\\s*)(${tokenRe.source})`, "gi");
+  return t.replace(re, `$1$2${replacement}`);
+}
+
+// ------------------------------------------------------------
+// Scrubber
+// ------------------------------------------------------------
+
 function scrubPHI(text = "") {
-  let t = String(text || "");
+  let t = normalize(text);
   
-  // Normalize whitespace
-  t = t.replace(/\r\n/g, "\n");
+  // ----------------------------
+  // High-confidence identifiers (anywhere)
+  // ----------------------------
   
   // Emails
   t = t.replace(
@@ -20,98 +68,137 @@ function scrubPHI(text = "") {
                 "[EMAIL]"
                 );
   
-  // Phone numbers (US)
+  // Phone numbers (US-ish)
   t = t.replace(
-                /\b(?:\+1[\s-]?)?(?:\(?\d{3}\)?[\s.-]?)\d{3}[\s.-]?\d{4}\b/g,
+                /\b(?:\+?1[\s\-\.]?)?(?:\(\s*\d{3}\s*\)|\d{3})[\s\-\.]?\d{3}[\s\-\.]?\d{4}\b/g,
                 "[PHONE]"
                 );
   
   // SSN
   t = t.replace(/\b\d{3}-\d{2}-\d{4}\b/g, "[ID]");
   
-  // MRN / Member ID / Account-like (simple but useful heuristics)
-  t = t.replace(/\b(MRN|Member\s*ID|Policy\s*#|Acct\s*#|Account\s*#)\s*[:#]?\s*[A-Z0-9\-]{5,}\b/gi, "[ID]");
-  t = t.replace(/\b(?:MRN|M#)\s*[:#]?\s*\d{5,}\b/gi, "[ID]");
+  // ----------------------------
+  // Labeled identifiers (preferred to avoid destroying clinical content)
+  // ----------------------------
   
-  // Dates (numeric)
-  t = t.replace(/\b\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}\b/g, "MM/YYYY");
-  // ISO dates
-  t = t.replace(/\b\d{4}-\d{2}-\d{2}\b/g, "MM/YYYY");
-  // Month-name dates (e.g., Dec 5, 2025 / December 5 2025)
-  t = t.replace(
-                /\b(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+\d{1,2}(?:,\s*\d{2,4})?\b/gi,
-                "MM/YYYY"
-                );
+  // DOB line/value
+  t = replaceLabeledValue(t, ["DOB", "D.O.B.", "Date of Birth"], "[REDACTED_DOB]");
   
-  // Addresses (heuristics)
+  // SSN labeled (rare, but)
+  t = replaceLabeledValue(t, ["SSN", "Social Security", "Social Security Number"], "[REDACTED_SSN]");
+  
+  // MRN / member / policy / account identifiers labeled
+  t = replaceLabeledValue(
+                          t,
+                          ["MRN", "M#", "Member ID", "MemberID", "Policy #", "Policy#", "Acct #", "Acct#", "Account #", "Account#", "Chart #", "Chart#"],
+                          "[REDACTED_ID]"
+                          );
+  
+  // Patient name labeled
+  t = replaceLabeledValue(
+                          t,
+                          // IMPORTANT: do NOT include bare "Pt" or "Patient" here.
+                          // Many clinical narratives start sentences with "Pt ..." and we must not destroy
+                          // normal clinical text or templates.
+                          ["Patient Name", "Pt Name", "Name", "Member", "Client"],
+                          "PT-XXXX"
+                          );
+  
+  // Physician/clinician names labeled (optional, but typically PHI in notes)
+  t = replaceLabeledValue(
+                          t,
+                          ["MD", "Dr", "Doctor", "Physician", "Provider", "Referring Provider", "Referring MD", "PCP"],
+                          "[REDACTED_PROVIDER]"
+                          );
+  
+  // ----------------------------
+  // Address handling (avoid over-scrubbing: only do strong patterns)
+  // ----------------------------
+  
+  // Full street address with suffix
   t = t.replace(
-                /\b\d{1,6}\s+[A-Za-z0-9.\-'\s]{2,40}\s(?:Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd|Drive|Dr|Lane|Ln|Court|Ct|Way|Place|Pl|Circle|Cir)\b\.?/gi,
+                /\b\d{1,6}\s+[A-Za-z0-9.\-'\s]{2,40}\s(?:Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd|Drive|Dr|Lane|Ln|Court|Ct|Way|Place|Pl|Circle|Cir|Terrace|Ter|Highway|Hwy|Parkway|Pkwy)\b\.?/gi,
                 "[ADDRESS]"
                 );
-  // City, State ZIP (heuristic)
-  t = t.replace(/\b[A-Z][a-zA-Z.\-']+,\s*[A-Z]{2}\s*\d{5}(?:-\d{4})?\b/g, "[ADDRESS]");
   
-  /**
-   * Names:
-   * We only scrub in common chart-style patterns, to reduce over-redaction.
-   * - "Last, First"
-   * - "First Last" with an optional middle initial
-   */
+  // City, State ZIP
+  t = t.replace(
+                /\b[A-Z][a-zA-Z.\-']+(?:\s+[A-Z][a-zA-Z.\-']+)*,\s*[A-Z]{2}\s*\d{5}(?:-\d{4})?\b/g,
+                "[ADDRESS]"
+                );
+  
+  // Address labeled lines
+  t = replaceLabeledValue(
+                          t,
+                          ["Address", "Home Address", "Mailing Address", "Street Address"],
+                          "[ADDRESS]"
+                          );
+  
+  // ----------------------------
+  // Dates:
+  // Only scrub in common PHI-labeled contexts to avoid breaking clinical narratives/templates.
+  // Keep general dates like "Tx on 1/2/2026" unless explicitly labeled.
+  // ----------------------------
+  
+  // Labeled date fields (more likely PHI):
+  t = replaceLabeledValue(t, ["SOC Date", "Start of Care", "D/C Date", "Discharge Date", "Admission Date", "Eval Date", "Evaluation Date"], "MM/YYYY");
+  
+  // If someone writes "Date: 01/02/2026" on its own line
+  t = replaceLabeledValue(t, ["Date"], "MM/YYYY");
+  
+  // Also scrub explicit DOB date formats if present after DOB label (already handled, but extra safety)
+  t = redactInlineAfter(
+                        t,
+                        /\b(DOB|D\.O\.B\.|Date of Birth)\s*[:#\-]?\s*/i,
+                        /\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}|\d{4}-\d{2}-\d{2}/i,
+                        "MM/YYYY"
+                        );
+  
+  // ----------------------------
+  // "Last, First" name pattern:
+  // Only scrub this common chart format because it’s high confidence and low collateral damage.
+  // ----------------------------
   t = t.replace(/\b[A-Z][a-z]+,\s*[A-Z][a-z]+\b/g, "PT-XXXX");
-  t = t.replace(/\b[A-Z][a-z]+\s+[A-Z]\.\s+[A-Z][a-z]+\b/g, "PT-XXXX");
-  t = t.replace(/\b[A-Z][a-z]+\s+[A-Z][a-z]+\b/g, (m) => {
-    // avoid common non-name phrases (conservative allowlist)
-    const lower = m.toLowerCase();
-    const allow = [
-      "home health",
-      "physical therapy",
-      "occupational therapy",
-      "skilled nursing",
-      "therapy visit",
-      "therapy session",
-      "assistive device",
-      "gait training",
-      "transfer training",
-      "bed mobility",
-      "range of",
-      "blood pressure",
-      "heart rate",
-      "respiratory rate",
-      "temporal artery",
-    ];
-    if (allow.some(a => lower === a)) return m;
-    return "PT-XXXX";
-  });
   
-  // Ages like "87 y/o" are not identifiers by themselves; keep.
-  // But DOB explicitly:
-  t = t.replace(/\bDOB\s*[:#]?\s*.+?(?=\n|$)/gi, "DOB: [REDACTED]");
+  // ----------------------------
+  // Avoid the prior "First Last" blanket rule.
+  // Instead, scrub "First Last" ONLY when strongly implied by a label already handled above.
+  // (If you need more aggressive name scrubbing, do it upstream with structured data, not regex.)
+  // ----------------------------
   
   return t;
 }
 
-/**
- * detectPHI returns an array of findings.
- * If non-empty => gatekeeper should BLOCK.
- */
+// ------------------------------------------------------------
+// Detector (fail-closed tripwires)
+// ------------------------------------------------------------
+
 function detectPHI(text = "") {
-  const t = String(text || "");
+  const t = normalize(text);
   const findings = [];
   
   const tests = [
+    // High-confidence anywhere
     { type: "email", re: /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i },
-    { type: "phone", re: /\b(?:\+1[\s-]?)?(?:\(?\d{3}\)?[\s.-]?)\d{3}[\s.-]?\d{4}\b/ },
+    { type: "phone", re: /\b(?:\+?1[\s\-\.]?)?(?:\(\s*\d{3}\s*\)|\d{3})[\s\-\.]?\d{3}[\s\-\.]?\d{4}\b/ },
     { type: "ssn", re: /\b\d{3}-\d{2}-\d{4}\b/ },
-    { type: "address", re: /\b\d{1,6}\s+[A-Za-z0-9.\-'\s]{2,40}\s(?:Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd|Drive|Dr|Lane|Ln|Court|Ct|Way|Place|Pl|Circle|Cir)\b/i },
-    { type: "dob", re: /\bDOB\b\s*[:#]?\s*/i },
-    { type: "mrn", re: /\b(?:MRN|Member\s*ID|Policy\s*#|Acct\s*#|Account\s*#|M#)\b/i },
-    // A very conservative "Last, First" name pattern
+    
+    // Address patterns (strong)
+    { type: "address_street", re: /\b\d{1,6}\s+[A-Za-z0-9.\-'\s]{2,40}\s(?:Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd|Drive|Dr|Lane|Ln|Court|Ct|Way|Place|Pl|Circle|Cir|Terrace|Ter|Highway|Hwy|Parkway|Pkwy)\b/i },
+    { type: "address_city_state_zip", re: /\b[A-Z][a-zA-Z.\-']+(?:\s+[A-Z][a-zA-Z.\-']+)*,\s*[A-Z]{2}\s*\d{5}(?:-\d{4})?\b/ },
+    
+    // Labeled identifiers (tripwire)
+    { type: "dob_label", re: /\b(DOB|D\.O\.B\.|Date of Birth)\b\s*[:#\-]?\s*/i },
+    { type: "mrn_label", re: /\b(MRN|Member\s*ID|MemberID|Policy\s*#|Policy#|Acct\s*#|Acct#|Account\s*#|Account#|Chart\s*#|Chart#|M#)\b\s*[:#\-]?\s*/i },
+    { type: "name_label", re: /\b(Patient Name|Pt Name|Patient|Pt|Name|Member|Client)\b\s*[:#\-]?\s*[A-Z]/i },
+    
+    // High-confidence chart name format
     { type: "name_last_first", re: /\b[A-Z][a-z]+,\s*[A-Z][a-z]+\b/ },
   ];
   
   for (const { type, re } of tests) {
     const m = t.match(re);
-    if (m) findings.push({ type, match: String(m[0]).slice(0, 60) });
+    if (m) findings.push({ type, match: String(m[0]).slice(0, 80) });
   }
   
   return findings;
