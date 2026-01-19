@@ -38,7 +38,7 @@ function logErrSafe(...args) { return logErr(...args); }
 
 const { chromium } = require("playwright");
 const path = require("path");
-const { callOpenAIJSON, callOpenAIText } = require("./openaiClient");
+const { callOpenAIJSON } = require("./openaiClient");
 
 require("dotenv").config({
   path: path.resolve(__dirname, "../.env"),
@@ -57,92 +57,6 @@ const PASSWORD = process.env.KINNSER_PASSWORD;
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-// ------------------------------------------------------------
-// HH PT Evaluation Assessment Summary Prompt (6 sentences exact)
-// - Randomized sentence openers (chosen in JS, not by the model)
-// - Always ends with: "Continued skilled HH PT remains indicated."
-// ------------------------------------------------------------
-function buildHHEvalAssessmentPrompt({
-  age,
-  gender,
-  relevantMedicalHistory,
-  primaryProblems,
-  assistiveDeviceText,
-} = {}) {
-  const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
-  
-  const ageTxt = String(age ?? "").trim();
-  const genderTxt = String(gender ?? "").trim();
-  const pmhTxt = String(relevantMedicalHistory ?? "").trim();
-  const probsTxt = String(primaryProblems ?? "generalized weakness with impaired bed mobility, transfers, gait, and balance").trim();
-  const adTxt = String(assistiveDeviceText ?? "AD").trim();
-  
-  const s1Open = pick([
-    "Pt is a",
-    "Pt is a pleasant",
-    "Pt is a",
-    "Pt is a",
-  ]);
-  
-  const s2Open = pick([
-    "Pt is seen today for",
-    "Pt was evaluated today for",
-    "Pt is seen for",
-    "Today, pt is seen for",
-  ]);
-  
-  const s3Open = pick([
-    "Currently, pt demonstrates",
-    "At this time, pt presents with",
-    "Pt currently demonstrates",
-    "Pt presents with",
-  ]);
-  
-  const s4Open = pick([
-    "Pt exhibits",
-    "Pt demonstrates",
-    "Pt displays",
-    "Pt shows",
-  ]);
-  
-  const s5Open = pick([
-    "Skilled HH PT services are medically necessary to",
-    "Skilled HH PT is medically necessary to",
-    "Skilled PT services are required to",
-    "Skilled HH PT intervention is indicated to",
-  ]);
-  
-  return `
-Write an Assessment Summary for a Medicare home health physical therapy INITIAL EVALUATION.
-Output EXACTLY 6 sentences total, in one paragraph, no line breaks, no numbering, no bullets, no quotes.
-Sentence 6 MUST be exactly: Continued skilled HH PT remains indicated.
-
-Use this patient context (do not invent new diagnoses or demographics):
-- Age: ${ageTxt || "___"}
-- Gender: ${genderTxt || "___"}
-- Relevant Medical History (PMH): ${pmhTxt || "___"}
-- Primary problems/impairments: ${probsTxt}
-- Assistive device wording: ${adTxt}
-
-Required content rules:
-- Sentence 1: demographics + PMH (use only provided PMH; do not add).
-- Sentence 2: must include PT initial evaluation + home safety assessment + DME assessment + HEP education + fall safety precautions/fall prevention + education on proper use of ${adTxt} + education on pain/edema management + PT POC/goal planning to return toward PLOF.
-- Sentence 3: objective functional deficits (bed mobility, transfers, gait, balance, generalized weakness) and high fall risk linkage.
-- Sentence 4: safety awareness/balance reactions and home risk statement (high fall risk).
-- Sentence 5: skilled need/medical necessity statement describing skilled interventions (TherEx, functional training, gait/balance training, safety education) to improve function and reduce fall/injury risk.
-- Do NOT mention any visit counts (no "within 4 visits", no total visits).
-- Keep language professional, objective, and Medicare-appropriate.
-
-Sentence openers (use exactly these starters for sentences 1–5):
-1) ${s1Open}
-2) ${s2Open}
-3) ${s3Open}
-4) ${s4Open}
-5) ${s5Open}
-`.trim();
-}
-
-
 
 
 /* =========================
@@ -151,10 +65,10 @@ Sentence openers (use exactly these starters for sentences 1–5):
 async function safeSetValue(locator, value, label = "field", timeoutMs = 60000) {
   const v = String(value ?? "");
   if (!locator) throw new Error(`safeSetValue: locator missing for ${label}`);
-  
+
   await locator.scrollIntoViewIfNeeded().catch(() => {});
   await locator.click({ timeout: 5000 }).catch(() => {});
-  
+
   // Attempt fill (fastest)
   try {
     await locator.fill("", { timeout: timeoutMs }).catch(() => {});
@@ -168,12 +82,12 @@ async function safeSetValue(locator, value, label = "field", timeoutMs = 60000) 
       el.dispatchEvent(new Event("blur", { bubbles: true }));
     }, v);
   }
-  
+
   let persisted = (await locator.inputValue().catch(() => "")).trim();
   if (v.trim() && !persisted) {
     throw new Error(`ASSERT FAIL: ${label} did not persist after set`);
   }
-  
+
   // Detect truncation (common in long PMH fields). Retry via JS and warn if still truncated.
   if (v.trim() && persisted && persisted !== v.trim()) {
     await locator.evaluate((el, val) => {
@@ -182,14 +96,14 @@ async function safeSetValue(locator, value, label = "field", timeoutMs = 60000) 
       el.dispatchEvent(new Event("change", { bubbles: true }));
       el.dispatchEvent(new Event("blur", { bubbles: true }));
     }, v);
-    
+
     const persisted2 = (await locator.inputValue().catch(() => "")).trim();
     if (persisted2 && persisted2 !== v.trim()) {
       log(`⚠️ ${label} appears truncated: wanted ${v.trim().length} chars, got ${persisted2.length} chars`);
     }
     persisted = persisted2 || persisted;
   }
-  
+
   return persisted;
 }
 
@@ -579,8 +493,8 @@ async function setHotboxShow100(page) {
 
 async function openHotboxPatientTask(page, patientName, visitDate, taskType) {
   log(
-      `➡️ Searching Hotbox for patient "${patientName}" on "${visitDate}" with task "${taskType}"...`
-      );
+              `➡️ Searching Hotbox for patient "${patientName}" on "${visitDate}" with task "${taskType}"...`
+              );
   
   if (!patientName || !visitDate || !taskType) {
     throw new Error("❌ openHotboxPatientTask requires patientName, visitDate, and taskType.");
@@ -728,7 +642,7 @@ async function openHotboxPatientTask(page, patientName, visitDate, taskType) {
       `❌ No Hotbox row found for any date variant ${JSON.stringify(
         dateVariants
       )}, task "${taskType}", and name "${patientName}".`
-        );
+                );
     throw new Error("Hotbox row not found for date + task + name (fuzzy match).");
   }
   
@@ -926,11 +840,11 @@ async function fillVisitBasics(context, { timeIn, timeOut, visitDate }) {
   // Normalize visit date to MM/DD/YYYY before typing
   const normalizedDate = normalizeDateToMMDDYYYY(visitDate);
   log(
-      "📅 Visit Date (raw → normalized):",
-      visitDate,
-      "→",
-      normalizedDate
-      );
+              "📅 Visit Date (raw → normalized):",
+              visitDate,
+              "→",
+              normalizedDate
+              );
   
   const dateInput = await firstVisibleLocator(frame, [
     "#frm_visitdate",
@@ -1022,14 +936,14 @@ function parseStepsFromLiving(livingLine = "") {
 function normalizeAssistanceText(raw = "") {
   const t = String(raw || "").trim();
   if (!t) return "";
-  
+
   const low = t.toLowerCase();
-  
+
   // Standardize key cases
   if (low.includes("family") || low.includes("spouse")) return "Family / Spouse";
   if (low.includes("caregiver") || low.includes("cg") || low.includes("staff"))
     return "Caregivers / facility staff";
-  
+
   // Remove weird characters + collapse spaces
   return t.replace(/[^\x20-\x7E]/g, "").replace(/\s+/g, " ").trim();
 }
@@ -1129,12 +1043,10 @@ function splitIntoSentences(paragraph) {
 
 function isValidSixSentencePtParagraph(text) {
   const sentences = splitIntoSentences(text);
-  const last = sentences[sentences.length - 1] || "";
   return (
           sentences.length === 6 &&
           sentences.every((s) => /^Pt\b/.test(s)) &&
-          !/\b(he|she|they|his|her|their)\b/i.test(text) &&
-          last.trim() === "Continued skilled HH PT remains indicated."
+          !/\b(he|she|they|his|her|their)\b/i.test(text)
           );
 }
 
@@ -1154,7 +1066,7 @@ function buildEvalClinicalStatementFallback(structured) {
   const s3 = `Pt home environment and CG support were assessed, and safety hazards were addressed as indicated to promote safe mobility.`;
   const s4 = `Pt requires skilled HH PT to provide clinical assessment, HEP instruction, DME education, fall-prevention training, and CG training for safe mobility and transfers.`;
   const s5 = `Pt POC will emphasize TherEx, TherAct, gait training, balance training, and functional training with ongoing fall-risk reduction strategies.`;
-  const s6 = `Continued skilled HH PT remains indicated.`;
+  const s6 = `Pt requires continued skilled HH PT per POC to improve safety, mobility, and ADL performance.`;
   return [s1, s2, s3, s4, s5, s6].join(" ");
 }
 
@@ -1507,7 +1419,7 @@ function parseStructuredFromFreeText(aiNotes = "") {
     result.living.stepsCount = String(stepsCountMatch[1] || "").trim();
     if (result.living.stepsCount) result.living.stepsPresent = true;
   }
-  
+
   // Response to tx (preferred keyword) + Factors Contributing to Functional Impairment (fallback)
   // Bed Mobility
   const rttBed =
@@ -1629,7 +1541,7 @@ function parseStructuredFromFreeText(aiNotes = "") {
     if (painLocPrimary) result.pain.primaryLocationText = painLocPrimary[1].trim();
     else if (painLoc) result.pain.primaryLocationText = painLoc[1].trim();
   }
-  
+
   
   const painInt = text.match(/(?:^|\n)\s*intensity\s*\(?.*?\)?\s*:\s*([0-9]{1,2})\b/i);
   if (painInt) result.pain.intensityValue = String(painInt[1]).trim();
@@ -2054,29 +1966,6 @@ ${text}
     }
     
     if (visitLabel === "PT INITIAL PT EVALUATION") {
-      // Prefer a dedicated Assessment Summary generation prompt for Initial Eval (6 sentences, fixed closing phrase).
-      try {
-        if (typeof buildHHEvalAssessmentPrompt === "function" && typeof callOpenAIText === "function") {
-          const adTxt = structured?.func?.gaitAD || structured?.func?.gaitDevice || "AD";
-          const probsTxt = "generalized weakness with impaired bed mobility, transfers, gait, and balance";
-          const assessPrompt = buildHHEvalAssessmentPrompt({
-            age: demo?.age || "",
-            gender: demo?.sex || "",
-            relevantMedicalHistory: (parsed.relevantHistory || structured?.relevantHistory || defaults.relevantHistory || "").trim(),
-            primaryProblems: probsTxt,
-            assistiveDeviceText: adTxt,
-          });
-          
-          const assessed = await callOpenAIText(assessPrompt, 12000, { max_output_tokens: 900, temperature: 0 });
-          if (assessed && typeof isValidSixSentencePtParagraph === "function" && isValidSixSentencePtParagraph(assessed)) {
-            parsed.clinicalStatement = assessed.trim();
-          }
-        }
-      } catch (e) {
-        // If this fails, we fall back to the JSON-derived statement and/or deterministic fallback below.
-        log("⚠️ Assessment Summary generation skipped:", e.message);
-      }
-      
       const fallback =
       typeof buildEvalClinicalStatementFallback === "function"
       ? buildEvalClinicalStatementFallback(structured)
@@ -2567,7 +2456,7 @@ async function fillPainSection(context, data) {
       }).catch(() => {});
       await wait(600); // allow Kinnser JS to reveal the "Other" textbox
     }
-    
+
     // "Other" description textbox (must pick "Other" first to render)
     // We support both known IDs AND a relative fallback to the first text input after the select.
     if (locationText) {
@@ -2579,7 +2468,7 @@ async function fillPainSection(context, data) {
         "xpath=//*[@id='frm_PainAsmtSitePrim']/following::input[1]",
         "xpath=//*[@id='frm_PainAsmtSitePrim']/following::textarea[1]",
       ]);
-      
+
       if (siteOther && (await siteOther.isVisible().catch(() => false))) {
         await safeSetValue(siteOther, locationText, "Pain Primary Location Other", 60000);
         log("📍 Pain location (Primary Other):", locationText);
@@ -2587,7 +2476,7 @@ async function fillPainSection(context, data) {
         log("⚠️ Primary pain 'Other' textbox not found after selecting Other.");
       }
     }
-    // Pre-Therapy Intensity (existing)
+// Pre-Therapy Intensity (existing)
     if (intensityVal) {
       const preIntensitySelect = await firstVisibleLocator(frame, [
         "#frm_PainAsmtSiteIntnstyPrimary1",
@@ -2850,11 +2739,11 @@ async function fillHomeSafetySection(context, data) {
   try {
     const currAssist = await firstVisibleLocator(frame, ["#frm_CurrTypAsst", "#frm_CurrentTypesAsst", "#frm_CurrAsstTypes", "textarea[id*=\"CurrTyp\"]", "textarea[name*=\"CurrTyp\"]", "textarea[id*=\"Asst\"][id*=\"Type\"]", "textarea[name*=\"Asst\"][name*=\"Type\"]"]);
     await safeSetValue(
-                       currAssist,
-                       normalizeAssistanceText(living.currentAssistanceTypes),
-                       "Current assistance types (#frm_CurrTypAsst)",
-                       60000
-                       );
+     currAssist,
+     normalizeAssistanceText(living.currentAssistanceTypes),
+     "Current assistance types (#frm_CurrTypAsst)",
+     60000
+    );
   } catch (e) {
     log("⚠️ Could not fill Current Types of Assistance:", e.message);
   }
@@ -3042,17 +2931,17 @@ async function fillTreatmentGoalsAndPainPlan(context, data) {
   
   let goalTexts = [];
   
-  
-  // Clean goal text: remove embedded "within X visits" or similar visit-count phrasing.
-  // (Visit counts belong in Time Frame column, not inside the goal sentence.)
-  function scrubGoalText(s) {
-    return String(s || "")
+
+// Clean goal text: remove embedded "within X visits" or similar visit-count phrasing.
+// (Visit counts belong in Time Frame column, not inside the goal sentence.)
+function scrubGoalText(s) {
+  return String(s || "")
     .replace(/\bwithin\s+(?:a\s+)?(?:total\s+of\s+)?\d{1,2}\s*visits?\b\.?/gi, "")
     .replace(/\s{2,}/g, " ")
     .trim();
-  }
-  
-  let stText = "";
+}
+
+let stText = "";
   let ltText = "";
   
   if (instructionMode) {
@@ -3412,28 +3301,28 @@ async function fillFunctionalSection(context, data) {
 
 async function fillFrequencyAndDate(context, data, visitDate) {
   log("➡️ Filling Frequency + Effective Date...");
-  
+
   const frame = await findTemplateScope(context);
   if (!frame) {
     log("⚠️ Template frame not found for plan.");
     return;
   }
-  
+
   const plan = data.plan || {};
-  
+
   // --- Effective Date (frm_FreqDur1) ---
   try {
     const effField = await firstVisibleLocator(frame, ["#frm_FreqDur1"]);
     if (effField) {
       const effectiveRaw =
-      plan.effectiveDate && plan.effectiveDate !== "skip"
-      ? plan.effectiveDate
-      : visitDate;
-      
+        plan.effectiveDate && plan.effectiveDate !== "skip"
+          ? plan.effectiveDate
+          : visitDate;
+
       const effective = normalizeDateToMMDDYYYY(effectiveRaw);
-      
+
       log("📆 Effective date (raw → normalized):", effectiveRaw, "→", effective);
-      
+
       await effField.fill("").catch(() => {});
       await effField.fill(effective).catch(() => {});
       await effField.evaluate((el) => {
@@ -3445,25 +3334,25 @@ async function fillFrequencyAndDate(context, data, visitDate) {
   } catch (e) {
     log("⚠️ Could not fill Effective Date:", e?.message || String(e));
   }
-  
+
   // --- Frequency (frm_FreqDur2) ---
   try {
     if (plan.frequency) {
       const rawFreq = String(plan.frequency || "").trim();
-      
+
       const tokens = [...rawFreq.matchAll(/\b\d+w\d+\b/gi)]
-      .map((m) => m[0].toLowerCase())
-      .slice(0, 6);
-      
+        .map((m) => m[0].toLowerCase())
+        .slice(0, 6);
+
       const normFreq = tokens.length
-      ? tokens.join(", ")
-      : rawFreq
-      .replace(/[`"'<>]/g, "")
+        ? tokens.join(", ")
+        : rawFreq
+            .replace(/[`"'<>]/g, "")
             .replace(/\s+/g, " ")
             .trim();
-    
+
       log("🧾 Frequency raw → normalized:", rawFreq, "→", normFreq);
-    
+
       const freqField = await firstVisibleLocator(frame, ["#frm_FreqDur2"]);
       if (freqField) {
         await freqField.fill("").catch(() => {});
@@ -3478,234 +3367,234 @@ async function fillFrequencyAndDate(context, data, visitDate) {
     } else {
       log("ℹ️ No plan.frequency provided; skipping frequency fill.");
     }
-    } catch (e) {
+  } catch (e) {
     log("⚠️ Could not fill Frequency:", e?.message || String(e));
-    }
-    }
-    
-    
-    
-    
-    // =========================
-    // ROM / Strength text parser
-    // =========================
-    
-    function parseRomAndStrength(text) {
-    if (!text) return {};
-    
-    // Helper: strip the "for left and right" tail if present
-    const cleanup = (val) => {
+  }
+}
+
+
+  
+  
+// =========================
+// ROM / Strength text parser
+// =========================
+
+function parseRomAndStrength(text) {
+  if (!text) return {};
+  
+  // Helper: strip the "for left and right" tail if present
+  const cleanup = (val) => {
     if (!val) return null;
     return val.split(/for\s+left\s+and\s+right/i)[0].trim();
-    };
-    
-    // Use regex over the *entire* text, not per-line startsWith
-    const ueRomMatch = text.match(/gross\s+rom\s+for\s+ue[^:\-\n]*[:\-]\s*([^\n]+)/i);
-    const leRomMatch = text.match(/gross\s+rom\s+for\s+le[^:\-\n]*[:\-]\s*([^\n]+)/i);
-    const ueStrMatch = text.match(/gross\s+strength\s+for\s+ue[^:\-\n]*[:\-]\s*([^\n]+)/i);
-    const leStrMatch = text.match(/gross\s+strength\s+for\s+le[^:\-\n]*[:\-]\s*([^\n]+)/i);
-    
-    const ueRom       = cleanup(ueRomMatch && ueRomMatch[1]);
-    const leRom       = cleanup(leRomMatch && leRomMatch[1]);
-    const ueStrength  = cleanup(ueStrMatch && ueStrMatch[1]);
-    const leStrength  = cleanup(leStrMatch && leStrMatch[1]);
-    
-    const result = {};
-    if (ueRom || ueStrength) {
+  };
+  
+  // Use regex over the *entire* text, not per-line startsWith
+  const ueRomMatch = text.match(/gross\s+rom\s+for\s+ue[^:\-\n]*[:\-]\s*([^\n]+)/i);
+  const leRomMatch = text.match(/gross\s+rom\s+for\s+le[^:\-\n]*[:\-]\s*([^\n]+)/i);
+  const ueStrMatch = text.match(/gross\s+strength\s+for\s+ue[^:\-\n]*[:\-]\s*([^\n]+)/i);
+  const leStrMatch = text.match(/gross\s+strength\s+for\s+le[^:\-\n]*[:\-]\s*([^\n]+)/i);
+  
+  const ueRom       = cleanup(ueRomMatch && ueRomMatch[1]);
+  const leRom       = cleanup(leRomMatch && leRomMatch[1]);
+  const ueStrength  = cleanup(ueStrMatch && ueStrMatch[1]);
+  const leStrength  = cleanup(leStrMatch && leStrMatch[1]);
+  
+  const result = {};
+  if (ueRom || ueStrength) {
     result.ue = {
       rom: ueRom || null,
       strength: ueStrength || null,
     };
-    }
-    if (leRom || leStrength) {
+  }
+  if (leRom || leStrength) {
     result.le = {
       rom: leRom || null,
       strength: leStrength || null,
     };
-    }
-    
-    log("🧮 parseRomAndStrength parsed:", result);
-    return result;
-    }
-    
-    
-    /* =========================
-    * ROM / Strength helpers
-    * =======================*/
-    
-    // MUST be async because we use await inside
-    async function fillRomRange(frame, firstId, lastId, romValue, strengthValue) {
-    for (let id = firstId; id <= lastId; id += 4) {
+  }
+  
+  log("🧮 parseRomAndStrength parsed:", result);
+  return result;
+}
+
+
+/* =========================
+ * ROM / Strength helpers
+ * =======================*/
+
+// MUST be async because we use await inside
+async function fillRomRange(frame, firstId, lastId, romValue, strengthValue) {
+  for (let id = firstId; id <= lastId; id += 4) {
     const rRomSel = `#frm_ROM${id}`;
     const lRomSel = `#frm_ROM${id + 1}`;
     const rStrSel = `#frm_ROM${id + 2}`;
     const lStrSel = `#frm_ROM${id + 3}`;
-        
-        if (romValue) {
-        const rRom = frame.locator(rRomSel).first();
-        const lRom = frame.locator(lRomSel).first();
-        if (await rRom.isVisible().catch(() => false)) {
+    
+    if (romValue) {
+      const rRom = frame.locator(rRomSel).first();
+      const lRom = frame.locator(lRomSel).first();
+      if (await rRom.isVisible().catch(() => false)) {
         await rRom.fill("").catch(() => {});
         await rRom.type(romValue, { delay: 10 }).catch(() => {});
-        }
-        if (await lRom.isVisible().catch(() => false)) {
+      }
+      if (await lRom.isVisible().catch(() => false)) {
         await lRom.fill("").catch(() => {});
         await lRom.type(romValue, { delay: 10 }).catch(() => {});
-        }
-        }
-        
-        if (strengthValue) {
-        const rStr = frame.locator(rStrSel).first();
-        const lStr = frame.locator(lStrSel).first();
-        if (await rStr.isVisible().catch(() => false)) {
+      }
+    }
+    
+    if (strengthValue) {
+      const rStr = frame.locator(rStrSel).first();
+      const lStr = frame.locator(lStrSel).first();
+      if (await rStr.isVisible().catch(() => false)) {
         await rStr.fill("").catch(() => {});
         await rStr.type(strengthValue, { delay: 10 }).catch(() => {});
-        }
-        if (await lStr.isVisible().catch(() => false)) {
+      }
+      if (await lStr.isVisible().catch(() => false)) {
         await lStr.fill("").catch(() => {});
         await lStr.type(strengthValue, { delay: 10 }).catch(() => {});
-        }
-        }
-        }
-        }
-        
-        // Fill Physical Assessment ROM / Strength from gross UE / LE info
-        async function fillPhysicalRomStrength(context, romStrength) {
-        if (!romStrength) {
-        log("ℹ️ No romStrength data from AI.");
-        return;
-        }
-        
-        const frame = await findTemplateScope(context);
-        if (!frame) {
-        log("⚠️ Template frame not found for ROM/Strength.");
-        return;
-        }
-        
-        const { ue, le } = romStrength || {};
-        
-        log("🧮 ROM/Strength parsed:", romStrength);
-        
-        if ((ue && ue.rom) || (ue && ue.strength)) {
-        await fillRomRange(
+      }
+    }
+  }
+}
+
+// Fill Physical Assessment ROM / Strength from gross UE / LE info
+async function fillPhysicalRomStrength(context, romStrength) {
+  if (!romStrength) {
+    log("ℹ️ No romStrength data from AI.");
+    return;
+  }
+  
+  const frame = await findTemplateScope(context);
+  if (!frame) {
+    log("⚠️ Template frame not found for ROM/Strength.");
+    return;
+  }
+  
+  const { ue, le } = romStrength || {};
+  
+  log("🧮 ROM/Strength parsed:", romStrength);
+  
+  if ((ue && ue.rom) || (ue && ue.strength)) {
+    await fillRomRange(
                        frame,
                        1,   // frm_ROM1
                        40,  // frm_ROM40
                        ue.rom || null,
                        ue.strength || null
                        );
-        }
-        
-        if ((le && le.rom) || (le && le.strength)) {
-        await fillRomRange(
+  }
+  
+  if ((le && le.rom) || (le && le.strength)) {
+    await fillRomRange(
                        frame,
                        69,   // frm_ROM69
                        116,  // frm_ROM116
                        le.rom || null,
                        le.strength || null
                        );
-        }
-        }
-        // =========================
-        // Save button helper (shared)
-        // =========================
-        async function clickSave(contextOrPage) {
-        // Accept: Page, Frame, BrowserContext, or wrapper { page }
-        let scope = contextOrPage?.page || contextOrPage;
-        
-        // If they passed a BrowserContext, convert to a Page
-        if (scope && typeof scope.pages === "function" && typeof scope.locator !== "function") {
-        const pages = scope.pages();
-        if (pages && pages.length) scope = pages[0];
-        }
-        
-        function normalizeScope(s) {
-        if (s && typeof s.locator === "function") return s; // Page/Frame
-        if (s?.page && typeof s.page.locator === "function") return s.page;
-        if (s?.frame && typeof s.frame.locator === "function") return s.frame;
-        
-        if (s && typeof s.pages === "function") {
-        const pages = s.pages();
-        if (pages && pages.length && typeof pages[0].locator === "function") return pages[0];
-        }
-        
-        throw new TypeError("clickSave(): scope must be Playwright Page/Frame/BrowserContext or {page}/{frame}");
-        }
-        
-        const saveSelectors = [
-        "#btnSave",
-        "input#btnSave",
-        "button#btnSave",
-        "input[type='button'][value='Save']",
-        "input[type='submit'][value='Save']",
-        "xpath=//input[contains(@onclick, \"modifyForm('save'\") )]",
-        "xpath=//*[self::input or self::button][contains(translate(normalize-space(.),'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'save')]",
-        ];
-        
-        // Heuristic: does popup message look like a validation failure?
-        function isBadDialogMessage(msg = "") {
-        const m = String(msg || "").toLowerCase();
-        return (
-        m.includes("error") ||
-        m.includes("required") ||
-        m.includes("missing") ||
-        m.includes("cannot") ||
-        m.includes("unable") ||
-        m.includes("invalid") ||
-        m.includes("please correct") ||
-        m.includes("must be") ||
-        m.includes("failed")
-        );
-        }
-        
-        async function assertNoOnPageErrors(pageOrFrame) {
-        // WellSky/Kinnser error containers — keep this tight to avoid false positives
-        const errorSelectors = [
-        ".validation-summary-errors",
-        ".validation-summary",
-        ".field-validation-error",
-        "#error",
-        "#errors",
-        "text=/please correct/i",
-        "text=/validation/i",
-        "text=/required/i",
-        "text=/unable to save/i",
-        "text=/error occurred/i",
-        ];
-        
-        for (const sel of errorSelectors) {
-        const loc = pageOrFrame.locator(sel).first();
-        const visible = await loc.isVisible().catch(() => false);
-        if (!visible) continue;
-        
-        const txt = (await loc.innerText().catch(() => "")).trim();
-        
-        // Only fail if there is meaningful error text (avoid empty containers)
-        if (txt && txt.length >= 3) {
-        throw new Error(`SAVE_VALIDATION_ERROR: ${txt.slice(0, 500)}`);
-      }
-      }
-      }
-      
-      async function tryClick(s, label) {
-      const pageOrFrame = normalizeScope(s);
-      
-      // For dialog listening we need the underlying Page object
-      const page = typeof pageOrFrame.page === "function" ? pageOrFrame.page() : pageOrFrame;
-      
-      for (const sel of saveSelectors) {
+  }
+}
+// =========================
+// Save button helper (shared)
+// =========================
+async function clickSave(contextOrPage) {
+  // Accept: Page, Frame, BrowserContext, or wrapper { page }
+  let scope = contextOrPage?.page || contextOrPage;
+
+  // If they passed a BrowserContext, convert to a Page
+  if (scope && typeof scope.pages === "function" && typeof scope.locator !== "function") {
+    const pages = scope.pages();
+    if (pages && pages.length) scope = pages[0];
+  }
+
+  function normalizeScope(s) {
+    if (s && typeof s.locator === "function") return s; // Page/Frame
+    if (s?.page && typeof s.page.locator === "function") return s.page;
+    if (s?.frame && typeof s.frame.locator === "function") return s.frame;
+
+    if (s && typeof s.pages === "function") {
+      const pages = s.pages();
+      if (pages && pages.length && typeof pages[0].locator === "function") return pages[0];
+    }
+
+    throw new TypeError("clickSave(): scope must be Playwright Page/Frame/BrowserContext or {page}/{frame}");
+  }
+
+  const saveSelectors = [
+    "#btnSave",
+    "input#btnSave",
+    "button#btnSave",
+    "input[type='button'][value='Save']",
+    "input[type='submit'][value='Save']",
+    "xpath=//input[contains(@onclick, \"modifyForm('save'\") )]",
+    "xpath=//*[self::input or self::button][contains(translate(normalize-space(.),'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'save')]",
+  ];
+
+  // Heuristic: does popup message look like a validation failure?
+  function isBadDialogMessage(msg = "") {
+    const m = String(msg || "").toLowerCase();
+    return (
+      m.includes("error") ||
+      m.includes("required") ||
+      m.includes("missing") ||
+      m.includes("cannot") ||
+      m.includes("unable") ||
+      m.includes("invalid") ||
+      m.includes("please correct") ||
+      m.includes("must be") ||
+      m.includes("failed")
+    );
+  }
+
+  async function assertNoOnPageErrors(pageOrFrame) {
+    // WellSky/Kinnser error containers — keep this tight to avoid false positives
+    const errorSelectors = [
+      ".validation-summary-errors",
+      ".validation-summary",
+      ".field-validation-error",
+      "#error",
+      "#errors",
+      "text=/please correct/i",
+      "text=/validation/i",
+      "text=/required/i",
+      "text=/unable to save/i",
+      "text=/error occurred/i",
+    ];
+
+    for (const sel of errorSelectors) {
       const loc = pageOrFrame.locator(sel).first();
       const visible = await loc.isVisible().catch(() => false);
       if (!visible) continue;
-      
+
+      const txt = (await loc.innerText().catch(() => "")).trim();
+
+      // Only fail if there is meaningful error text (avoid empty containers)
+      if (txt && txt.length >= 3) {
+        throw new Error(`SAVE_VALIDATION_ERROR: ${txt.slice(0, 500)}`);
+      }
+    }
+  }
+
+  async function tryClick(s, label) {
+    const pageOrFrame = normalizeScope(s);
+
+    // For dialog listening we need the underlying Page object
+    const page = typeof pageOrFrame.page === "function" ? pageOrFrame.page() : pageOrFrame;
+
+    for (const sel of saveSelectors) {
+      const loc = pageOrFrame.locator(sel).first();
+      const visible = await loc.isVisible().catch(() => false);
+      if (!visible) continue;
+
       await loc.scrollIntoViewIfNeeded().catch(() => {});
-      
+
       // Start listening for dialog BEFORE clicking.
       const dialogPromise =
         typeof page.waitForEvent === "function"
           ? page.waitForEvent("dialog", { timeout: 8000 }).catch(() => null)
           : Promise.resolve(null);
-      
+
       try {
         await loc.click({ force: true, timeout: 8000 });
       } catch {
@@ -3713,37 +3602,37 @@ async function fillFrequencyAndDate(context, data, visitDate) {
         await pageOrFrame.evaluate(() => {
           const byId = document.querySelector("#btnSave");
           if (byId) return byId.click();
-      
+
           const byOnclick = Array.from(document.querySelectorAll("input,button"))
             .find(el => (el.getAttribute("onclick") || "").includes("modifyForm('save')"));
           if (byOnclick) return byOnclick.click();
-      
+
           const byValue = Array.from(
             document.querySelectorAll("input[type='button'],input[type='submit'],button")
           ).find(el => ((el.value || el.textContent || "").trim().toLowerCase() === "save"));
           if (byValue) return byValue.click();
         });
       }
-      
+
       log(`✅ Clicked Save (${label}) using selector: ${sel}`);
-        
-        // Wait a moment for Kinnser save routines
-        try {
+
+      // Wait a moment for Kinnser save routines
+      try {
         if (typeof page.waitForLoadState === "function") {
           await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
         }
-        } catch {}
-        
-        // If a dialog appeared, inspect its message.
-        const dlg = await dialogPromise;
-        if (dlg) {
+      } catch {}
+
+      // If a dialog appeared, inspect its message.
+      const dlg = await dialogPromise;
+      if (dlg) {
         const msg = dlg.message?.() || "";
         log(`⚠️ Save popup detected: ${msg}`);
-          
-          // The global dialog handler already accepts, but we try accepting safely anyway.
-          try { await dlg.accept(); } catch {}
-          
-          if (isBadDialogMessage(msg)) {
+
+        // The global dialog handler already accepts, but we try accepting safely anyway.
+        try { await dlg.accept(); } catch {}
+
+        if (isBadDialogMessage(msg)) {
           throw new Error(`SAVE_POPUP_ERROR: ${msg}`);
         }
       } else {
@@ -3762,6 +3651,12 @@ async function fillFrequencyAndDate(context, data, visitDate) {
     return false;
   }
 
+  // Prefer clicking Save inside the active template scope first (avoids clicking an unrelated Save button)
+  try {
+    const templateScope = await findTemplateScope(contextOrPage).catch(() => null);
+    if (templateScope && (await tryClick(templateScope, "templateScope"))) return true;
+  } catch {}
+
   // Try on main scope/page
   if (await tryClick(scope, "scope")) return true;
 
@@ -3773,6 +3668,67 @@ async function fillFrequencyAndDate(context, data, visitDate) {
   }
 
   throw new Error("SAVE_BUTTON_NOT_FOUND");
+}
+
+
+// =========================
+// Post-save verification (prevents false 'completed' when nothing persisted)
+// =========================
+function _normTimeDigits(t) {
+  const s = String(t || '').trim();
+  if (!s) return '';
+  // Accept '1715', '17:15', '5:15', etc.
+  const digits = s.replace(/[^0-9]/g, '');
+  if (digits.length == 3) return '0' + digits; // 515 -> 0515
+  if (digits.length >= 4) return digits.slice(-4);
+  return digits;
+}
+
+async function verifyPersistedAfterSave(context, { timeIn, timeOut, visitDate, relevantHistory, clinicalStatement } = {}) {
+  const frame = await findTemplateScope(context, { timeoutMs: 12000, pollMs: 300 });
+  if (!frame) throw new Error('VERIFY_FAILED: could not find template scope after save');
+
+  // Visit basics
+  const ti = await firstVisibleLocator(frame, ['#frm_timein', "input[name^='frm_timein']"]);
+  const to = await firstVisibleLocator(frame, ['#frm_timeout', "input[name^='frm_timeout']"]);
+  const vd = await firstVisibleLocator(frame, ['#frm_visitdate', "input[name^='frm_visitdate']"]);
+
+  const gotTI = ti ? (await ti.inputValue().catch(() => '')).trim() : '';
+  const gotTO = to ? (await to.inputValue().catch(() => '')).trim() : '';
+  const gotVD = vd ? (await vd.inputValue().catch(() => '')).trim() : '';
+
+  if (timeIn && _normTimeDigits(gotTI) != _normTimeDigits(timeIn)) {
+    throw new Error(`VERIFY_FAILED: Time In mismatch expected=${timeIn} got=${gotTI}`);
+  }
+  if (timeOut && _normTimeDigits(gotTO) != _normTimeDigits(timeOut)) {
+    throw new Error(`VERIFY_FAILED: Time Out mismatch expected=${timeOut} got=${gotTO}`);
+  }
+  if (visitDate) {
+    const wantVD = normalizeDateToMMDDYYYY(visitDate);
+    const gotVDnorm = normalizeDateToMMDDYYYY(gotVD);
+    if (wantVD && gotVDnorm && gotVDnorm != wantVD) {
+      throw new Error(`VERIFY_FAILED: Visit Date mismatch expected=${wantVD} got=${gotVD}`);
+    }
+  }
+
+  // Key narratives for Initial Eval
+  if (relevantHistory) {
+    const rh = await firstVisibleLocator(frame, ['#frm_RlvntMedHist', "textarea#frm_RlvntMedHist", "textarea[name='frm_RlvntMedHist']"]);
+    const gotRH = rh ? (await rh.inputValue().catch(() => '')).trim() : '';
+    if (!gotRH) throw new Error('VERIFY_FAILED: Relevant Medical History empty after save');
+  }
+
+  if (clinicalStatement) {
+    const cs = await firstVisibleLocator(frame, ['#frm_EASI1', "textarea#frm_EASI1", "textarea[name='frm_EASI1']"]);
+    const gotCS = cs ? (await cs.inputValue().catch(() => '')).trim() : '';
+    if (!gotCS) throw new Error('VERIFY_FAILED: Clinical Statement empty after save');
+    // Ensure required closing phrase exists (your hard requirement)
+    if (!/Continued skilled HH PT remains indicated\./.test(gotCS)) {
+      throw new Error('VERIFY_FAILED: Clinical Statement missing required closing phrase');
+    }
+  }
+
+  return true;
 }
 
 
@@ -3891,7 +3847,23 @@ async function runPtEvaluationBot({
     // 19) Frequency + effective date
     await fillFrequencyAndDate(context, aiData, visitDate);
     
-    await clickSave(page);
+    await clickSave(context);
+
+    // Verify persistence to avoid false 'completed' status when Save clicked the wrong control
+    try {
+      await verifyPersistedAfterSave(context, {
+        timeIn,
+        timeOut,
+        visitDate,
+        relevantHistory: aiData?.relevantHistory,
+        clinicalStatement: aiData?.clinicalStatement,
+      });
+      log('✅ Post-save verification passed (fields persisted).');
+    } catch (e) {
+      logErrSafe('❌ Post-save verification failed:', e.message);
+      throw e;
+    }
+
     await wait(2000);
     
   } finally {
