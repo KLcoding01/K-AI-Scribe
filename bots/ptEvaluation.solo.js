@@ -3896,6 +3896,43 @@ async function verifyPersistedAfterSave(context, { timeIn, timeOut, visitDate, r
 
 
 
+
+async function verifyPersistedAfterReopen(page, context, {
+  patientName,
+  visitDate,
+  taskType,
+  timeIn,
+  timeOut,
+  relevantHistory,
+  clinicalStatement,
+} = {}) {
+  log('🔁 Re-open verification: returning to HotBox and re-opening the same task to confirm server persistence...');
+
+  // Go back to HotBox explicitly (avoids relying on in-page nav)
+  try {
+    await page.goto('https://www.kinnser.net/hotbox.cfm', { waitUntil: 'domcontentloaded' }).catch(() => {});
+    await wait(1200);
+  } catch {}
+
+  await navigateToHotBox(page);
+  await setHotboxShow100(page);
+
+  await openHotboxPatientTask(page, patientName, visitDate, taskType);
+  await selectTemplateGW2(context);
+
+  // Now verify fields again in the active template scope
+  await verifyPersistedAfterSave(context, {
+    timeIn,
+    timeOut,
+    visitDate,
+    relevantHistory,
+    clinicalStatement,
+  });
+
+  log('✅ Re-open verification passed (server persistence confirmed).');
+  return true;
+}
+
 /* =========================
  * Misc helpers & exports
  * =======================*/
@@ -4022,6 +4059,23 @@ async function runPtEvaluationBot({
         clinicalStatement: aiData?.clinicalStatement,
       });
       log('✅ Post-save verification passed (fields persisted).');
+
+      // Strong guarantee: re-open the task from HotBox and verify again.
+      try {
+        await verifyPersistedAfterReopen(page, context, {
+          patientName,
+          visitDate,
+          taskType,
+          timeIn,
+          timeOut,
+          relevantHistory: aiData?.relevantHistory,
+          clinicalStatement: aiData?.clinicalStatement,
+        });
+      } catch (e2) {
+        logErrSafe('❌ Re-open verification failed:', e2.message);
+        throw e2;
+      }
+
     } catch (e) {
       logErrSafe('❌ Post-save verification failed:', e.message);
       throw e;
