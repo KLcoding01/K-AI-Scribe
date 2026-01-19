@@ -1094,7 +1094,10 @@ function parseStructuredFromFreeText(aiNotes = "") {
   // Copy-only defaults: do not invent living narrative or CG support
   const result = {
     medicalDiagnosis: "",
-    relevantHistory: "",
+    
+    ptDiagnosis: "",
+    precautions: "",
+relevantHistory: "",
     hasExplicitPMH: false,
     clinicalStatement: "",
     subjective: "",
@@ -1175,6 +1178,128 @@ function parseStructuredFromFreeText(aiNotes = "") {
   
   if (!aiNotes) return result;
   const text = String(aiNotes ?? "");
+
+
+  // ---------------------------------------------------------
+  // Diagnosis & History (copy-after-colon)
+  // ---------------------------------------------------------
+  const medDxLine = text.match(/(?:^|\n)\s*medical\s*diagnosis\s*:\s*([^\n\r]+)/i) ||
+                    text.match(/(?:^|\n)\s*medical\s*dx\s*:\s*([^\n\r]+)/i) ||
+                    text.match(/(?:^|\n)\s*diagnosis\s*:\s*([^\n\r]+)/i) ||
+                    text.match(/(?:^|\n)\s*dx\s*:\s*([^\n\r]+)/i);
+  if (medDxLine) {
+    result.medicalDiagnosis = cleanInlineValue(medDxLine[1] || "");
+    if (typeof sanitizeMedicalDiagnosis === "function") {
+      result.medicalDiagnosis = sanitizeMedicalDiagnosis(result.medicalDiagnosis);
+    }
+  }
+
+  const ptDxLine = text.match(/(?:^|\n)\s*pt\s*diagnosis\s*:\s*([^\n\r]+)/i);
+  if (ptDxLine) result.ptDiagnosis = cleanInlineValue(ptDxLine[1] || "");
+
+  const precautionsLine = text.match(/(?:^|\n)\s*precautions\s*:\s*([^\n\r]+)/i);
+  if (precautionsLine) result.precautions = cleanInlineValue(precautionsLine[1] || "");
+
+  // Relevant Medical History / PMH (allow multi-line until next heading)
+  const relHistBlock =
+    text.match(/(?:^|\n)\s*relevant\s*medical\s*history\s*:\s*([\s\S]+?)(?=\n\s*[A-Za-z][^:\n]{0,80}\s*:\s*|\n{2,}|$)/i) ||
+    text.match(/(?:^|\n)\s*pmh\s*:\s*([\s\S]+?)(?=\n\s*[A-Za-z][^:\n]{0,80}\s*:\s*|\n{2,}|$)/i);
+  if (relHistBlock) {
+    result.relevantHistory = String(relHistBlock[1] || "").trim();
+    result.hasExplicitPMH = true;
+    if (typeof sanitizeRelevantHistory === "function") {
+      result.relevantHistory = sanitizeRelevantHistory(result.relevantHistory);
+    }
+  }
+
+  const priorLine = text.match(/(?:^|\n)\s*prior\s*level\s*of\s*function\s*:\s*([^\n\r]+)/i) ||
+                    text.match(/(?:^|\n)\s*prior\s*level(?:\s*of\s*function(?:ing)?)?\s*:\s*([^\n\r]+)/i);
+  if (priorLine) result.priorLevel = cleanInlineValue(priorLine[1] || "");
+
+  const goalsLine = text.match(/(?:^|\n)\s*patient\s*['’]?s\s*goals\s*:\s*([^\n\r]+)/i) ||
+                    text.match(/(?:^|\n)\s*patient\s*goals\s*:\s*([^\n\r]+)/i) ||
+                    text.match(/(?:^|\n)\s*goals\s*for\s*patient\s*:\s*([^\n\r]+)/i);
+  if (goalsLine) result.patientGoals = cleanInlineValue(goalsLine[1] || "");
+
+  // Subjective (allow multi-line until next heading)
+  const subjBlock =
+    text.match(/(?:^|\n)\s*subjective\s*:\s*([\s\S]+?)(?=\n\s*[A-Za-z][^:\n]{0,80}\s*:\s*|\n{2,}|$)/i);
+  if (subjBlock) result.subjective = String(subjBlock[1] || "").trim();
+
+  // ---------------------------------------------------------
+  // Vitals (copy-after-colon)
+  // ---------------------------------------------------------
+  const tempLine = text.match(/(?:^|\n)\s*temp(?:erature)?\s*:\s*([0-9]{2,3}(?:\.[0-9])?)/i);
+  if (tempLine) result.vitals.temperature = String(tempLine[1]).trim();
+
+  const tempTypeLine = text.match(/(?:^|\n)\s*temp\s*type\s*:\s*([^\n\r]+)/i) ||
+                       text.match(/(?:^|\n)\s*taken\s*:\s*([^\n\r]+)/i);
+  if (tempTypeLine) {
+    const t = cleanInlineValue(tempTypeLine[1] || "").toLowerCase();
+    // Keep existing dropdown mapping: default Temporal="4"; set only if obvious match
+    if (t.includes("temporal")) result.vitals.temperatureTypeValue = "4";
+    else if (t.includes("oral")) result.vitals.temperatureTypeValue = "1";
+    else if (t.includes("axillary") || t.includes("axilla")) result.vitals.temperatureTypeValue = "2";
+    else if (t.includes("tymp")) result.vitals.temperatureTypeValue = "3";
+  }
+
+  const bpLine = text.match(/(?:^|\n)\s*bp\s*:\s*(\d{2,3})\s*\/\s*(\d{2,3})/i);
+  if (bpLine) {
+    result.vitals.bpSys = String(bpLine[1]).trim();
+    result.vitals.bpDia = String(bpLine[2]).trim();
+  }
+
+  const hrLine = text.match(/(?:^|\n)\s*heart\s*rate\s*:\s*(\d{2,3})/i);
+  if (hrLine) result.vitals.heartRate = String(hrLine[1]).trim();
+
+  const rrLine = text.match(/(?:^|\n)\s*resp(?:irations?)?\s*:\s*(\d{1,2})/i);
+  if (rrLine) result.vitals.respirations = String(rrLine[1]).trim();
+
+  const vsCommentBlock = text.match(/(?:^|\n)\s*(vital\s*comments?|vitals\s*comment|vs\s*comments?|comments)\s*:\s*([\s\S]+?)(?=\n\s*[A-Za-z][^:\n]{0,80}\s*:\s*|\n{2,}|$)/i);
+  if (vsCommentBlock) result.vitalsComment = String(vsCommentBlock[2] || "").trim();
+
+  // ---------------------------------------------------------
+  // Social Support & Safety (copy-after-colon, plus mapping)
+  // ---------------------------------------------------------
+  const patLivesLine = text.match(/(?:^|\n)\s*patient\s*lives\s*:\s*([^\n\r]+)/i);
+  if (patLivesLine) {
+    const raw = cleanInlineValue(patLivesLine[1] || "");
+    if (raw) {
+      const low = raw.toLowerCase();
+      if (/(assisted\s*living|\balf\b|board\s*(and|&)\s*care|\bb&c\b|facility|snf|skilled\s*nursing|nursing\s*home|memory\s*care|group\s*home|rcfe|residential\s*care)/i.test(low)) {
+        result.living.patientLivesValue = "In congregate situation, e.g., assisted living";
+      } else if (/(lives\s*alone|living\s*alone|\balone\b|by\s*self|on\s*own|no\s*one|no\s*help|no\s*assistance|without\s*help)/i.test(low) && !/(lives\s*with|\bwith\b|family|spouse|husband|wife|partner|roommate|caregiver|\bcg\b|staff)/i.test(low)) {
+        result.living.patientLivesValue = "Alone";
+      } else {
+        result.living.patientLivesValue = "With other person(s) in the home";
+      }
+    }
+  }
+
+  const asstAvailLine = text.match(/(?:^|\n)\s*assistance\s*(?:is\s*)?available\s*:\s*([^\n\r]+)/i);
+  if (asstAvailLine) {
+    const raw = cleanInlineValue(asstAvailLine[1] || "");
+    if (raw) {
+      const v = inferAssistanceValue(raw);
+      if (v && v !== "0") result.living.assistanceAvailableValue = v;
+    }
+  }
+
+  const typesAsstLine = text.match(/(?:^|\n)\s*(types\s*of\s*assistance|current\s*(?:types?\s*of\s*)?assistance\s*(?:types)?)\s*:\s*([^\n\r]+)/i);
+  if (typesAsstLine && !result.living.currentAssistanceTypes) {
+    const raw = cleanInlineValue(typesAsstLine[2] || "");
+    if (raw) result.living.currentAssistanceTypes = raw;
+  }
+
+  const evalLivingBlock =
+    text.match(/(?:^|\n)\s*evaluation\s*of\s*living\s*situation[\s\S]*?\s*:\s*([\s\S]+?)(?=\n\s*[A-Za-z][^:\n]{0,80}\s*:\s*|\n{2,}|$)/i);
+  if (evalLivingBlock) {
+    const block = String(evalLivingBlock[1] || "").trim();
+    if (block) result.living.evaluationText = block.replace(/\s+/g, " ").trim();
+  }
+
+  if (text.toLowerCase().includes("pet")) result.living.hasPets = true;
+
   
   result.living = result.living || {};
   
@@ -1753,252 +1878,123 @@ async function extractNoteDataFromAI(aiNotes, visitType = "Evaluation") {
   const structured = parseStructuredFromFreeText(aiNotes || "");
   const text = String(aiNotes ?? "").trim();
   const hay = text.toLowerCase();
-  
-  const vt = (visitType || "").toLowerCase();
-  const isReeval = vt.includes("re-eval") || vt.includes("re-evaluation") || vt.includes("recert");
-  const isDischarge = vt.includes("discharge") || vt === "dc" || vt.includes(" dc");
-  const isVisit = vt.includes("visit") && !isReeval && !isDischarge;
-  
-  const visitLabel = isReeval
-  ? "PT RE-EVALUATION"
-  : isDischarge
-  ? "PT DISCHARGE"
-  : isVisit
-  ? "PT VISIT"
-  : "PT INITIAL PT EVALUATION";
-  
-  function parseDemographicsFromText(t = "") {
-    const out = { age: "", sex: "" };
-    const s = t.toLowerCase();
-    
-    const ageMatch =
-    s.match(/\b(\d{1,3})\s*(y\/o|yo|yr old|year old|years old)\b/i) ||
-    s.match(/\b(\d{1,3})\s*-\s*year\s*-\s*old\b/i);
-    
-    if (ageMatch) out.age = ageMatch[1];
-    
-    if (/\bfemale\b/i.test(s)) out.sex = "female";
-    else if (/\bmale\b/i.test(s)) out.sex = "male";
-    
-    return out;
-  }
-  
-  const demo = parseDemographicsFromText(text);
-  const demoLine =
-  demo.age && demo.sex
-  ? `Pt is a ${demo.age} y/o ${demo.sex}`
-  : demo.sex
-  ? `Pt is a ${demo.sex}`
-  : demo.age
-  ? `Pt is a ${demo.age} y/o`
-  : `Pt is an older adult`;
-  
-  const defaults = {
-    relevantHistory: structured.relevantHistory || "PMH as documented in medical record.",
-    
-    clinicalStatement: isReeval
-    ? "Pt has been receiving skilled HH PT to address functional mobility deficits secondary to muscle weakness, impaired balance, and unsteady gait. Progress has been slow, and pt continues to demonstrate difficulty with bed mobility, transfers, decreased gait tolerance, unsteady gait, and poor balance contributing to high fall risk. Pt requires continued HEP training, fall-prevention education, and safety instruction with functional mobility to reduce fall risk. Pt still has potential and continues to benefit from skilled HH PT to work toward goals and improve ADL performance. Ongoing skilled HH PT remains medically necessary to address these deficits and promote safe functional independence."
-    : isDischarge
-    ? "Pt has completed a course of skilled HH PT to address pain, weakness, impaired mobility, and fall risk. Pt now demonstrates improved strength, transfer ability, and gait tolerance with safer functional mobility using the recommended assistive device. Residual deficits may remain but are manageable with independent HEP and caregiver support. Pt demonstrates adequate safety awareness and is appropriate for discharge from skilled HH PT at this time. Pt will continue with HEP and follow up with MD as needed."
-    : isVisit
-    ? "Pt continues with skilled HH PT to address ongoing deficits in strength, balance, gait, and activity tolerance. Pt demonstrates variable progress with functional mobility, requiring cues for safety, proper sequencing, and efficient gait mechanics. Current session focused on TherEx, TherAct, and gait training to improve mobility, decrease fall risk, and support ADL performance. Pt continues to benefit from skilled HH PT to address these impairments and reinforce HEP and safety strategies."
-    : `${demoLine} who presents with PMH consists of ${structured.relevantHistory || "multiple comorbidities"} and is referred for HH PT to address severe generalized weakness, dependence with bed mobility and transfers, impaired functional mobility, and high caregiver burden. Pt demonstrates objective functional limitations including Dep bed mobility, Dep transfers via Hoyer lift, non-ambulatory status, and wheelchair dependence, contributing to high risk for skin breakdown, deconditioning, and caregiver injury. Pt resides in an assisted living memory care unit with 24/7 caregiver support, and the home environment and safety factors were assessed with no significant hazards identified at this time. Pt requires skilled HH PT to provide caregiver training for safe Hoyer lift transfers, positioning, pressure relief strategies, therapeutic exercise instruction, and development of an appropriate HEP. Pt POC will emphasize TherEx, TherAct, caregiver education, positioning, ROM, and pressure sore prevention to maximize comfort, safety, and quality of care. Pt requires continued skilled HH PT per POC to improve caregiver competence, prevent secondary complications, and support safe long-term management.`,
-    
-    vitals: {
+
+  // Copy-through baseline: everything comes directly from structured parsing
+  const base = {
+    visitType,
+    hasExplicitPMH: !!structured.hasExplicitPMH,
+    medicalDiagnosis: (structured.medicalDiagnosis || "").trim(),
+    ptDiagnosis: (structured.ptDiagnosis || "").trim(),
+    relevantHistory: (structured.relevantHistory || "").trim(),
+    priorLevel: (structured.priorLevel || "").trim(),
+    patientGoals: (structured.patientGoals || "").trim(),
+    precautions: (structured.precautions || "").trim(),
+    subjective: (structured.subjective || "").trim(),
+    vitals: structured.vitals || {
       temperature: "",
-      temperatureTypeValue: "4", // Temporal – DO NOT OVERRIDE
+      temperatureTypeValue: "4",
       bpSys: "",
       bpDia: "",
       positionValue: "2",
       sideValue: "1",
       heartRate: "",
       respirations: "",
-      vsComments: structured.vitalsComment || "",
+      vsComments: "",
     },
-    
-    medicalDiagnosis: structured.medicalDiagnosis || "",
-    subjective: structured.subjective || "",
-    priorLevel: structured.priorLevel || "Needs assistance with mobility/gait and ADLs.",
-    
-  patientGoals:
-    structured.patientGoals ||
-    "To improve strength, mobility, gait, activity tolerance, and decrease fall risk.",
-    
-    living: {
-      patientLivesValue: structured.living?.patientLivesValue || "0",
-      assistanceAvailableValue: structured.living?.assistanceAvailableValue || "0",
-      evaluationText: structured.living?.evaluationText || "",
-			safetyNarrative: structured.living?.safetyNarrative || "",
-      stepsPresent: structured.living?.stepsPresent || false,
-      stepsCount: structured.living?.stepsCount || "",
-      currentAssistanceTypes: structured.living?.currentAssistanceTypes || "",
-      hasPets: structured.living?.hasPets || false,
+    living: structured.living || {
+      patientLivesValue: "0",
+      assistanceAvailableValue: "0",
+      evaluationText: "",
+      safetyNarrative: "",
+      stepsPresent: false,
+      stepsCount: "",
+      currentAssistanceTypes: "",
+      hasPets: false,
     },
-    
-    pain: {
-      hasPain: structured.pain?.hasPain || false,
-      primaryLocationText: structured.pain?.primaryLocationText || "",
-      intensityValue: structured.pain?.intensityValue || "-1",
-      increasedBy: structured.pain?.increasedBy || "",
-      relievedBy: structured.pain?.relievedBy || "",
-      interferesWith: structured.pain?.interferesWith || "",
+    pain: structured.pain || {
+      hasPain: false,
+      primaryLocationText: "",
+      intensityValue: "-1",
+      increasedBy: "",
+      relievedBy: "",
+      interferesWith: "",
     },
-    
     neuro: structured.neuro,
     func: structured.func,
     dme: structured.dme,
-    romStrength: structured.romStrength || null,
     edema: structured.edema,
-    
-    plan: {
-      frequency: structured.plan?.frequency || "",
+    romStrength: structured.romStrength || null,
+    plan: structured.plan || {
+      frequency: "",
       effectiveDate: "",
-      shortTermVisits: structured.plan?.shortTermVisits || "",
-      longTermVisits: structured.plan?.longTermVisits || "",
-      goalTexts: structured.plan?.goalTexts || [],
-      planText: structured.plan?.planText || "", //
+      shortTermVisits: "",
+      longTermVisits: "",
+      goalTexts: [],
+      planText: "",
     },
+    // Assessment Summary: OpenAI-generated ONLY (optional fallback to explicit Assessment Summary label if present)
+    clinicalStatement: (structured.clinicalStatement || "").trim(),
   };
-  
-  // Override default vitals if notes contain them
-  try {
-    const tempMatch = text.match(/(?:temp|temperature)[:\s]+(\d{2}\.?\d*)/i);
-    if (tempMatch) defaults.vitals.temperature = tempMatch[1];
-    
-    const bpMatch = text.match(/bp[:\s]+(\d{2,3})\s*\/\s*(\d{2,3})/i);
-    if (bpMatch) {
-      defaults.vitals.bpSys = bpMatch[1];
-      defaults.vitals.bpDia = bpMatch[2];
-    }
-    
-    const hrMatch = text.match(/heart\s*rate[:\s]+(\d{2,3})/i);
-    if (hrMatch) defaults.vitals.heartRate = hrMatch[1];
-    
-    const respMatch = text.match(/resp(?:iration|irations)?[:\s]+(\d{1,2})/i);
-    if (respMatch) defaults.vitals.respirations = respMatch[1];
-  } catch (err) {
-    log("[Vitals Parser] Error parsing vitals:", err.message);
-  }
-  // =========================
-  // ✅ SAFEGUARD: never send identifiers/secrets to OpenAI
-  // =========================
-  const forbidden = [USERNAME, PASSWORD, process.env.OPENAI_API_KEY]
-  .filter(Boolean)
-  .map(v => String(v).toLowerCase());
-  
-  if (forbidden.some(v => v && hay.includes(v))) {
-    console.warn("⚠️ Possible identifier/secret detected in aiNotes. Skipping OpenAI call; using defaults.");
-    return defaults;
-  }
-  if (!text || !process.env.OPENAI_API_KEY) return defaults;
-  
-  const prompt = `
-You are helping a home health PT fill out a Kinnser/WellSky PT note.
 
-VISIT_TYPE: ${visitLabel}
+  // Only use OpenAI for Assessment Summary (frm_EASI1). Everything else is copy-through.
+  // If there is no API key or no text, return copy-through.
+  if (!text || !process.env.OPENAI_API_KEY) return base;
+
+  // ✅ SAFEGUARD: never send identifiers/secrets to OpenAI
+  const forbidden = [USERNAME, PASSWORD, process.env.OPENAI_API_KEY]
+    .filter(Boolean)
+    .map((v) => String(v).toLowerCase());
+
+  if (forbidden.some((v) => v && hay.includes(v))) {
+    console.warn("⚠️ Possible identifier/secret detected in aiNotes. Skipping OpenAI call; using copy-through.");
+    return base;
+  }
+
+  // If the note already has an explicit Assessment Summary / Clinical Statement block, prefer that and skip OpenAI.
+  if (base.clinicalStatement && base.clinicalStatement.length >= 40) {
+    return base;
+  }
+
+  const prompt = `You are helping a home health PT fill out a Kinnser/WellSky PT INITIAL PT EVALUATION note.
 
 Return ONLY valid JSON with double quotes.
 
-Extract keys:
-- "relevantHistory": ONE concise PMH/comorbidities line ONLY.
-- "medicalDiagnosis": ONLY the primary MD diagnosis (short). If not explicitly stated, return "".
-- "subjective": ONLY if explicitly stated what Pt reports. If not explicitly stated, return "".
-- "clinicalStatement": see rules below
-- "vitals": { "temperature","temperatureTypeValue","bpSys","bpDia","positionValue","sideValue","heartRate","respirations","vsComments" }
-- "living": { "patientLivesValue","assistanceAvailableValue","evaluationText","stepsPresent","stepsCount","currentAssistanceTypes","hasPets" }
-- "pain": { "hasPain","primaryLocationText","intensityValue","increasedBy","relievedBy","interferesWith" }
-- "plan": { "frequency","shortTermVisits","longTermVisits","goalTexts","planText" }
+You must output exactly one key:
+- "clinicalStatement":
+  Write an Assessment Summary appropriate for HH PT Initial Evaluation.
+  Write EXACTLY 6 sentences, ONE paragraph, and EVERY sentence must start with "Pt".
+  No bullets, no headings, no arrows, no pronouns (he/she/they).
+  Keep it Medicare-justifiable.
 
-If VISIT_TYPE is "PT INITIAL PT EVALUATION":
-Write EXACTLY 6 sentences, ONE paragraph, and EVERY sentence must start with "Pt".
-Sentence #1 MUST begin exactly like:
-"${demoLine} who presents with PMH consists of <PMH> and is referred for HH PT to address <primary deficits>."
-Rules:
-- Use the PMH from the note for the “PMH consists of …” phrase (keep concise).
-- Do not use pronouns (they/he/she).
-- No bullets, no headings, no arrows.
-- Sentences #2-#6 must follow:
-2) Objective functional limitations + fall risk.
-3) Home environment / CG support / hazards (if present).
-4) Skilled HH PT necessity (education/HEP/DME/CG training).
-5) POC focus (TherEx/TherAct/gait/balance/fall prevention).
-6) Closing: continued skilled HH PT per POC to improve safety, mobility, ADL performance.
+Use ONLY information present in the Free-text note.
+If the note lacks key details, keep statements general and avoid inventing specifics.
 
 Free-text note:
 ---
 ${text}
 ---`;
-  
-  let parsed;
+
   try {
-    parsed = await callOpenAIJSON(prompt, 12000);
+    const parsed = await callOpenAIJSON(prompt, 12000);
+    const cs = (parsed && parsed.clinicalStatement ? String(parsed.clinicalStatement) : "").trim();
+
+    if (cs) {
+      // Optional validation (if helper exists)
+      if (typeof isValidSixSentencePtParagraph === "function") {
+        if (isValidSixSentencePtParagraph(cs)) {
+          base.clinicalStatement = cs;
+        } else {
+          log("⚠️ OpenAI clinicalStatement failed 6-sentence validation; keeping copy-through.");
+        }
+      } else {
+        base.clinicalStatement = cs;
+      }
+    }
   } catch (err) {
-    logErrSafe("⚠️ OpenAI/JSON error; using defaults:", String((err && err.message) || err || ""));
-    return defaults;
+    logErrSafe("⚠️ OpenAI/JSON error (Assessment Summary only); using copy-through:", String((err && err.message) || err || ""));
   }
-  
-  // Safe sanitize/enforce (ONLY if funcs exist)
-  try {
-    if (typeof sanitizeMedicalDiagnosis === "function") {
-      parsed.medicalDiagnosis = sanitizeMedicalDiagnosis(parsed.medicalDiagnosis);
-    }
-    if (typeof sanitizeRelevantHistory === "function") {
-      parsed.relevantHistory = sanitizeRelevantHistory(parsed.relevantHistory);
-    }
-    
-    if (visitLabel === "PT INITIAL PT EVALUATION") {
-      const fallback =
-      typeof buildEvalClinicalStatementFallback === "function"
-      ? buildEvalClinicalStatementFallback(structured)
-      : defaults.clinicalStatement;
-      
-      const ok =
-      typeof isValidSixSentencePtParagraph === "function"
-      ? isValidSixSentencePtParagraph(parsed.clinicalStatement)
-      : true;
-      
-      if (!ok) parsed.clinicalStatement = fallback;
-    }
-  } catch (e) {
-    log("⚠️ sanitize/enforce skipped:", e.message);
-  }
-  
-  return {
-    visitType,
-    hasExplicitPMH: structured.hasExplicitPMH,
-    relevantHistory: (parsed.relevantHistory || defaults.relevantHistory || "").trim(),
-    clinicalStatement: (parsed.clinicalStatement || defaults.clinicalStatement || "").trim(),
-    vitals: {
-      temperature: parsed.vitals?.temperature || defaults.vitals.temperature,
-      temperatureTypeValue: parsed.vitals?.temperatureTypeValue || defaults.vitals.temperatureTypeValue,
-      bpSys: parsed.vitals?.bpSys || defaults.vitals.bpSys,
-      bpDia: parsed.vitals?.bpDia || defaults.vitals.bpDia,
-      positionValue: parsed.vitals?.positionValue || defaults.vitals.positionValue,
-      sideValue: parsed.vitals?.sideValue || defaults.vitals.sideValue,
-      heartRate: parsed.vitals?.heartRate || defaults.vitals.heartRate,
-      respirations: parsed.vitals?.respirations || defaults.vitals.respirations,
-      vsComments: parsed.vitals?.vsComments || defaults.vitals.vsComments,
-    },
-    medicalDiagnosis: (parsed.medicalDiagnosis || defaults.medicalDiagnosis || "").trim(),
-    subjective: (parsed.subjective || defaults.subjective || "").trim(),
-    living: { ...defaults.living, ...(parsed.living || {}) },
-    pain: { ...defaults.pain, ...(parsed.pain || {}) },
-    neuro: defaults.neuro,
-    func: defaults.func,
-    dme: defaults.dme,
-    edema: defaults.edema,
-    priorLevel: defaults.priorLevel,
-    patientGoals: defaults.patientGoals,
-    romStrength: defaults.romStrength,
-    plan: {
-      ...defaults.plan,
-      ...(parsed.plan || {}),
-    planText:
-      (parsed.plan?.planText || "").trim() ||
-      (structured.plan?.planText || "").trim() ||
-      (defaults.plan?.planText || "").trim(),
-    },
-  };
+
+  return base;
 }
 
 /* =========================
@@ -2160,6 +2156,36 @@ async function fillVitalsAndNarratives(context, data) {
       if (relHist) {
         await safeFillLargeText(relHist, relevantHistoryText, "frm_RlvntMedHist");
         log("🧾 Relevant Medical History filled.");
+      }
+    }
+  }
+
+
+  // PT Diagnosis (frm_PTDiagText) and Precautions (frm_PatientPrecautions) — copy from note
+  if (isInitialEval) {
+    const ptDxText = (data?.ptDiagnosis || "").trim();
+    if (ptDxText) {
+      const ptDx = await firstVisibleLocator(frame, [
+        "#frm_PTDiagText",
+        "textarea#frm_PTDiagText",
+        "textarea[name='frm_PTDiagText']",
+      ]);
+      if (ptDx) {
+        await safeFillLargeText(ptDx, ptDxText, "frm_PTDiagText");
+        log("🧾 PT Diagnosis filled.");
+      }
+    }
+
+    const precautionsText = (data?.precautions || "").trim();
+    if (precautionsText) {
+      const prec = await firstVisibleLocator(frame, [
+        "#frm_PatientPrecautions",
+        "textarea#frm_PatientPrecautions",
+        "textarea[name='frm_PatientPrecautions']",
+      ]);
+      if (prec) {
+        await safeFillLargeText(prec, precautionsText, "frm_PatientPrecautions");
+        log("⚠️ Precautions filled.");
       }
     }
   }
