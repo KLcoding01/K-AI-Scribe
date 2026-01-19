@@ -1013,31 +1013,14 @@ function parseAssistLevelBlock(line = "") {
  * =======================*/
 
 function sanitizeMedicalDiagnosis(dx) {
-  const s = (dx || "").trim();
-  if (!s) return "";
-  
-  // If it looks like a PMH list, do NOT push it into Medical Dx.
-  const commaCount = (s.match(/,/g) || []).length;
-  if (s.length > 90 || commaCount >= 4) return "";
-  
-  // Strip obvious non-dx narrative
-  if (/seen for|order from|training|caregiver|cg\b/i.test(s)) return "";
-  
-  return s;
+  // Pass-through: user requested Medical Dx be copied as-is from note text
+  return String(dx ?? "").trim();
 }
 
 function sanitizeRelevantHistory(pmh) {
-  let s = (pmh || "").trim();
-  if (!s) return "";
-  
-  // Remove age/sex lead-in & eval narrative if it sneaks in
-  s = s.replace(/\b\d{1,3}\s*y\/o\b.*?(female|male)\b[:,]?\s*/i, "");
-  s = s.replace(/\bseen for\b.*$/i, "").trim();
-  
-  // If still looks like referral narrative, skip it
-  if (s.length > 140 && /order|training|evaluation|seen for/i.test(s)) return "";
-  
-  return s.replace(/\s+/g, " ").trim();
+  // Pass-through: user requested Relevant Medical History be copied as-is
+  // Keep simple trim; do not drop content.
+  return String(pmh ?? "").trim();
 }
 
 function splitIntoSentences(paragraph) {
@@ -2175,24 +2158,27 @@ async function fillVitalsAndNarratives(context, data) {
   const isDischarge = vt.includes("discharge") || vt === "dc" || vt.includes(" dc");
   const isVisit = vt.includes("visit") && !isReeval && !isDischarge;
   const isInitialEval = !vt || (vt.includes("evaluation") && !isReeval && !isDischarge && !isVisit);
-  
-  // Only fill PMH if explicitly present (prevents overwrite on Re-eval)
-  if (isInitialEval) {
-    const relevantHistoryText = (data?.relevantHistory || "").trim();
-    if (relevantHistoryText) {
-      const relHist = await firstVisibleLocator(frame, [
-        "#frm_RlvntMedHist",
-        "textarea#frm_RlvntMedHist",
-        "textarea[name='frm_RlvntMedHist']",
-      ]);
-      if (relHist) {
-        await safeFillLargeText(relHist, relevantHistoryText, "frm_RlvntMedHist");
-        log("🧾 Relevant Medical History filled.");
-      }
+  // Relevant Medical History: fill whenever present (copy as-is)
+  const relevantHistoryText = (data?.relevantHistory || "").trim();
+  if (relevantHistoryText) {
+    const relHist = await firstVisibleLocator(frame, [
+      "#frm_RlvntMedHist",
+      "textarea#frm_RlvntMedHist",
+      "textarea[name='frm_RlvntMedHist']",
+    ]);
+    if (relHist) {
+      await safeFillLargeText(relHist, relevantHistoryText, "frm_RlvntMedHist");
+      // Extra nudge for WellSky persistence: blur + short settle
+      await relHist.evaluate((el) => { try { el.dispatchEvent(new Event('blur', { bubbles: true })); } catch {} });
+      await wait(150).catch(() => {});
+      log("🧾 Relevant Medical History filled.");
+    } else {
+      log("⚠️ Could not find frm_RlvntMedHist on the template.");
     }
   }
-  
-  // Only fill Clinical Statement (frm_EASI1) here for INITIAL EVAL.
+
+
+// Only fill Clinical Statement (frm_EASI1) here for INITIAL EVAL.
   // Re-eval has its own dedicated fill logic in ptReevalBot.js.
   if (isInitialEval) {
     const clinicalStatementText = (data?.clinicalStatement || "").trim();
