@@ -1094,16 +1094,26 @@ function parseStructuredFromFreeText(aiNotes = "") {
   // Copy-only defaults: do not invent living narrative or CG support
   const result = {
     medicalDiagnosis: "",
-    
     ptDiagnosis: "",
     precautions: "",
-relevantHistory: "",
+    relevantHistory: "",
     hasExplicitPMH: false,
     clinicalStatement: "",
     subjective: "",
     priorLevel: "",
     patientGoals: "",
     vitalsComment: "",
+    vitals: {
+      temperature: "",
+      temperatureTypeValue: "4", // Temporal default
+      bpSys: "",
+      bpDia: "",
+      positionValue: "2",
+      sideValue: "1",
+      heartRate: "",
+      respirations: "",
+      vsComments: "",
+    },
     living: {
       evaluationText: "",
       patientLivesValue: "0",
@@ -1256,7 +1266,10 @@ relevantHistory: "",
   if (rrLine) result.vitals.respirations = String(rrLine[1]).trim();
 
   const vsCommentBlock = text.match(/(?:^|\n)\s*(vital\s*comments?|vitals\s*comment|vs\s*comments?|comments)\s*:\s*([\s\S]+?)(?=\n\s*[A-Za-z][^:\n]{0,80}\s*:\s*|\n{2,}|$)/i);
-  if (vsCommentBlock) result.vitalsComment = String(vsCommentBlock[2] || "").trim();
+  if (vsCommentBlock) {
+    result.vitalsComment = String(vsCommentBlock[2] || "").trim();
+    if (result.vitals) result.vitals.vsComments = result.vitalsComment;
+  }
 
   // ---------------------------------------------------------
   // Social Support & Safety (copy-after-colon, plus mapping)
@@ -1616,7 +1629,10 @@ relevantHistory: "",
   // VITALS COMMENT
   const vitalsCommentMatch =
   text.match(/(?:^|\n)\s*(blood pressure comment|bp comment|vitals comment|vs comments?|comments)\s*:\s*(.+)/i);
-  if (vitalsCommentMatch) result.vitalsComment = (vitalsCommentMatch[2] || "").trim();
+  if (vitalsCommentMatch) {
+    result.vitalsComment = (vitalsCommentMatch[2] || "").trim();
+    if (result.vitals) result.vitals.vsComments = result.vitalsComment;
+  }
   
   // SUBJECTIVE
   const subjMatch = text.match(/(?:^|\n)\s*subjective\s*:\s*([^\n\r]+)/i);
