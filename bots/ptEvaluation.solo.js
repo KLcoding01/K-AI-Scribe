@@ -166,6 +166,89 @@ function normalizeDateToMMDDYYYY(raw) {
 }
 
 /* =========================
+ * Helpers: active-page locking + post-save audit
+ * =======================*/
+
+function getActivePageFromContext(context) {
+  try {
+    if (!context || typeof context.pages !== "function") return null;
+    const pages = context.pages();
+    if (!pages || !pages.length) return null;
+    // The most recently opened page is typically the visit/task edit screen.
+    return pages[pages.length - 1];
+  } catch {
+    return null;
+  }
+}
+
+function normalizeTimeToHHMM(raw) {
+  const s = String(raw ?? "").trim();
+  if (!s) return "";
+  // If already HH:MM
+  if (/^\d{1,2}:\d{2}$/.test(s)) {
+    const [h, m] = s.split(":");
+    return `${String(Number(h)).padStart(2, "0")}:${m}`;
+  }
+  // Common input: 4 digits "1715" -> "17:15"
+  if (/^\d{4}$/.test(s)) {
+    const h = s.slice(0, 2);
+    const m = s.slice(2);
+    return `${h}:${m}`;
+  }
+  // Common input: "715" -> "07:15"
+  if (/^\d{3}$/.test(s)) {
+    const h = s.slice(0, 1);
+    const m = s.slice(1);
+    return `${h.padStart(2, "0")}:${m}`;
+  }
+  return s;
+}
+
+async function postSaveAudit(target, expected = {}) {
+  const page = target?.page || target;
+  const frame = await findTemplateScope(page, { timeoutMs: 15000 }).catch(() => null);
+  if (!frame) throw new Error("POST-SAVE AUDIT FAIL: could not resolve active template scope");
+
+  const expectDate = normalizeDateToMMDDYYYY(expected.visitDate);
+  const expectIn = normalizeTimeToHHMM(expected.timeIn);
+  const expectOut = normalizeTimeToHHMM(expected.timeOut);
+
+  async function readVal(sel) {
+    const loc = await firstVisibleLocator(frame, [sel]);
+    if (!loc) return "";
+    return (await loc.inputValue().catch(() => "")).trim();
+  }
+
+  const gotDate = await readVal("#frm_visitdate");
+  const gotIn = await readVal("#frm_timein");
+  const gotOut = await readVal("#frm_timeout");
+
+  // Also verify a narrative field that should change frequently.
+  const gotMedDx = await readVal("#frm_MedDiagText");
+
+  const failures = [];
+  if (expectDate && gotDate && gotDate !== expectDate) failures.push(`visitDate expected ${expectDate} got ${gotDate}`);
+  if (expectIn && gotIn && normalizeTimeToHHMM(gotIn) !== expectIn) failures.push(`timeIn expected ${expectIn} got ${gotIn}`);
+  if (expectOut && gotOut && normalizeTimeToHHMM(gotOut) !== expectOut) failures.push(`timeOut expected ${expectOut} got ${gotOut}`);
+
+  if (expected.medicalDiagnosis) {
+    const want = String(expected.medicalDiagnosis).trim();
+    if (want && gotMedDx && gotMedDx !== want) failures.push("Medical Dx did not persist");
+  }
+
+  if (failures.length) {
+    throw new Error(`POST-SAVE AUDIT FAIL: ${failures.join("; ")}`);
+  }
+
+  // If fields are empty, that can indicate a stale/hidden frame; fail fast.
+  if ((expectDate && !gotDate) || (expectIn && !gotIn) || (expectOut && !gotOut)) {
+    throw new Error(`POST-SAVE AUDIT FAIL: one or more key fields are blank after save (date="${gotDate}", in="${gotIn}", out="${gotOut}")`);
+  }
+
+  log("✅ Post-save audit passed (key fields persisted in active visit form).");
+}
+
+/* =========================
  * Browser launcher
  * =======================*/
 
@@ -747,12 +830,20 @@ async function findTemplateScope(target, opts = {}) {
   return null;
 }
 
-async function selectTemplateGW2(context) {
+async function selectTemplateGW2(target) {
   log("➡️ Selecting GW2...");
   
   await wait(2000);
-  
-  for (const page of context.pages()) {
+
+  // Accept BrowserContext OR Page OR { page }
+  let pages = [];
+  try {
+    if (target && typeof target.pages === "function") pages = target.pages();
+    else if (target && typeof target.frames === "function") pages = [target];
+    else if (target?.page && typeof target.page.frames === "function") pages = [target.page];
+  } catch {}
+
+  for (const page of pages) {
     for (const frame of page.frames()) {
       const select = frame.locator("select[name='jump1']").first();
       
@@ -1154,9 +1245,7 @@ function parseStructuredFromFreeText(aiNotes = "") {
       gaitAssist: "",
       gaitDistanceFt: "",
       gaitAD: "",
-      gaitUnevenSurfacesAssist: "",
       stairsAssist: "",
-      stairsDistance: "",
       weightBearing: "",
       bedMobilityFactors: "",
       transfersFactors: "",
@@ -1698,38 +1787,6 @@ function parseStructuredFromFreeText(aiNotes = "") {
     result.func.gaitAssist = parsed.level;
     result.func.gaitDistanceFt = parsed.distanceFt;
     result.func.gaitAD = parsed.device;
-  }
-
-                                                      // Additional gait/stairs lines that should be captured AS-IS after the colon
-                                                      // (your preferred dictation format)
-                                                      const gaitDistLine = text.match(/(?:^|\n)\s*gait\s*distance\s*:\s*([^\n\r]*)/i);
-                                                      if (gaitDistLine) {
-    const v = (gaitDistLine[1] || "").trim();
-    if (v) result.func.gaitDistanceFt = v;
-  }
-
-                                                      const gaitADLine = text.match(/(?:^|\n)\s*gait\s*ad\s*:\s*([^\n\r]*)/i);
-                                                      if (gaitADLine) {
-    const v = (gaitADLine[1] || "").trim();
-    if (v) result.func.gaitAD = v;
-  }
-
-                                                      const gaitUnevenLine = text.match(/(?:^|\n)\s*gait\s*uneven\s*surfaces\s*:\s*([^\n\r]*)/i);
-                                                      if (gaitUnevenLine) {
-    const v = (gaitUnevenLine[1] || "").trim();
-    if (v) result.func.gaitUnevenSurfacesAssist = v;
-  }
-
-                                                      const stairsLine = text.match(/(?:^|\n)\s*stairs\s*:\s*([^\n\r]*)/i);
-                                                      if (stairsLine) {
-    const v = (stairsLine[1] || "").trim();
-    if (v) result.func.stairsAssist = v;
-  }
-
-                                                      const stairsDistLine = text.match(/(?:^|\n)\s*stairs\s*distance\s*:\s*([^\n\r]*)/i);
-                                                      if (stairsDistLine) {
-    const v = (stairsDistLine[1] || "").trim();
-    if (v) result.func.stairsDistance = v;
   }
                                                       
                                                       // GOALS BLOCK (bounded; stops before Frequency/other headings)
@@ -2628,8 +2685,7 @@ async function fillHomeSafetySection(context, data) {
     if (!locatorOrNull || !v) return;
     try {
       if (!(await ensureReady(locatorOrNull, label, 2500))) return;
-      await withTimeout(locatorOrNull.fill(""), 1400, `${label}.fill`);
-      await withTimeout(locatorOrNull.fill(v), 1600, `${label}.fill(value)`);
+      await safeSetValue(locatorOrNull, v, label, 60000);
       log(`✅ ${label} filled`);
     } catch (e) {
       log(`⚠️ ${label} skipped:`, e.message);
@@ -2641,9 +2697,9 @@ async function fillHomeSafetySection(context, data) {
     if (!locatorOrNull || !v) return;
     try {
       if (!(await ensureReady(locatorOrNull, label, 2500))) return;
-      await withTimeout(locatorOrNull.fill(""), 1400, `${label}.fill`);
-      await withTimeout(locatorOrNull.type(v, { delay: typeDelay }), 2600, `${label}.type`);
-      log(`✅ ${label} typed`);
+      // Prefer hardened setter (more reliable than type in Render/headless)
+      await safeSetValue(locatorOrNull, v, label, 60000);
+      log(`✅ ${label} set`);
     } catch (e) {
       // fallback to fill if type fails
       try {
@@ -3283,37 +3339,6 @@ async function fillFunctionalSection(context, data) {
       await f.type(func.gaitAD, { delay: 10 }).catch(() => {});
     }
   }
-
-  // Gait Uneven Surfaces – Assist Level (field id varies by template)
-  if (func.gaitUnevenSurfacesAssist) {
-    // Try likely IDs first, then label-based fallback
-    const candidates = [
-      "#frm_FAPT30",
-      "#frm_FAPT31",
-      "#frm_FAPT32",
-    ];
-
-    let filled = false;
-    for (const sel of candidates) {
-      const f = frame.locator(sel).first();
-      if (await f.isVisible().catch(() => false)) {
-        await f.fill("").catch(() => {});
-        await f.type(func.gaitUnevenSurfacesAssist, { delay: 10 }).catch(() => {});
-        filled = true;
-        break;
-      }
-    }
-
-    if (!filled) {
-      try {
-        const f = frame.getByLabel(/gait\s*uneven\s*surfaces/i).first();
-        if (await f.isVisible().catch(() => false)) {
-          await f.fill("").catch(() => {});
-          await f.type(func.gaitUnevenSurfacesAssist, { delay: 10 }).catch(() => {});
-        }
-      } catch {}
-    }
-  }
   
   // Stairs – Assist Level (FAPT33)
   if (func.stairsAssist) {
@@ -3321,36 +3346,6 @@ async function fillFunctionalSection(context, data) {
     if (await f.isVisible().catch(() => false)) {
       await f.fill("").catch(() => {});
       await f.type(func.stairsAssist, { delay: 10 }).catch(() => {});
-    }
-  }
-
-  // Stairs Distance – distance / count (field id varies by template)
-  if (func.stairsDistance) {
-    const candidates = [
-      "#frm_FAPT34",
-      "#frm_FAPT36",
-      "#frm_FAPT37",
-    ];
-
-    let filled = false;
-    for (const sel of candidates) {
-      const f = frame.locator(sel).first();
-      if (await f.isVisible().catch(() => false)) {
-        await f.fill("").catch(() => {});
-        await f.type(func.stairsDistance, { delay: 10 }).catch(() => {});
-        filled = true;
-        break;
-      }
-    }
-
-    if (!filled) {
-      try {
-        const f = frame.getByLabel(/stairs\s*distance/i).first();
-        if (await f.isVisible().catch(() => false)) {
-          await f.fill("").catch(() => {});
-          await f.type(func.stairsDistance, { delay: 10 }).catch(() => {});
-        }
-      } catch {}
     }
   }
   
@@ -3843,58 +3838,81 @@ async function runPtEvaluationBot({
     
     // 3) Open Hotbox row
     await openHotboxPatientTask(page, patientName, visitDate, taskType);
+
+    // Lock to the ACTIVE visit page (prevents "filled but nothing changed" caused by stale frames/pages)
+    await wait(1200);
+    const activePage = getActivePageFromContext(context) || page;
+    try {
+      activePage.on("dialog", async (dialog) => {
+        log("⚠️ POPUP:", dialog.message());
+        try {
+          await dialog.accept();
+          log("✅ Popup accepted");
+        } catch (e) {
+          log("⚠️ Popup already handled:", e.message);
+        }
+      });
+    } catch {}
     
     // 4) Select Template
-    await selectTemplateGW2(context);
+    await selectTemplateGW2(activePage);
     
     // 5) Visit basics
-    await fillVisitBasics(context, { timeIn, timeOut, visitDate });
+    await fillVisitBasics(activePage, { timeIn, timeOut, visitDate });
     
     // 6) Parse AI notes (Eval)
     const aiData = await extractNoteDataFromAI(aiNotes, "Evaluation");
     
     // 7) Vitals + Relevant History + Clinical Statement
     // NOTE: your fillVitalsAndNarratives() already fills frm_RlvntMedHist + frm_EASI1 per your code
-    await fillVitalsAndNarratives(context, aiData);
+    await fillVitalsAndNarratives(activePage, aiData);
     
     // 8) Medical Dx (frm_MedDiagText)
-    await fillMedDiagnosisAndSubjective(context, aiData);
+    await fillMedDiagnosisAndSubjective(activePage, aiData);
     
     // 9) Subjective
-    await fillSubjectiveOnly(context, aiData);
+    await fillSubjectiveOnly(activePage, aiData);
     
     // 10) Prior level + Patient goals
-    await fillPriorLevelAndPatientGoals(context, aiData);
+    await fillPriorLevelAndPatientGoals(activePage, aiData);
     
     // 11) Living situation / safety hazards
-    await fillHomeSafetySection(context, aiData);
+    await fillHomeSafetySection(activePage, aiData);
     
     // 12) Pain section
-    await fillPainSection(context, aiData);
+    await fillPainSection(activePage, aiData);
     
     // 13) Neuro / Physical assessment text fields
-    await fillNeuroPhysical(context, aiData);
+    await fillNeuroPhysical(activePage, aiData);
     
     // 14) Edema
-    await fillEdemaSection(context, aiData);
+    await fillEdemaSection(activePage, aiData);
     
     // 15) ROM/Strength
-    await fillPhysicalRomStrength(context, aiData.romStrength);
+    await fillPhysicalRomStrength(activePage, aiData.romStrength);
     
     // 16) Functional (FAPT)
-    await fillFunctionalSection(context, aiData);
+    await fillFunctionalSection(activePage, aiData);
     
     // 17) DME checkboxes + other
-    await fillDMESection(context, aiData);
+    await fillDMESection(activePage, aiData);
     
     // 18) Treatment goals + pain plan (if pain)
-    await fillTreatmentGoalsAndPainPlan(context, aiData);
+    await fillTreatmentGoalsAndPainPlan(activePage, aiData);
     
     // 19) Frequency + effective date
-    await fillFrequencyAndDate(context, aiData, visitDate);
+    await fillFrequencyAndDate(activePage, aiData, visitDate);
     
-    await clickSave(page);
-    await wait(2000);
+    await clickSave(activePage);
+    await wait(2500);
+
+    // Post-save verification: if it doesn't stick, FAIL the job (so UI never shows false "completed")
+    await postSaveAudit(activePage, {
+      visitDate,
+      timeIn,
+      timeOut,
+      medicalDiagnosis: aiData?.medicalDiagnosis || "",
+    });
     
   } finally {
     // await browser.close();
