@@ -1698,8 +1698,80 @@ function parseStructuredFromFreeText(aiNotes = "") {
     result.func.gaitAD = parsed.device;
   }
                                                       
-                                                      // GOALS BLOCK (bounded; stops before Frequency/other headings)
                                                       
+                                                      // --- LOCKED TEMPLATE: Gait grid (copy-after-colon) ---
+                                                      // Level surfaces
+                                                      const gaitLevelLine = text.match(/(?:^|\n)\s*gait\s*:\s*([^\n\r]*)/i);
+                                                      if (gaitLevelLine) {
+                                                        const v = (gaitLevelLine[1] || '').trim();
+                                                        if (v) {
+                                                          // Map 'Unable' to Dep per your convention
+                                                          result.func.gaitAssist = /^unable$/i.test(v) ? 'Dep' : v;
+                                                        }
+                                                      }
+                                                      const gaitDistLine = text.match(/(?:^|\n)\s*gait\s*distance\s*:\s*([^\n\r]*)/i);
+                                                      if (gaitDistLine) {
+                                                        const v = (gaitDistLine[1] || '').trim();
+                                                        if (v) result.func.gaitDistanceFt = v;
+                                                      }
+                                                      const gaitAdLine = text.match(/(?:^|\n)\s*gait\s*ad\s*:\s*([^\n\r]*)/i);
+                                                      if (gaitAdLine) {
+                                                        const v = (gaitAdLine[1] || '').trim();
+                                                        if (v) result.func.gaitAD = v;
+                                                      }
+
+                                                      // Uneven surfaces (Unlevel row)
+                                                      const unevenAssistLine = text.match(/(?:^|\n)\s*(?:gait\s*)?uneven\s*surfaces\s*:\s*([^\n\r]*)/i);
+                                                      if (unevenAssistLine) {
+                                                        const v = (unevenAssistLine[1] || '').trim();
+                                                        if (v) result.func.gaitUnevenAssist = /^unable$/i.test(v) ? 'Dep' : v;
+                                                      }
+                                                      const unevenDistLine = text.match(/(?:^|\n)\s*(?:gait\s*)?uneven\s*surfaces\s*distance\s*:\s*([^\n\r]*)/i);
+                                                      if (unevenDistLine) {
+                                                        const v = (unevenDistLine[1] || '').trim();
+                                                        if (v) result.func.gaitUnevenDistanceFt = v;
+                                                      }
+                                                      const unevenAdLine = text.match(/(?:^|\n)\s*(?:gait\s*)?uneven\s*surfaces\s*ad\s*:\s*([^\n\r]*)/i);
+                                                      if (unevenAdLine) {
+                                                        const v = (unevenAdLine[1] || '').trim();
+                                                        if (v) result.func.gaitUnevenAD = v;
+                                                      }
+
+                                                      // Stairs (Steps/Stairs row)
+                                                      const stairsAssistLine = text.match(/(?:^|\n)\s*stairs\s*:\s*([^\n\r]*)/i);
+                                                      if (stairsAssistLine) {
+                                                        const v = (stairsAssistLine[1] || '').trim();
+                                                        if (v) result.func.stairsAssist = /^unable$/i.test(v) ? 'Dep' : v;
+                                                      }
+                                                      const stairsDistLine = text.match(/(?:^|\n)\s*stairs\s*distance\s*:\s*([^\n\r]*)/i);
+                                                      if (stairsDistLine) {
+                                                        const v = (stairsDistLine[1] || '').trim();
+                                                        if (v) result.func.stairsDistanceFt = v;
+                                                      }
+                                                      const stairsAdLine = text.match(/(?:^|\n)\s*stairs\s*ad\s*:\s*([^\n\r]*)/i);
+                                                      if (stairsAdLine) {
+                                                        const v = (stairsAdLine[1] || '').trim();
+                                                        if (v) result.func.stairsAD = v;
+                                                      }
+// GOALS BLOCK (bounded; stops before Frequency/other headings)
+                                                      
+                                                      // --- LOCKED TEMPLATE: numbered STG/LTG lines (exact count) ---
+                                                      const stg1Line = text.match(/(?:^|\n)\s*stg\s*1\s*:\s*([^\n\r]*)/i);
+                                                      const stg2Line = text.match(/(?:^|\n)\s*stg\s*2\s*:\s*([^\n\r]*)/i);
+                                                      const ltg1Line = text.match(/(?:^|\n)\s*ltg\s*1\s*:\s*([^\n\r]*)/i);
+                                                      const ltg2Line = text.match(/(?:^|\n)\s*ltg\s*2\s*:\s*([^\n\r]*)/i);
+                                                      const ltg3Line = text.match(/(?:^|\n)\s*ltg\s*3\s*:\s*([^\n\r]*)/i);
+                                                      const lockedGoalLines = [stg1Line, stg2Line, ltg1Line, ltg2Line, ltg3Line];
+                                                      if (lockedGoalLines.some(Boolean)) {
+                                                        const goals = [];
+                                                        for (const m of lockedGoalLines) {
+                                                          const v = (m && (m[1] || '').trim()) || '';
+                                                          if (v) goals.push(v);
+                                                        }
+                                                        if (goals.length) {
+                                                          result.plan.goalTexts = goals;
+                                                        }
+                                                      }
                                                       function stripWithinVisits(line) {
     return String(line || "")
     .replace(/\s*\bwithin\s+(?:a\s+)?(?:total\s+of\s+)?\d{1,2}\s*visits?\b\.?/gi, "")
@@ -2986,11 +3058,10 @@ async function fillTreatmentGoalsAndPainPlan(context, data) {
       "Pt will ambulate 150 ft using HW with Mod Indep.",
       "Pt/CG will be independent with HEP, mobility, and fall/safety precautions.",
       "Pt will improve Tinetti-POMA score to 20/28 or more to decrease fall risk.",
-      "Pt will improve B LE strength by at least 0.5 MMT grade to enhance functional mobility.",
     ];
     
     goalTexts = [];
-    for (let i = 0; i < 6; i++) {
+    for (let i = 0; i < 5; i++) {
       goalTexts[i] = scrubGoalText((aiGoalLines[i] && aiGoalLines[i].trim()) || defaultGoals[i]);
     }
     
@@ -3007,7 +3078,7 @@ async function fillTreatmentGoalsAndPainPlan(context, data) {
     "#frm_TrtmntGoalTxt6",
   ];
   
-  for (let i = 0; i < goalSelectors.length; i++) {
+  for (let i = 0; i < 5; i++) {
     const field = await firstVisibleLocator(frame, [goalSelectors[i]]);
     if (field && goalTexts[i]) {
       await field.fill("");
@@ -3015,8 +3086,8 @@ async function fillTreatmentGoalsAndPainPlan(context, data) {
     }
   }
   
-  // Time frames: ST for first 2, LT for last 4
-  const timeVals = [stText, stText, ltText, ltText, ltText, ltText];
+  // Time frames: ST for first 2, LT for last 3 (locked: 2 STG + 3 LTG)
+  const timeVals = [stText, stText, ltText, ltText, ltText];
   const timeSelectors = [
     "#frm_TrtmntGoalTime1",
     "#frm_TrtmntGoalTime2",
@@ -3026,7 +3097,7 @@ async function fillTreatmentGoalsAndPainPlan(context, data) {
     "#frm_TrtmntGoalTime6",
   ];
   
-  for (let i = 0; i < timeSelectors.length; i++) {
+  for (let i = 0; i < 5; i++) {
     const field = await firstVisibleLocator(frame, [timeSelectors[i]]);
     if (field && timeVals[i]) {
       await field.fill("");
@@ -3162,6 +3233,73 @@ async function fillDMESection(context, data) {
  * Functional (FAPT) fields
  * =======================*/
 
+
+/* =========================
+ * Gait grid helper (Level / Unlevel / Steps-Stairs)
+ * Fills by row label text to avoid brittle frm_FAPT indices.
+ * =======================*/
+
+async function fillGaitGridSection(frame, func) {
+  try {
+    const levelAssist = String(func.gaitAssist || '').trim();
+    const levelDist = String(func.gaitDistanceFt || '').trim();
+    const levelAD = String(func.gaitAD || '').trim();
+
+    const unAssist = String(func.gaitUnevenAssist || '').trim();
+    const unDist = String(func.gaitUnevenDistanceFt || '').trim();
+    const unAD = String(func.gaitUnevenAD || '').trim();
+
+    const stAssist = String(func.stairsAssist || '').trim();
+    const stDist = String(func.stairsDistanceFt || '').trim();
+    const stAD = String(func.stairsAD || '').trim();
+
+    if (![levelAssist, levelDist, levelAD, unAssist, unDist, unAD, stAssist, stDist, stAD].some(Boolean)) return;
+
+    async function fillRowByLabel(labelRegex, assist, dist, ad, label) {
+      if (![assist, dist, ad].some(Boolean)) return;
+
+      // Prefer exact row label match in first column, but fallback to row hasText
+      let row = frame.locator('tr').filter({ hasText: labelRegex }).first();
+      if (!(await row.isVisible().catch(() => false))) return;
+
+      const inputs = row.locator('input[type="text"], input:not([type]), textarea');
+      const n = await inputs.count().catch(() => 0);
+      if (n < 3) {
+        log(`⚠️ ${label} row found but <3 inputs (found ${n})`);
+        return;
+      }
+
+      if (assist) await safeSetValue(inputs.nth(0), assist, `${label} Assist`, 60000);
+      if (dist) await safeSetValue(inputs.nth(1), dist, `${label} Distance`, 60000);
+      if (ad) await safeSetValue(inputs.nth(2), ad, `${label} AD`, 60000);
+    }
+
+    await fillRowByLabel(/\bLevel\b/i, levelAssist, levelDist, levelAD, 'Gait Level');
+    await fillRowByLabel(/\bUnlevel\b/i, unAssist, unDist, unAD, 'Gait Unlevel');
+    await fillRowByLabel(/Steps\/Stairs|Steps\s*\/\s*Stairs|Steps\s*Stairs/i, stAssist, stDist, stAD, 'Gait Steps/Stairs');
+
+    // Last resort: legacy FAPT ids (Level + Stairs only) if Level still empty
+    if (levelAssist) {
+      const f = frame.locator('#frm_FAPT27').first();
+      if (await f.isVisible().catch(() => false)) await safeSetValue(f, levelAssist, 'Gait Level Assist', 60000);
+    }
+    if (levelDist) {
+      const f = frame.locator('#frm_FAPT28').first();
+      if (await f.isVisible().catch(() => false)) await safeSetValue(f, levelDist, 'Gait Level Distance', 60000);
+    }
+    if (levelAD) {
+      const f = frame.locator('#frm_FAPT29').first();
+      if (await f.isVisible().catch(() => false)) await safeSetValue(f, levelAD, 'Gait Level AD', 60000);
+    }
+    if (stAssist) {
+      const f = frame.locator('#frm_FAPT33').first();
+      if (await f.isVisible().catch(() => false)) await safeSetValue(f, stAssist, 'Stairs Assist', 60000);
+    }
+  } catch (e) {
+    log(`⚠️ fillGaitGridSection skipped: ${e.message}`);
+  }
+}
+
 async function fillFunctionalSection(context, data) {
   log("➡️ Filling Functional (FAPT) section...");
   
@@ -3272,492 +3410,20 @@ async function fillFunctionalSection(context, data) {
     }
   }
   
-  // Gait – Assist Level (FAPT27), Distance (FAPT28), AD (FAPT29)
-  if (func.gaitAssist) {
-    const f = frame.locator("#frm_FAPT27").first();
-    if (await f.isVisible().catch(() => false)) {
-      await f.fill("").catch(() => {});
-      await f.type(func.gaitAssist, { delay: 10 }).catch(() => {});
-    }
-  }
-  if (func.gaitDistanceFt) {
-    const f = frame.locator("#frm_FAPT28").first();
-    if (await f.isVisible().catch(() => false)) {
-      await f.fill("").catch(() => {});
-      await f.type(func.gaitDistanceFt, { delay: 10 }).catch(() => {});
-    }
-  }
-  if (func.gaitAD) {
-    const f = frame.locator("#frm_FAPT29").first();
-    if (await f.isVisible().catch(() => false)) {
-      await f.fill("").catch(() => {});
-      await f.type(func.gaitAD, { delay: 10 }).catch(() => {});
-    }
-  }
-  
-  // Stairs – Assist Level (FAPT33)
-  if (func.stairsAssist) {
-    const f = frame.locator("#frm_FAPT33").first();
-    if (await f.isVisible().catch(() => false)) {
-      await f.fill("").catch(() => {});
-      await f.type(func.stairsAssist, { delay: 10 }).catch(() => {});
-    }
-  }
-  
-  // Weight Bearing Status (FAPT40)
+  // Gait grid (3 rows): Level / Unlevel / Steps-Stairs
+  await fillGaitGridSection(frame, func);
+
+  // Weight Bearing (often near gait/stairs section)
   if (func.weightBearing) {
-    const f = frame.locator("#frm_FAPT40").first();
-    if (await f.isVisible().catch(() => false)) {
-      await f.fill("").catch(() => {});
-      await f.type(func.weightBearing, { delay: 10 }).catch(() => {});
+    const f = await firstVisibleLocator(frame, ["#frm_FAPT34", "#frm_FAPT35", "input[id*='WeightBear']", "input[name*='WeightBear']"]);
+    if (f && (await f.isVisible().catch(() => false))) {
+      await safeSetValue(f, func.weightBearing, 'Weight Bearing');
     }
   }
-  
-  // =========================
-  // Factors Contributing to Functional Impairment (Comments)
-  // =========================
-  try {
-    const bedTxt = (func.bedMobilityFactors || "").trim();
-    if (bedTxt) {
-      const f = await firstVisibleLocator(frame, ["#frm_FAPTBedMobComments"]);
-      if (f) {
-        await f.fill("").catch(() => {});
-        await f.type(bedTxt, { delay: 10 }).catch(() => {});
-      }
-    }
-  } catch (e) {
-    log("⚠️ Could not fill Bed Mobility factors:", e.message);
-  }
-  
-  try {
-    const transTxt = (func.transfersFactors || "").trim();
-    if (transTxt) {
-      const f = await firstVisibleLocator(frame, ["#frm_FAPT22"]);
-      if (f) {
-        await f.fill("").catch(() => {});
-        await f.type(transTxt, { delay: 10 }).catch(() => {});
-      }
-    }
-  } catch (e) {
-    log("⚠️ Could not fill Transfer factors:", e.message);
-  }
-  
-  try {
-    const gaitTxt = (func.gaitFactors || "").trim();
-    if (gaitTxt) {
-      const f = await firstVisibleLocator(frame, ["#frm_FAPT35"]);
-      if (f) {
-        await f.fill("").catch(() => {});
-        await f.type(gaitTxt, { delay: 10 }).catch(() => {});
-      }
-    }
-  } catch (e) {
-    log("⚠️ Could not fill Gait factors:", e.message);
-  }
-  
-}
-
-
-/* =========================
- * Frequency + Effective Date
- * =======================*/
-
-async function fillFrequencyAndDate(context, data, visitDate) {
-  log("➡️ Filling Frequency + Effective Date...");
-  
-  const frame = await findTemplateScope(context);
-  if (!frame) {
-    log("⚠️ Template frame not found for plan.");
-    return;
-  }
-  
-  const plan = data.plan || {};
-  
-  // --- Effective Date (frm_FreqDur1) ---
-  try {
-    const effField = await firstVisibleLocator(frame, ["#frm_FreqDur1"]);
-    if (effField) {
-      const effectiveRaw =
-      plan.effectiveDate && plan.effectiveDate !== "skip"
-      ? plan.effectiveDate
-      : visitDate;
-      
-      const effective = normalizeDateToMMDDYYYY(effectiveRaw);
-      
-      log("📆 Effective date (raw → normalized):", effectiveRaw, "→", effective);
-      
-      await effField.fill("").catch(() => {});
-      await effField.fill(effective).catch(() => {});
-      await effField.evaluate((el) => {
-        el.dispatchEvent(new Event("input", { bubbles: true }));
-        el.dispatchEvent(new Event("change", { bubbles: true }));
-        el.dispatchEvent(new Event("blur", { bubbles: true }));
-      }).catch(() => {});
-    }
-  } catch (e) {
-    log("⚠️ Could not fill Effective Date:", e?.message || String(e));
-  }
-  
-  // --- Frequency (frm_FreqDur2) ---
-  try {
-    if (plan.frequency) {
-      const rawFreq = String(plan.frequency || "").trim();
-      
-      const tokens = [...rawFreq.matchAll(/\b\d+w\d+\b/gi)]
-      .map((m) => m[0].toLowerCase())
-      .slice(0, 6);
-      
-      const normFreq = tokens.length
-      ? tokens.join(", ")
-      : rawFreq
-      .replace(/[`"'<>]/g, "")
-            .replace(/\s+/g, " ")
-            .trim();
-    
-      log("🧾 Frequency raw → normalized:", rawFreq, "→", normFreq);
-    
-      const freqField = await firstVisibleLocator(frame, ["#frm_FreqDur2"]);
-      if (freqField) {
-        await freqField.fill("").catch(() => {});
-        await freqField.fill(normFreq).catch(() => {});
-        await freqField.evaluate((el) => {
-          el.dispatchEvent(new Event("input", { bubbles: true }));
-          el.dispatchEvent(new Event("change", { bubbles: true }));
-          el.dispatchEvent(new Event("blur", { bubbles: true }));
-        }).catch(() => {});
-        log("📆 Frequency filled:", normFreq);
-      }
-    } else {
-      log("ℹ️ No plan.frequency provided; skipping frequency fill.");
-    }
-    } catch (e) {
-    log("⚠️ Could not fill Frequency:", e?.message || String(e));
-    }
-    }
-    
-    
-    
-    
-    // =========================
-    // ROM / Strength text parser
-    // =========================
-    
-    function parseRomAndStrength(text) {
-    if (!text) return {};
-    
-    // Helper: strip the "for left and right" tail if present
-    const cleanup = (val) => {
-    if (!val) return null;
-    return val.split(/for\s+left\s+and\s+right/i)[0].trim();
-    };
-    
-    // Use regex over the *entire* text, not per-line startsWith
-    const ueRomMatch = text.match(/gross\s+rom\s+for\s+ue[^:\-\n]*[:\-]\s*([^\n]+)/i);
-    const leRomMatch = text.match(/gross\s+rom\s+for\s+le[^:\-\n]*[:\-]\s*([^\n]+)/i);
-    const ueStrMatch = text.match(/gross\s+strength\s+for\s+ue[^:\-\n]*[:\-]\s*([^\n]+)/i);
-    const leStrMatch = text.match(/gross\s+strength\s+for\s+le[^:\-\n]*[:\-]\s*([^\n]+)/i);
-    
-    const ueRom       = cleanup(ueRomMatch && ueRomMatch[1]);
-    const leRom       = cleanup(leRomMatch && leRomMatch[1]);
-    const ueStrength  = cleanup(ueStrMatch && ueStrMatch[1]);
-    const leStrength  = cleanup(leStrMatch && leStrMatch[1]);
-    
-    const result = {};
-    if (ueRom || ueStrength) {
-    result.ue = {
-      rom: ueRom || null,
-      strength: ueStrength || null,
-    };
-    }
-    if (leRom || leStrength) {
-    result.le = {
-      rom: leRom || null,
-      strength: leStrength || null,
-    };
-    }
-    
-    log("🧮 parseRomAndStrength parsed:", result);
-    return result;
-    }
-    
-    
-    /* =========================
-    * ROM / Strength helpers
-    * =======================*/
-    
-    // MUST be async because we use await inside
-    async function fillRomRange(frame, firstId, lastId, romValue, strengthValue) {
-    for (let id = firstId; id <= lastId; id += 4) {
-    const rRomSel = `#frm_ROM${id}`;
-    const lRomSel = `#frm_ROM${id + 1}`;
-    const rStrSel = `#frm_ROM${id + 2}`;
-    const lStrSel = `#frm_ROM${id + 3}`;
-        
-        if (romValue) {
-        const rRom = frame.locator(rRomSel).first();
-        const lRom = frame.locator(lRomSel).first();
-        if (await rRom.isVisible().catch(() => false)) {
-        await rRom.fill("").catch(() => {});
-        await rRom.type(romValue, { delay: 10 }).catch(() => {});
-        }
-        if (await lRom.isVisible().catch(() => false)) {
-        await lRom.fill("").catch(() => {});
-        await lRom.type(romValue, { delay: 10 }).catch(() => {});
-        }
-        }
-        
-        if (strengthValue) {
-        const rStr = frame.locator(rStrSel).first();
-        const lStr = frame.locator(lStrSel).first();
-        if (await rStr.isVisible().catch(() => false)) {
-        await rStr.fill("").catch(() => {});
-        await rStr.type(strengthValue, { delay: 10 }).catch(() => {});
-        }
-        if (await lStr.isVisible().catch(() => false)) {
-        await lStr.fill("").catch(() => {});
-        await lStr.type(strengthValue, { delay: 10 }).catch(() => {});
-        }
-        }
-        }
-        }
-        
-        // Fill Physical Assessment ROM / Strength from gross UE / LE info
-        async function fillPhysicalRomStrength(context, romStrength) {
-        if (!romStrength) {
-        log("ℹ️ No romStrength data from AI.");
-        return;
-        }
-        
-        const frame = await findTemplateScope(context);
-        if (!frame) {
-        log("⚠️ Template frame not found for ROM/Strength.");
-        return;
-        }
-        
-        const { ue, le } = romStrength || {};
-        
-        log("🧮 ROM/Strength parsed:", romStrength);
-        
-        if ((ue && ue.rom) || (ue && ue.strength)) {
-        await fillRomRange(
-                       frame,
-                       1,   // frm_ROM1
-                       40,  // frm_ROM40
-                       ue.rom || null,
-                       ue.strength || null
-                       );
-        }
-        
-        if ((le && le.rom) || (le && le.strength)) {
-        await fillRomRange(
-                       frame,
-                       69,   // frm_ROM69
-                       116,  // frm_ROM116
-                       le.rom || null,
-                       le.strength || null
-                       );
-        }
-        }
-        // =========================
-        // Save button helper (shared)
-        // =========================
-        async function clickSave(contextOrPage) {
-        // Accept: Page, Frame, BrowserContext, or wrapper { page }
-        let scope = contextOrPage?.page || contextOrPage;
-        
-        // If they passed a BrowserContext, convert to a Page
-        if (scope && typeof scope.pages === "function" && typeof scope.locator !== "function") {
-        const pages = scope.pages();
-        if (pages && pages.length) scope = pages[0];
-        }
-        
-        function normalizeScope(s) {
-        if (s && typeof s.locator === "function") return s; // Page/Frame
-        if (s?.page && typeof s.page.locator === "function") return s.page;
-        if (s?.frame && typeof s.frame.locator === "function") return s.frame;
-        
-        if (s && typeof s.pages === "function") {
-        const pages = s.pages();
-        if (pages && pages.length && typeof pages[0].locator === "function") return pages[0];
-        }
-        
-        throw new TypeError("clickSave(): scope must be Playwright Page/Frame/BrowserContext or {page}/{frame}");
-        }
-        
-        const saveSelectors = [
-        "#btnSave",
-        "input#btnSave",
-        "button#btnSave",
-        "input[type='button'][value='Save']",
-        "input[type='submit'][value='Save']",
-        "xpath=//input[contains(@onclick, \"modifyForm('save'\") )]",
-        "xpath=//*[self::input or self::button][contains(translate(normalize-space(.),'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'save')]",
-        ];
-        
-        // Heuristic: does popup message look like a validation failure?
-        function isBadDialogMessage(msg = "") {
-        const m = String(msg || "").toLowerCase();
-        return (
-        m.includes("error") ||
-        m.includes("required") ||
-        m.includes("missing") ||
-        m.includes("cannot") ||
-        m.includes("unable") ||
-        m.includes("invalid") ||
-        m.includes("please correct") ||
-        m.includes("must be") ||
-        m.includes("failed")
-        );
-        }
-        
-        async function assertNoOnPageErrors(pageOrFrame) {
-        // WellSky/Kinnser error containers — keep this tight to avoid false positives
-        const errorSelectors = [
-        ".validation-summary-errors",
-        ".validation-summary",
-        ".field-validation-error",
-        "#error",
-        "#errors",
-        "text=/please correct/i",
-        "text=/validation/i",
-        "text=/required/i",
-        "text=/unable to save/i",
-        "text=/error occurred/i",
-        ];
-        
-        for (const sel of errorSelectors) {
-        const loc = pageOrFrame.locator(sel).first();
-        const visible = await loc.isVisible().catch(() => false);
-        if (!visible) continue;
-        
-        const txt = (await loc.innerText().catch(() => "")).trim();
-        
-        // Only fail if there is meaningful error text (avoid empty containers)
-        if (txt && txt.length >= 3) {
-        throw new Error(`SAVE_VALIDATION_ERROR: ${txt.slice(0, 500)}`);
-      }
-      }
-      }
-      
-      async function tryClick(s, label) {
-      const pageOrFrame = normalizeScope(s);
-      
-      // For dialog listening we need the underlying Page object
-      const page = typeof pageOrFrame.page === "function" ? pageOrFrame.page() : pageOrFrame;
-      
-      for (const sel of saveSelectors) {
-      const loc = pageOrFrame.locator(sel).first();
-      const visible = await loc.isVisible().catch(() => false);
-      if (!visible) continue;
-      
-      await loc.scrollIntoViewIfNeeded().catch(() => {});
-      
-      // Start listening for dialog BEFORE clicking.
-      const dialogPromise =
-        typeof page.waitForEvent === "function"
-          ? page.waitForEvent("dialog", { timeout: 8000 }).catch(() => null)
-          : Promise.resolve(null);
-      
-      try {
-        await loc.click({ force: true, timeout: 8000 });
-      } catch {
-        // JS fallback (Page/Frame only)
-        await pageOrFrame.evaluate(() => {
-          const byId = document.querySelector("#btnSave");
-          if (byId) return byId.click();
-      
-          const byOnclick = Array.from(document.querySelectorAll("input,button"))
-            .find(el => (el.getAttribute("onclick") || "").includes("modifyForm('save')"));
-          if (byOnclick) return byOnclick.click();
-      
-          const byValue = Array.from(
-            document.querySelectorAll("input[type='button'],input[type='submit'],button")
-          ).find(el => ((el.value || el.textContent || "").trim().toLowerCase() === "save"));
-          if (byValue) return byValue.click();
-        });
-      }
-      
-      log(`✅ Clicked Save (${label}) using selector: ${sel}`);
-        
-        // Wait a moment for Kinnser save routines
-        try {
-        if (typeof page.waitForLoadState === "function") {
-          await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
-        }
-        } catch {}
-        
-        // If a dialog appeared, inspect its message.
-        const dlg = await dialogPromise;
-        if (dlg) {
-        const msg = dlg.message?.() || "";
-        log(`⚠️ Save popup detected: ${msg}`);
-          
-          // The global dialog handler already accepts, but we try accepting safely anyway.
-          try { await dlg.accept(); } catch {}
-          
-          if (isBadDialogMessage(msg)) {
-          throw new Error(`SAVE_POPUP_ERROR: ${msg}`);
-        }
-      } else {
-        // No dialog captured. Still allow time for any inline validation to render.
-        await wait(1000);
-      }
-
-      // Check for inline page validation/errors after save
-      await assertNoOnPageErrors(pageOrFrame);
-
-      // Extra settle time for Kinnser to persist
-      await wait(1500);
-      return true;
-    }
-
-    return false;
-  }
-
-  // Try on main scope/page
-  if (await tryClick(scope, "scope")) return true;
-
-  // Try all iframes (common in Kinnser/WellSky)
-  const page = normalizeScope(scope);
-  const frames = typeof page.frames === "function" ? page.frames() : [];
-  for (const fr of frames) {
-    if (await tryClick(fr, "frame")) return true;
-  }
-
-  throw new Error("SAVE_BUTTON_NOT_FOUND");
-}
 
 
 
-/* =========================
- * Misc helpers & exports
- * =======================*/
-
-async function fillPriorLevelAndPatientGoals(context, data) {
-  /**
-   * Fills:
-   *  - Prior Level of Functioning  (#frm_PriorLevelFunc)
-   *  - Patient's Goals            (#frm_PatientGoals)
-   *
-   * Uses data.priorLevel or data.priorLevelFunction and data.patientGoals.
-   */
-  const frame = await findTemplateScope(context);
-  if (!frame) return;
-  
-  const priorText = (data.priorLevelFunction || data.priorLevel || "").trim();
-  const goalsText = (data.patientGoals || "").trim();
-  
-  const priorArea = await firstVisibleLocator(frame, ["#frm_PriorLevelFunc"]);
-  if (priorArea && priorText) {
-    await priorArea.fill("");
-    await priorArea.type(priorText, { delay: 20 });
-  }
-  
-  const goalsArea = await firstVisibleLocator(frame, ["#frm_PatientGoals"]);
-  if (goalsArea && goalsText) {
-    await goalsArea.fill("");
-    await goalsArea.type(goalsText, { delay: 20 });
-  }
+  log("✅ Functional (FAPT) finished.");
 }
 
 /* =========================
@@ -3768,9 +3434,7 @@ async function fillPriorLevelAndPatientGoals(context, data) {
 // BOT LOGIC
 // =========================
 
-// bots/ptEvaluationBot.js
 // PT INITIAL EVALUATION bot runner (GW2)
-
 async function runPtEvaluationBot({
   kinnserUsername,
   kinnserPassword,
@@ -3782,72 +3446,71 @@ async function runPtEvaluationBot({
   aiNotes,
 }) {
   const { browser, context, page } = await launchBrowserContext();
-  
+
   try {
     // 1) Login
     await loginToKinnser(page, { kinnserUsername, kinnserPassword });
-    
+
     // 2) Hotbox
     await navigateToHotBox(page);
     await setHotboxShow100(page);
-    
+
     // 3) Open Hotbox row
     await openHotboxPatientTask(page, patientName, visitDate, taskType);
-    
+
     // 4) Select Template
     await selectTemplateGW2(context);
-    
+
     // 5) Visit basics
     await fillVisitBasics(context, { timeIn, timeOut, visitDate });
-    
+
     // 6) Parse AI notes (Eval)
     const aiData = await extractNoteDataFromAI(aiNotes, "Evaluation");
-    
+
     // 7) Vitals + Relevant History + Clinical Statement
-    // NOTE: your fillVitalsAndNarratives() already fills frm_RlvntMedHist + frm_EASI1 per your code
     await fillVitalsAndNarratives(context, aiData);
-    
+
     // 8) Medical Dx (frm_MedDiagText)
     await fillMedDiagnosisAndSubjective(context, aiData);
-    
+
     // 9) Subjective
     await fillSubjectiveOnly(context, aiData);
-    
+
     // 10) Prior level + Patient goals
     await fillPriorLevelAndPatientGoals(context, aiData);
-    
+
     // 11) Living situation / safety hazards
     await fillHomeSafetySection(context, aiData);
-    
+
     // 12) Pain section
     await fillPainSection(context, aiData);
-    
+
     // 13) Neuro / Physical assessment text fields
     await fillNeuroPhysical(context, aiData);
-    
+
     // 14) Edema
     await fillEdemaSection(context, aiData);
-    
+
     // 15) ROM/Strength
     await fillPhysicalRomStrength(context, aiData.romStrength);
-    
+
     // 16) Functional (FAPT)
     await fillFunctionalSection(context, aiData);
-    
+
     // 17) DME checkboxes + other
     await fillDMESection(context, aiData);
-    
+
     // 18) Treatment goals + pain plan (if pain)
     await fillTreatmentGoalsAndPainPlan(context, aiData);
-    
+
     // 19) Frequency + effective date
     await fillFrequencyAndDate(context, aiData, visitDate);
-    
+
+    // 20) Save
     await clickSave(page);
     await wait(2000);
-    
   } finally {
-    // await browser.close();
+    try { await browser.close(); } catch {}
   }
 }
 
