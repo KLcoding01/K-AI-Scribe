@@ -40,6 +40,20 @@ const { chromium } = require("playwright");
 const path = require("path");
 const { callOpenAIJSON } = require("./openaiClient");
 
+// PHI scrubber helpers (optional). We scrub the prompt we send to OpenAI to avoid
+// openaiClient's fail-closed PHI gate blocking the request/response.
+let scrubPHI = null;
+let detectPHI = null;
+try {
+  const phi = require("./phiScrubber");
+  scrubPHI = typeof phi.scrubPHI === "function" ? phi.scrubPHI : null;
+  detectPHI = typeof phi.detectPHI === "function" ? phi.detectPHI : null;
+} catch {
+  // If phiScrubber.js is not present in this build, proceed without it.
+}
+
+
+
 require("dotenv").config({
   path: path.resolve(__dirname, "../.env"),
 });
@@ -2030,6 +2044,9 @@ You must output exactly one key:
   Use professional, Medicare-justifiable language.
   No bullet points, no headings, no arrows, no line breaks—just 6 sentences separated by a single space.
 
+  IMPORTANT PHI RULE: Do NOT include any proper names (people, agencies, physicians, facilities). Do NOT include commas in a name format (e.g., 'Last, First').
+  Formatting rule: After the leading word 'Pt', keep the rest of each sentence in lowercase (except numbers). Do not capitalize medical conditions or organizations.
+
 PATIENT CONTEXT (USE ONLY THIS; DO NOT INVENT):
 - Age: ${ageTxt || "___"}
 - Gender: ${genderTxt || "___"}
@@ -2048,7 +2065,15 @@ REQUIRED CONTENT BY SENTENCE:
 Now generate the 6 sentences.`.trim();
 
   try {
-    const parsed = await callOpenAIJSON(prompt, 12000);
+    const safePrompt = (typeof scrubPHI === "function") ? scrubPHI(prompt) : prompt;
+    // Extra safety: if detectPHI exists and still finds PHI, fail closed and keep copy-through
+    if (typeof detectPHI === "function") {
+      const findings = detectPHI(safePrompt);
+      if (Array.isArray(findings) && findings.length) {
+        throw new Error("PHI_BLOCKED types=" + findings.map(f=>f.type).join(',') );
+      }
+    }
+    const parsed = await callOpenAIJSON(safePrompt, 12000);
     const cs = (parsed && parsed.clinicalStatement ? String(parsed.clinicalStatement) : "").trim();
     
     if (cs) {
