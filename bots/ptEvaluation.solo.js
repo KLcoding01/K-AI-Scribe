@@ -166,89 +166,6 @@ function normalizeDateToMMDDYYYY(raw) {
 }
 
 /* =========================
- * Helpers: active-page locking + post-save audit
- * =======================*/
-
-function getActivePageFromContext(context) {
-  try {
-    if (!context || typeof context.pages !== "function") return null;
-    const pages = context.pages();
-    if (!pages || !pages.length) return null;
-    // The most recently opened page is typically the visit/task edit screen.
-    return pages[pages.length - 1];
-  } catch {
-    return null;
-  }
-}
-
-function normalizeTimeToHHMM(raw) {
-  const s = String(raw ?? "").trim();
-  if (!s) return "";
-  // If already HH:MM
-  if (/^\d{1,2}:\d{2}$/.test(s)) {
-    const [h, m] = s.split(":");
-    return `${String(Number(h)).padStart(2, "0")}:${m}`;
-  }
-  // Common input: 4 digits "1715" -> "17:15"
-  if (/^\d{4}$/.test(s)) {
-    const h = s.slice(0, 2);
-    const m = s.slice(2);
-    return `${h}:${m}`;
-  }
-  // Common input: "715" -> "07:15"
-  if (/^\d{3}$/.test(s)) {
-    const h = s.slice(0, 1);
-    const m = s.slice(1);
-    return `${h.padStart(2, "0")}:${m}`;
-  }
-  return s;
-}
-
-async function postSaveAudit(target, expected = {}) {
-  const page = target?.page || target;
-  const frame = await findTemplateScope(page, { timeoutMs: 15000 }).catch(() => null);
-  if (!frame) throw new Error("POST-SAVE AUDIT FAIL: could not resolve active template scope");
-
-  const expectDate = normalizeDateToMMDDYYYY(expected.visitDate);
-  const expectIn = normalizeTimeToHHMM(expected.timeIn);
-  const expectOut = normalizeTimeToHHMM(expected.timeOut);
-
-  async function readVal(sel) {
-    const loc = await firstVisibleLocator(frame, [sel]);
-    if (!loc) return "";
-    return (await loc.inputValue().catch(() => "")).trim();
-  }
-
-  const gotDate = await readVal("#frm_visitdate");
-  const gotIn = await readVal("#frm_timein");
-  const gotOut = await readVal("#frm_timeout");
-
-  // Also verify a narrative field that should change frequently.
-  const gotMedDx = await readVal("#frm_MedDiagText");
-
-  const failures = [];
-  if (expectDate && gotDate && gotDate !== expectDate) failures.push(`visitDate expected ${expectDate} got ${gotDate}`);
-  if (expectIn && gotIn && normalizeTimeToHHMM(gotIn) !== expectIn) failures.push(`timeIn expected ${expectIn} got ${gotIn}`);
-  if (expectOut && gotOut && normalizeTimeToHHMM(gotOut) !== expectOut) failures.push(`timeOut expected ${expectOut} got ${gotOut}`);
-
-  if (expected.medicalDiagnosis) {
-    const want = String(expected.medicalDiagnosis).trim();
-    if (want && gotMedDx && gotMedDx !== want) failures.push("Medical Dx did not persist");
-  }
-
-  if (failures.length) {
-    throw new Error(`POST-SAVE AUDIT FAIL: ${failures.join("; ")}`);
-  }
-
-  // If fields are empty, that can indicate a stale/hidden frame; fail fast.
-  if ((expectDate && !gotDate) || (expectIn && !gotIn) || (expectOut && !gotOut)) {
-    throw new Error(`POST-SAVE AUDIT FAIL: one or more key fields are blank after save (date="${gotDate}", in="${gotIn}", out="${gotOut}")`);
-  }
-
-  log("✅ Post-save audit passed (key fields persisted in active visit form).");
-}
-
-/* =========================
  * Browser launcher
  * =======================*/
 
@@ -830,20 +747,12 @@ async function findTemplateScope(target, opts = {}) {
   return null;
 }
 
-async function selectTemplateGW2(target) {
+async function selectTemplateGW2(context) {
   log("➡️ Selecting GW2...");
   
   await wait(2000);
-
-  // Accept BrowserContext OR Page OR { page }
-  let pages = [];
-  try {
-    if (target && typeof target.pages === "function") pages = target.pages();
-    else if (target && typeof target.frames === "function") pages = [target];
-    else if (target?.page && typeof target.page.frames === "function") pages = [target.page];
-  } catch {}
-
-  for (const page of pages) {
+  
+  for (const page of context.pages()) {
     for (const frame of page.frames()) {
       const select = frame.locator("select[name='jump1']").first();
       
@@ -1242,20 +1151,10 @@ function parseStructuredFromFreeText(aiNotes = "") {
       bedMobilityDevice: "",
       transfersAssist: "",
       transfersDevice: "",
-
-      // Gait grid (3 rows): Level / Unlevel / Steps-Stairs
-      gaitAssist: "",            // Level row assist
-      gaitDistanceFt: "",        // Level row distance
-      gaitAD: "",                // Level row AD
-
-      gaitUnevenAssist: "",      // Unlevel row assist (aka Uneven Surfaces)
-      gaitUnevenDistanceFt: "",  // Unlevel row distance
-      gaitUnevenAD: "",          // Unlevel row AD
-
-      stairsAssist: "",          // Steps/Stairs row assist
-      stairsDistanceFt: "",      // Steps/Stairs row distance
-      stairsAD: "",              // Steps/Stairs row AD
-
+      gaitAssist: "",
+      gaitDistanceFt: "",
+      gaitAD: "",
+      stairsAssist: "",
       weightBearing: "",
       bedMobilityFactors: "",
       transfersFactors: "",
@@ -1798,88 +1697,8 @@ function parseStructuredFromFreeText(aiNotes = "") {
     result.func.gaitDistanceFt = parsed.distanceFt;
     result.func.gaitAD = parsed.device;
   }
-
-                                                      // ---------------------------------------------------------
-                                                      // ---------------------------------------------------------
-                                                                                                            // ---------------------------------------------------------
-                                                      // Gait grid (preferred colon-based fields)
-                                                      // Supports (captures value AS-IS after the colon):
-                                                      //  - Gait: Unable / DEP / SBA ...
-                                                      //  - Gait Distance:
-                                                      //  - Gait AD:
-                                                      //  - Uneven Surfaces: DEP (or: Gait Uneven Surfaces: DEP)
-                                                      //  - Uneven Surfaces Distance:
-                                                      //  - Uneven Surfaces AD:
-                                                      //  - Stairs: DEP
-                                                      //  - Stairs Distance:
-                                                      //  - Stairs AD:
-                                                      //
-                                                      // NOTE: Kinnser "Gait" is a 3-row table: Level / Unlevel / Steps-Stairs.
-                                                      // We only set these if they are currently blank to preserve combined-format parsing.
-                                                      // ---------------------------------------------------------
-                                                      try {
-                                                        const lines = String(text || "").split(/\r?\n/);
-                                                        const grabAfterColon = (re) => {
-                                                          for (const line of lines) {
-                                                            if (!line) continue;
-                                                            if (re.test(line)) {
-                                                              const idx = line.indexOf(':');
-                                                              if (idx >= 0) return String(line.slice(idx + 1) || '').trim();
-                                                            }
-                                                          }
-                                                          return '';
-                                                        };
-
-                                                        // Level row ("Gait")
-                                                        const gaitDistanceVal = grabAfterColon(/^\s*gait\s*distance\s*:/i);
-                                                        if (gaitDistanceVal && !result.func.gaitDistanceFt) result.func.gaitDistanceFt = gaitDistanceVal;
-
-                                                        const gaitAdVal = grabAfterColon(/^\s*gait\s*(?:ad|assistive\s*device)\s*:/i);
-                                                        if (gaitAdVal && !result.func.gaitAD) result.func.gaitAD = gaitAdVal;
-
-                                                        // Unlevel row ("Uneven Surfaces")
-                                                        const unevenAssistVal = grabAfterColon(/^\s*(?:gait\s*)?uneven\s*surfaces?\s*:/i);
-                                                        if (unevenAssistVal && !result.func.gaitUnevenAssist) {
-                                                          const parsed = parseAssistLevelBlock(unevenAssistVal);
-                                                          result.func.gaitUnevenAssist = (parsed.level || unevenAssistVal).trim();
-                                                          if (parsed.distanceFt && !result.func.gaitUnevenDistanceFt) result.func.gaitUnevenDistanceFt = parsed.distanceFt;
-                                                          if (parsed.device && !result.func.gaitUnevenAD) result.func.gaitUnevenAD = parsed.device;
-                                                        }
-
-                                                        const unevenDistanceVal = grabAfterColon(/^\s*(?:gait\s*)?uneven\s*surfaces?\s*distance\s*:/i);
-                                                        if (unevenDistanceVal && !result.func.gaitUnevenDistanceFt) result.func.gaitUnevenDistanceFt = unevenDistanceVal;
-
-                                                        const unevenAdVal = grabAfterColon(/^\s*(?:gait\s*)?uneven\s*surfaces?\s*(?:ad|assistive\s*device)\s*:/i);
-                                                        if (unevenAdVal && !result.func.gaitUnevenAD) result.func.gaitUnevenAD = unevenAdVal;
-
-                                                        // Some notes label it explicitly as "Gait Uneven Surfaces:".
-                                                        const gaitUnevenAssistVal2 = grabAfterColon(/^\s*gait\s*uneven\s*surfaces?\s*:/i);
-                                                        if (gaitUnevenAssistVal2 && !result.func.gaitUnevenAssist) {
-                                                          const parsed = parseAssistLevelBlock(gaitUnevenAssistVal2);
-                                                          result.func.gaitUnevenAssist = (parsed.level || gaitUnevenAssistVal2).trim();
-                                                          if (parsed.distanceFt && !result.func.gaitUnevenDistanceFt) result.func.gaitUnevenDistanceFt = parsed.distanceFt;
-                                                          if (parsed.device && !result.func.gaitUnevenAD) result.func.gaitUnevenAD = parsed.device;
-                                                        }
-
-                                                        // Steps/Stairs row
-                                                        const stairsAssistVal = grabAfterColon(/^\s*stairs\s*:/i);
-                                                        if (stairsAssistVal && !result.func.stairsAssist) {
-                                                          const parsed = parseAssistLevelBlock(stairsAssistVal);
-                                                          result.func.stairsAssist = (parsed.level || stairsAssistVal).trim();
-                                                          if (parsed.distanceFt && !result.func.stairsDistanceFt) result.func.stairsDistanceFt = parsed.distanceFt;
-                                                          if (parsed.device && !result.func.stairsAD) result.func.stairsAD = parsed.device;
-                                                        }
-
-                                                        const stairsDistanceVal = grabAfterColon(/^\s*stairs\s*distance\s*:/i);
-                                                        if (stairsDistanceVal && !result.func.stairsDistanceFt) result.func.stairsDistanceFt = stairsDistanceVal;
-
-                                                        const stairsAdVal = grabAfterColon(/^\s*stairs\s*(?:ad|assistive\s*device)\s*:/i);
-                                                        if (stairsAdVal && !result.func.stairsAD) result.func.stairsAD = stairsAdVal;
-                                                      } catch {
-                                                        // ignore parser errors
-                                                      }
-
-// GOALS BLOCK (bounded; stops before Frequency/other headings)
+                                                      
+                                                      // GOALS BLOCK (bounded; stops before Frequency/other headings)
                                                       
                                                       function stripWithinVisits(line) {
     return String(line || "")
@@ -2775,7 +2594,8 @@ async function fillHomeSafetySection(context, data) {
     if (!locatorOrNull || !v) return;
     try {
       if (!(await ensureReady(locatorOrNull, label, 2500))) return;
-      await safeSetValue(locatorOrNull, v, label, 60000);
+      await withTimeout(locatorOrNull.fill(""), 1400, `${label}.fill`);
+      await withTimeout(locatorOrNull.fill(v), 1600, `${label}.fill(value)`);
       log(`✅ ${label} filled`);
     } catch (e) {
       log(`⚠️ ${label} skipped:`, e.message);
@@ -2787,9 +2607,9 @@ async function fillHomeSafetySection(context, data) {
     if (!locatorOrNull || !v) return;
     try {
       if (!(await ensureReady(locatorOrNull, label, 2500))) return;
-      // Prefer hardened setter (more reliable than type in Render/headless)
-      await safeSetValue(locatorOrNull, v, label, 60000);
-      log(`✅ ${label} set`);
+      await withTimeout(locatorOrNull.fill(""), 1400, `${label}.fill`);
+      await withTimeout(locatorOrNull.type(v, { delay: typeDelay }), 2600, `${label}.type`);
+      log(`✅ ${label} typed`);
     } catch (e) {
       // fallback to fill if type fails
       try {
@@ -3353,6 +3173,51 @@ async function fillFunctionalSection(context, data) {
   
   const func = data.func || {};
   
+
+
+  // -----------------------------
+  // Gait grid helper (Level / Unlevel / Steps-Stairs)
+  // WellSky renders these as 3 rows in a single table.
+  // We prefer row-label targeting over brittle frm_FAPTxx IDs.
+  // -----------------------------
+  async function fillGaitGridRowByLabel(rowLabelPatterns, assist, distanceFt, ad, rowNameForLog) {
+    const a = String(assist || '').trim();
+    const d = String(distanceFt || '').trim();
+    const dev = String(ad || '').trim();
+    if (!a && !d && !dev) return;
+
+    let row = null;
+    for (const pat of rowLabelPatterns) {
+      const r = frame.locator('tr').filter({ hasText: pat }).first();
+      if (await r.isVisible().catch(() => false)) { row = r; break; }
+    }
+
+    if (!row) {
+      log(`⚠️ Gait grid row not found for ${rowNameForLog}`);
+      return;
+    }
+
+    // Get the first 3 text inputs/areas in that row (Assist, Distance, AD)
+    const inputs = row.locator('input[type="text"], input:not([type]), textarea');
+    const n = await inputs.count().catch(() => 0);
+    if (n < 3) {
+      log(`⚠️ Gait grid row for ${rowNameForLog} has <3 inputs (found ${n})`);
+      return;
+    }
+
+    const assistBox = inputs.nth(0);
+    const distBox = inputs.nth(1);
+    const adBox = inputs.nth(2);
+
+    try {
+      if (a) await safeSetValue(assistBox, a, `Gait ${rowNameForLog} assist`, 60000);
+      if (d) await safeSetValue(distBox, d, `Gait ${rowNameForLog} distance`, 60000);
+      if (dev) await safeSetValue(adBox, dev, `Gait ${rowNameForLog} AD`, 60000);
+      log(`✅ Gait grid filled (${rowNameForLog}): ${a || ''} ${d || ''} ${dev || ''}`.trim());
+    } catch (e) {
+      log(`⚠️ Could not fill Gait grid (${rowNameForLog}):`, e.message);
+    }
+  }
   // Bed mobility – Assist Level (FAPT1/4/6) + Assistive Device (FAPT5/7)
   const bedAssist = func.bedMobilityAssist || "";
   const bedDevice = func.bedMobilityDevice || "";
@@ -3429,53 +3294,6 @@ async function fillFunctionalSection(context, data) {
       await f.type(func.gaitAD, { delay: 10 }).catch(() => {});
     }
   }
-
-
-  // --- Gait grid rows (Level / Unlevel / Steps-Stairs) ---
-  // For Unlevel + Steps/Stairs rows, use robust row-text matching so we don't rely on brittle #frm_FAPTxx ids.
-  async function fillGaitGridRow(rowLabel, assist, distance, ad) {
-    const a = String(assist || "").trim();
-    const d = String(distance || "").trim();
-    const dev = String(ad || "").trim();
-    if (!a && !d && !dev) return;
-
-    // Try to locate the correct row by visible label text
-    const row = frame.locator("tr").filter({ hasText: rowLabel }).first();
-    if (!(await row.isVisible().catch(() => false))) {
-      log(`⚠️ Gait row not found for label: ${rowLabel}`);
-      return;
-    }
-
-    // Most Kinnser grids use 3 text inputs per row (assist, distance, AD)
-    const inputs = row.locator("input");
-    const n = await inputs.count().catch(() => 0);
-    if (n < 1) {
-      log(`⚠️ No inputs found in gait row: ${rowLabel}`);
-      return;
-    }
-
-    // Fill in order if present
-    try {
-      if (a && n >= 1) {
-        await safeSetValue(inputs.nth(0), a, `Gait ${rowLabel} Assist`, 60000).catch(() => {});
-      }
-      if (d && n >= 2) {
-        await safeSetValue(inputs.nth(1), d, `Gait ${rowLabel} Distance`, 60000).catch(() => {});
-      }
-      if (dev && n >= 3) {
-        await safeSetValue(inputs.nth(2), dev, `Gait ${rowLabel} AD`, 60000).catch(() => {});
-      }
-    } catch (e) {
-      log(`⚠️ Could not fill gait row ${rowLabel}:`, e.message);
-    }
-  }
-
-  // Unlevel row (Uneven Surfaces)
-  await fillGaitGridRow("Unlevel", func.gaitUnevenAssist, func.gaitUnevenDistanceFt, func.gaitUnevenAD);
-
-  // Steps/Stairs row
-  await fillGaitGridRow("Steps/Stairs", func.stairsAssist, func.stairsDistanceFt, func.stairsAD);
-
   
   // Stairs – Assist Level (FAPT33)
   if (func.stairsAssist) {
@@ -3975,81 +3793,58 @@ async function runPtEvaluationBot({
     
     // 3) Open Hotbox row
     await openHotboxPatientTask(page, patientName, visitDate, taskType);
-
-    // Lock to the ACTIVE visit page (prevents "filled but nothing changed" caused by stale frames/pages)
-    await wait(1200);
-    const activePage = getActivePageFromContext(context) || page;
-    try {
-      activePage.on("dialog", async (dialog) => {
-        log("⚠️ POPUP:", dialog.message());
-        try {
-          await dialog.accept();
-          log("✅ Popup accepted");
-        } catch (e) {
-          log("⚠️ Popup already handled:", e.message);
-        }
-      });
-    } catch {}
     
     // 4) Select Template
-    await selectTemplateGW2(activePage);
+    await selectTemplateGW2(context);
     
     // 5) Visit basics
-    await fillVisitBasics(activePage, { timeIn, timeOut, visitDate });
+    await fillVisitBasics(context, { timeIn, timeOut, visitDate });
     
     // 6) Parse AI notes (Eval)
     const aiData = await extractNoteDataFromAI(aiNotes, "Evaluation");
     
     // 7) Vitals + Relevant History + Clinical Statement
     // NOTE: your fillVitalsAndNarratives() already fills frm_RlvntMedHist + frm_EASI1 per your code
-    await fillVitalsAndNarratives(activePage, aiData);
+    await fillVitalsAndNarratives(context, aiData);
     
     // 8) Medical Dx (frm_MedDiagText)
-    await fillMedDiagnosisAndSubjective(activePage, aiData);
+    await fillMedDiagnosisAndSubjective(context, aiData);
     
     // 9) Subjective
-    await fillSubjectiveOnly(activePage, aiData);
+    await fillSubjectiveOnly(context, aiData);
     
     // 10) Prior level + Patient goals
-    await fillPriorLevelAndPatientGoals(activePage, aiData);
+    await fillPriorLevelAndPatientGoals(context, aiData);
     
     // 11) Living situation / safety hazards
-    await fillHomeSafetySection(activePage, aiData);
+    await fillHomeSafetySection(context, aiData);
     
     // 12) Pain section
-    await fillPainSection(activePage, aiData);
+    await fillPainSection(context, aiData);
     
     // 13) Neuro / Physical assessment text fields
-    await fillNeuroPhysical(activePage, aiData);
+    await fillNeuroPhysical(context, aiData);
     
     // 14) Edema
-    await fillEdemaSection(activePage, aiData);
+    await fillEdemaSection(context, aiData);
     
     // 15) ROM/Strength
-    await fillPhysicalRomStrength(activePage, aiData.romStrength);
+    await fillPhysicalRomStrength(context, aiData.romStrength);
     
     // 16) Functional (FAPT)
-    await fillFunctionalSection(activePage, aiData);
+    await fillFunctionalSection(context, aiData);
     
     // 17) DME checkboxes + other
-    await fillDMESection(activePage, aiData);
+    await fillDMESection(context, aiData);
     
     // 18) Treatment goals + pain plan (if pain)
-    await fillTreatmentGoalsAndPainPlan(activePage, aiData);
+    await fillTreatmentGoalsAndPainPlan(context, aiData);
     
     // 19) Frequency + effective date
-    await fillFrequencyAndDate(activePage, aiData, visitDate);
+    await fillFrequencyAndDate(context, aiData, visitDate);
     
-    await clickSave(activePage);
-    await wait(2500);
-
-    // Post-save verification: if it doesn't stick, FAIL the job (so UI never shows false "completed")
-    await postSaveAudit(activePage, {
-      visitDate,
-      timeIn,
-      timeOut,
-      medicalDiagnosis: aiData?.medicalDiagnosis || "",
-    });
+    await clickSave(page);
+    await wait(2000);
     
   } finally {
     // await browser.close();
