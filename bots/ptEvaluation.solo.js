@@ -1242,10 +1242,20 @@ function parseStructuredFromFreeText(aiNotes = "") {
       bedMobilityDevice: "",
       transfersAssist: "",
       transfersDevice: "",
-      gaitAssist: "",
-      gaitDistanceFt: "",
-      gaitAD: "",
-      stairsAssist: "",
+
+      // Gait grid (3 rows): Level / Unlevel / Steps-Stairs
+      gaitAssist: "",            // Level row assist
+      gaitDistanceFt: "",        // Level row distance
+      gaitAD: "",                // Level row AD
+
+      gaitUnevenAssist: "",      // Unlevel row assist (aka Uneven Surfaces)
+      gaitUnevenDistanceFt: "",  // Unlevel row distance
+      gaitUnevenAD: "",          // Unlevel row AD
+
+      stairsAssist: "",          // Steps/Stairs row assist
+      stairsDistanceFt: "",      // Steps/Stairs row distance
+      stairsAD: "",              // Steps/Stairs row AD
+
       weightBearing: "",
       bedMobilityFactors: "",
       transfersFactors: "",
@@ -1788,8 +1798,88 @@ function parseStructuredFromFreeText(aiNotes = "") {
     result.func.gaitDistanceFt = parsed.distanceFt;
     result.func.gaitAD = parsed.device;
   }
-                                                      
-                                                      // GOALS BLOCK (bounded; stops before Frequency/other headings)
+
+                                                      // ---------------------------------------------------------
+                                                      // ---------------------------------------------------------
+                                                                                                            // ---------------------------------------------------------
+                                                      // Gait grid (preferred colon-based fields)
+                                                      // Supports (captures value AS-IS after the colon):
+                                                      //  - Gait: Unable / DEP / SBA ...
+                                                      //  - Gait Distance:
+                                                      //  - Gait AD:
+                                                      //  - Uneven Surfaces: DEP (or: Gait Uneven Surfaces: DEP)
+                                                      //  - Uneven Surfaces Distance:
+                                                      //  - Uneven Surfaces AD:
+                                                      //  - Stairs: DEP
+                                                      //  - Stairs Distance:
+                                                      //  - Stairs AD:
+                                                      //
+                                                      // NOTE: Kinnser "Gait" is a 3-row table: Level / Unlevel / Steps-Stairs.
+                                                      // We only set these if they are currently blank to preserve combined-format parsing.
+                                                      // ---------------------------------------------------------
+                                                      try {
+                                                        const lines = String(text || "").split(/\r?\n/);
+                                                        const grabAfterColon = (re) => {
+                                                          for (const line of lines) {
+                                                            if (!line) continue;
+                                                            if (re.test(line)) {
+                                                              const idx = line.indexOf(':');
+                                                              if (idx >= 0) return String(line.slice(idx + 1) || '').trim();
+                                                            }
+                                                          }
+                                                          return '';
+                                                        };
+
+                                                        // Level row ("Gait")
+                                                        const gaitDistanceVal = grabAfterColon(/^\s*gait\s*distance\s*:/i);
+                                                        if (gaitDistanceVal && !result.func.gaitDistanceFt) result.func.gaitDistanceFt = gaitDistanceVal;
+
+                                                        const gaitAdVal = grabAfterColon(/^\s*gait\s*(?:ad|assistive\s*device)\s*:/i);
+                                                        if (gaitAdVal && !result.func.gaitAD) result.func.gaitAD = gaitAdVal;
+
+                                                        // Unlevel row ("Uneven Surfaces")
+                                                        const unevenAssistVal = grabAfterColon(/^\s*(?:gait\s*)?uneven\s*surfaces?\s*:/i);
+                                                        if (unevenAssistVal && !result.func.gaitUnevenAssist) {
+                                                          const parsed = parseAssistLevelBlock(unevenAssistVal);
+                                                          result.func.gaitUnevenAssist = (parsed.level || unevenAssistVal).trim();
+                                                          if (parsed.distanceFt && !result.func.gaitUnevenDistanceFt) result.func.gaitUnevenDistanceFt = parsed.distanceFt;
+                                                          if (parsed.device && !result.func.gaitUnevenAD) result.func.gaitUnevenAD = parsed.device;
+                                                        }
+
+                                                        const unevenDistanceVal = grabAfterColon(/^\s*(?:gait\s*)?uneven\s*surfaces?\s*distance\s*:/i);
+                                                        if (unevenDistanceVal && !result.func.gaitUnevenDistanceFt) result.func.gaitUnevenDistanceFt = unevenDistanceVal;
+
+                                                        const unevenAdVal = grabAfterColon(/^\s*(?:gait\s*)?uneven\s*surfaces?\s*(?:ad|assistive\s*device)\s*:/i);
+                                                        if (unevenAdVal && !result.func.gaitUnevenAD) result.func.gaitUnevenAD = unevenAdVal;
+
+                                                        // Some notes label it explicitly as "Gait Uneven Surfaces:".
+                                                        const gaitUnevenAssistVal2 = grabAfterColon(/^\s*gait\s*uneven\s*surfaces?\s*:/i);
+                                                        if (gaitUnevenAssistVal2 && !result.func.gaitUnevenAssist) {
+                                                          const parsed = parseAssistLevelBlock(gaitUnevenAssistVal2);
+                                                          result.func.gaitUnevenAssist = (parsed.level || gaitUnevenAssistVal2).trim();
+                                                          if (parsed.distanceFt && !result.func.gaitUnevenDistanceFt) result.func.gaitUnevenDistanceFt = parsed.distanceFt;
+                                                          if (parsed.device && !result.func.gaitUnevenAD) result.func.gaitUnevenAD = parsed.device;
+                                                        }
+
+                                                        // Steps/Stairs row
+                                                        const stairsAssistVal = grabAfterColon(/^\s*stairs\s*:/i);
+                                                        if (stairsAssistVal && !result.func.stairsAssist) {
+                                                          const parsed = parseAssistLevelBlock(stairsAssistVal);
+                                                          result.func.stairsAssist = (parsed.level || stairsAssistVal).trim();
+                                                          if (parsed.distanceFt && !result.func.stairsDistanceFt) result.func.stairsDistanceFt = parsed.distanceFt;
+                                                          if (parsed.device && !result.func.stairsAD) result.func.stairsAD = parsed.device;
+                                                        }
+
+                                                        const stairsDistanceVal = grabAfterColon(/^\s*stairs\s*distance\s*:/i);
+                                                        if (stairsDistanceVal && !result.func.stairsDistanceFt) result.func.stairsDistanceFt = stairsDistanceVal;
+
+                                                        const stairsAdVal = grabAfterColon(/^\s*stairs\s*(?:ad|assistive\s*device)\s*:/i);
+                                                        if (stairsAdVal && !result.func.stairsAD) result.func.stairsAD = stairsAdVal;
+                                                      } catch {
+                                                        // ignore parser errors
+                                                      }
+
+// GOALS BLOCK (bounded; stops before Frequency/other headings)
                                                       
                                                       function stripWithinVisits(line) {
     return String(line || "")
@@ -3339,6 +3429,53 @@ async function fillFunctionalSection(context, data) {
       await f.type(func.gaitAD, { delay: 10 }).catch(() => {});
     }
   }
+
+
+  // --- Gait grid rows (Level / Unlevel / Steps-Stairs) ---
+  // For Unlevel + Steps/Stairs rows, use robust row-text matching so we don't rely on brittle #frm_FAPTxx ids.
+  async function fillGaitGridRow(rowLabel, assist, distance, ad) {
+    const a = String(assist || "").trim();
+    const d = String(distance || "").trim();
+    const dev = String(ad || "").trim();
+    if (!a && !d && !dev) return;
+
+    // Try to locate the correct row by visible label text
+    const row = frame.locator("tr").filter({ hasText: rowLabel }).first();
+    if (!(await row.isVisible().catch(() => false))) {
+      log(`⚠️ Gait row not found for label: ${rowLabel}`);
+      return;
+    }
+
+    // Most Kinnser grids use 3 text inputs per row (assist, distance, AD)
+    const inputs = row.locator("input");
+    const n = await inputs.count().catch(() => 0);
+    if (n < 1) {
+      log(`⚠️ No inputs found in gait row: ${rowLabel}`);
+      return;
+    }
+
+    // Fill in order if present
+    try {
+      if (a && n >= 1) {
+        await safeSetValue(inputs.nth(0), a, `Gait ${rowLabel} Assist`, 60000).catch(() => {});
+      }
+      if (d && n >= 2) {
+        await safeSetValue(inputs.nth(1), d, `Gait ${rowLabel} Distance`, 60000).catch(() => {});
+      }
+      if (dev && n >= 3) {
+        await safeSetValue(inputs.nth(2), dev, `Gait ${rowLabel} AD`, 60000).catch(() => {});
+      }
+    } catch (e) {
+      log(`⚠️ Could not fill gait row ${rowLabel}:`, e.message);
+    }
+  }
+
+  // Unlevel row (Uneven Surfaces)
+  await fillGaitGridRow("Unlevel", func.gaitUnevenAssist, func.gaitUnevenDistanceFt, func.gaitUnevenAD);
+
+  // Steps/Stairs row
+  await fillGaitGridRow("Steps/Stairs", func.stairsAssist, func.stairsDistanceFt, func.stairsAD);
+
   
   // Stairs – Assist Level (FAPT33)
   if (func.stairsAssist) {
