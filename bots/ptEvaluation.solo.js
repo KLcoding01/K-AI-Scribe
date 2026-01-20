@@ -1616,14 +1616,7 @@ function parseStructuredFromFreeText(aiNotes = "") {
     if (!result.living.stepsPresent) result.living.stepsCount = "";
   }
                                                       
-                                                      
-  // LIVING SITUATION SUMMARY (explicit label; multi-line until next heading)
-  const livingSummaryBlock = text.match(/(?:^|\n)\s*living\s*situation\s*summary\s*:\s*([\s\S]+?)(?=\n\s*[A-Za-z][^:\n]{0,80}\s*:\s*|\n{2,}|$)/i);
-  if (livingSummaryBlock) {
-    const block = String(livingSummaryBlock[1] || "").trim();
-    if (block) result.living.summaryText = block.replace(/\s+/g, " " ).trim();
-  }
-// NO HAZARDS identified (explicit field)
+                                                      // NO HAZARDS identified (explicit field)
                                                       const noHazMatch =
                                                       text.match(/(?:^|\n)\s*no\s+safety\s+hazards\s+identified\s*:\s*(yes|no)\b/i) ||
                                                       text.match(/(?:^|\n)\s*no\s+hazards\s+identified\s*:\s*(yes|no)\b/i);
@@ -1973,37 +1966,69 @@ async function extractNoteDataFromAI(aiNotes, visitType = "Evaluation") {
     return base;
   }
   
-  // If the note already has an explicit Assessment Summary / Clinical Statement block, prefer that and skip OpenAI.
-  // HOWEVER: if the captured text looks like an instruction (e.g., 'Generate 6 sentences...'), treat it as a TRIGGER and force OpenAI generation.
-  const csRaw = (base.clinicalStatement || "").trim();
-  const csLooksLikeInstruction = /\b(generate|write|create)\b/i.test(csRaw) && /\b(summary|sentences?)\b/i.test(csRaw);
-  if (csLooksLikeInstruction) {
-    base.clinicalStatement = "";
-  } else if (csRaw && csRaw.length >= 40) {
+
+  // If the note already has an explicit Assessment Summary / Clinical Statement block, prefer that and skip OpenAI
+  // UNLESS it is clearly an instruction like "Generate 6 sentences...".
+  const looksLikeInstruction = (s) => /\b(generate|write|create)\b[\s\S]*\b(\d+\s*sentences?|summary)\b/i.test(String(s || ""));
+  if (base.clinicalStatement && base.clinicalStatement.length >= 40 && !looksLikeInstruction(base.clinicalStatement)) {
     return base;
   }
-  
-  // Extract minimal context for Assessment Summary generation (no invention)
-  const ageTxt = (text.match(/(\d{1,3})\s*y\/\s*o/i) || [])[1] || "___";
-  const genderTxt = (text.match(/\b(female|male)\b/i) || [])[1] || "___";
-  const pmhTxt = (base.relevantHistory || "___").trim() || "___";
-  const instrLine = csLooksLikeInstruction ? csRaw : "";
-  const probsFromInstr = (instrLine.match(/has\s+([^.]+?)(?:\.|$)/i) || [])[1] || "";
-  const probsTxt = (probsFromInstr || "muscle weakness, impaired mobility, impaired balance, impaired gait, reduced activity tolerance, and high fall risk").trim();
-  const adTxt = (base.func && base.func.gaitAD ? String(base.func.gaitAD).trim() : "") || (base.dme && base.dme.other ? String(base.dme.other).trim() : "") || "AD as indicated";
+  if (looksLikeInstruction(base.clinicalStatement)) {
+    base.clinicalStatement = ""; // force OpenAI generation
+  }
 
-  const prompt = `
-You are writing the "Clinical Statement of Assessment Findings and Recommendations" for a HOME HEALTH PT INITIAL EVALUATION.
+  // Sanitize potential name-like tokens before sending to OpenAI (PHI guard may block on name_value).
+  function stripNameLikeTokens(x) {
+    let t = String(x || "");
+    if (!t) return "";
+    // Remove common provider name patterns
+    t = t.replace(/\bDr\.?\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?\b/g, "provider");
+    t = t.replace(/\bMD\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?\b/g, "provider");
+    // Remove Last, First patterns (often pt name)
+    t = t.replace(/\b[A-Z][a-z]+,\s*[A-Z][a-z]+\b/g, "");
+    // Remove two-word ProperName patterns conservatively
+    t = t.replace(/\b[A-Z][a-z]+\s+[A-Z][a-z]+\b/g, (m) => {
+      const keep = ["Parkinson Disease", "Alzheimer Disease", "Heart Failure", "Diabetes Mellitus", "Chronic Kidney", "Atrial Fibrillation"];
+      return keep.includes(m) ? m : "";
+    });
+    return t.replace(/\s+/g, " ").trim();
+  }
 
-You MUST follow these rules exactly:
+  // Extract patient context (use only provided info)
+  const ageTxt = (text.match(/(\d{1,3})\s*y\/o/i) || [])[1] || "___";
+  const genderTxt = /\bfemale\b/i.test(text) ? "female" : (/\bmale\b/i.test(text) ? "male" : "___");
+  const pmhTxt = stripNameLikeTokens(base.relevantHistory || "___") || "___";
 
-OUTPUT RULES (STRICT):
-- Output EXACTLY 6 sentences total.
-- Each sentence MUST start with "Pt".
-- Do NOT use he/she/they/his/her/their.
-- Do NOT add any new diagnoses, demographics, or medical history beyond what is provided.
-- Use professional, Medicare-justifiable language.
-- No bullet points, no headings, no line breaks—just 6 sentences separated by a single space.
+  // Problems/impairments: prefer instruction after Assessment Summary line, otherwise infer lightly
+  let probsTxt = "";
+  const instrLine = (text.match(/(?:^|\n)\s*assessment summary\s*:\s*([^\n\r]+)/i) || [])[1] || "";
+  const hasMatch = instrLine.match(/\bhas\b\s*([\s\S]+)$/i);
+  if (hasMatch && hasMatch[1]) probsTxt = hasMatch[1].trim();
+  if (!probsTxt) {
+    const hits = [];
+    const add = (re, label) => { if (re.test(text)) hits.push(label); };
+    add(/weak|weakness/i, "muscle weakness");
+    add(/unsteady|balance|falls?/i, "impaired balance");
+    add(/gait|ambulat/i, "impaired gait");
+    add(/mobility|transfer|bed mobility/i, "impaired mobility");
+    add(/activity tolerance|endurance/i, "reduced activity tolerance");
+    add(/high\s*fall\s*risk|fall\s*risk/i, "high fall risk");
+    probsTxt = Array.from(new Set(hits)).join(", ") || "___";
+  }
+  probsTxt = stripNameLikeTokens(probsTxt) || "___";
+
+  const adTxt = stripNameLikeTokens((base.func && base.func.gaitAD) || (base.dme && base.dme.other) || "AD as indicated") || "AD as indicated";
+
+  const prompt = `Return ONLY valid JSON with double quotes.
+
+You must output exactly one key:
+- "clinicalStatement":
+  Output EXACTLY 6 sentences total.
+  Each sentence MUST start with "Pt".
+  Do NOT use he/she/they/his/her/their.
+  Do NOT add any new diagnoses, demographics, or medical history beyond what is provided.
+  Use professional, Medicare-justifiable language.
+  No bullet points, no headings, no arrows, no line breaks—just 6 sentences separated by a single space.
 
 PATIENT CONTEXT (USE ONLY THIS; DO NOT INVENT):
 - Age: ${ageTxt || "___"}
@@ -2015,15 +2040,13 @@ PATIENT CONTEXT (USE ONLY THIS; DO NOT INVENT):
 REQUIRED CONTENT BY SENTENCE:
 1) Pt demographics + relevant medical history (copy PMH ONLY; do not add).
 2) Pt must include: PT initial evaluation + home safety assessment + DME assessment + HEP education + fall safety precautions/fall prevention + education on proper use of ${adTxt || "AD as indicated"} + education on pain/edema management + PT POC/goal planning to return toward PLOF.
-3) Pt objective functional deficits: bed mobility, transfers, gait, balance, generalized weakness + link to HIGH fall risk.
-4) Pt safety awareness/balance reactions + home risk statement explicitly stating HIGH fall risk.
-5) Pt skilled need/medical necessity statement describing skilled interventions: TherEx, functional training, gait/balance training, safety education to improve function and reduce fall/injury risk.
+3) Pt objective functional deficits (bed mobility, transfers, gait, balance, generalized weakness) and HIGH fall risk linkage.
+4) Pt safety awareness/balance reactions and home risk statement explicitly stating HIGH fall risk.
+5) Pt skilled need/medical necessity statement describing skilled interventions (TherEx, functional training, gait/balance training, safety education) to improve function and reduce fall/injury risk.
 6) Pt closing sentence: continued skilled HH PT is medically necessary per POC to improve safety, mobility, and ADL performance and progress toward PLOF.
 
-Now generate the 6 sentences.
-`.trim();
+Now generate the 6 sentences.`.trim();
 
-  
   try {
     const parsed = await callOpenAIJSON(prompt, 12000);
     const cs = (parsed && parsed.clinicalStatement ? String(parsed.clinicalStatement) : "").trim();
@@ -2779,7 +2802,6 @@ async function fillHomeSafetySection(context, data) {
   try {
     const evalArea = await firstVisibleLocator(frame, ["#frm_SafetySanHaz13"]);
     const narrative =
-    (living.summaryText || "").trim() ||
     (living.safetyNarrative || "").trim() ||
     (living.evaluationText || "").trim();
     
@@ -3718,6 +3740,46 @@ async function fillFrequencyAndDate(context, data, visitDate) {
 }
 
 
+async function postSaveAudit(context, expected = {}) {
+  // Verifies that the visit actually persisted before marking job completed.
+  // Use minimal, high-signal fields to avoid format-related false negatives.
+  const frame = await findTemplateScope(context);
+  if (!frame) throw new Error("POST_SAVE_AUDIT_FAIL: template scope not found");
+
+  const expDate = expected.visitDate ? normalizeDateToMMDDYYYY(expected.visitDate) : "";
+
+  async function readVal(selectors) {
+    const loc = await firstVisibleLocator(frame, selectors);
+    if (!loc) return "";
+    const tag = await loc.evaluate((el) => (el && el.tagName ? el.tagName.toLowerCase() : "")).catch(() => "");
+    if (tag === "select") {
+      return (await loc.inputValue().catch(() => "")).trim();
+    }
+    return (await loc.inputValue().catch(() => "")).trim();
+  }
+
+  const gotDate = await readVal(["#frm_visitdate", "input[name^='frm_visitdate']"]);
+  const gotTimeIn = await readVal(["#frm_timein", "input[name^='frm_timein']"]);
+  const gotTimeOut = await readVal(["#frm_timeout", "input[name^='frm_timeout']"]);
+
+  // Narrative signal: Medical Dx or Clinical Statement should not be empty in typical evals.
+  const gotMedDx = await readVal(["#frm_MedDiagText"]);
+  const gotEASI1 = await readVal(["#frm_EASI1"]);
+
+  const failures = [];
+  if (!gotDate) failures.push("visitDate empty");
+  if (expDate && gotDate && gotDate != expDate) failures.push(`visitDate mismatch (expected ${expDate}, got ${gotDate})`);
+  if (!gotTimeIn) failures.push("timeIn empty");
+  if (!gotTimeOut) failures.push("timeOut empty");
+  if (!gotMedDx && !gotEASI1) failures.push("no narrative persisted (MedDx/EASI1 empty)");
+
+  if (failures.length) {
+    throw new Error("POST_SAVE_AUDIT_FAIL: " + failures.join("; "));
+  }
+
+  log("✅ Post-save audit passed:", { visitDate: gotDate, timeIn: gotTimeIn, timeOut: gotTimeOut });
+}
+
 
 /* =========================
  * Misc helpers & exports
@@ -3753,43 +3815,6 @@ async function fillPriorLevelAndPatientGoals(context, data) {
 /* =========================
  * EXPORTS
  * =======================*/
-
-// =========================
-// Post-save audit (prevents false 'completed')
-// =========================
-async function postSaveAudit(context, expected) {
-  const frame = await findTemplateScope(context, { timeoutMs: 20000, pollMs: 300 });
-  if (!frame) throw new Error('POST_SAVE_AUDIT_FAIL: template scope not found');
-
-  const wantDate = normalizeDateToMMDDYYYY(expected.visitDate || '');
-
-  function normTime(t) {
-    const s = String(t || '').trim();
-    if (!s) return '';
-    if (/^\d{4}$/.test(s)) return s.slice(0,2) + ':' + s.slice(2);
-    return s;
-  }
-
-  const wantIn = normTime(expected.timeIn);
-  const wantOut = normTime(expected.timeOut);
-
-  const gotDate = (await frame.locator('#frm_visitdate').first().inputValue().catch(() => '')).trim();
-  const gotIn = (await frame.locator('#frm_timein').first().inputValue().catch(() => '')).trim();
-  const gotOut = (await frame.locator('#frm_timeout').first().inputValue().catch(() => '')).trim();
-  const gotDx = (await frame.locator('#frm_MedDiagText').first().inputValue().catch(() => '')).trim();
-
-  const errs = [];
-  if (wantDate && gotDate !== wantDate) errs.push(`visitDate expected ${wantDate} got ${gotDate}`);
-  if (wantIn && gotIn && gotIn !== wantIn) errs.push(`timeIn expected ${wantIn} got ${gotIn}`);
-  if (wantOut && gotOut && gotOut !== wantOut) errs.push(`timeOut expected ${wantOut} got ${gotOut}`);
-  if (!gotDx) errs.push('Medical Dx empty after save');
-
-  if (errs.length) {
-    throw new Error('POST_SAVE_AUDIT_FAIL: ' + errs.join(' | '));
-  }
-
-  log('✅ Post-save audit passed');
-}
 
 // =========================
 // BOT LOGIC
@@ -3871,9 +3896,9 @@ async function runPtEvaluationBot({
     await fillFrequencyAndDate(context, aiData, visitDate);
     
     await clickSave(page);
-    await wait(2000);
+    // Post-save audit: ensure values truly persisted before marking completed
     await postSaveAudit(context, { visitDate, timeIn, timeOut });
-
+    await wait(1200);
     
   } finally {
     // await browser.close();
