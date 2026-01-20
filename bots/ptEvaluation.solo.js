@@ -1050,25 +1050,6 @@ function isValidSixSentencePtParagraph(text) {
           );
 }
 
-function normalizeTimeToHHMM(raw) {
-  const s = String(raw ?? "").trim();
-  if (!s) return "";
-  // already formatted HH:MM
-  if (/^\d{1,2}:\d{2}$/.test(s)) {
-    const [h, m] = s.split(":");
-    return `${String(Number(h)).padStart(2, "0")}:${String(Number(m)).padStart(2, "0")}`;
-  }
-  // 1715 or 815
-  const digits = s.replace(/[^0-9]/g, "");
-  if (digits.length === 4) {
-    return `${digits.slice(0, 2)}:${digits.slice(2)}`;
-  }
-  if (digits.length === 3) {
-    return `0${digits.slice(0, 1)}:${digits.slice(1)}`;
-  }
-  return s;
-}
-
 function buildEvalClinicalStatementFallback(structured) {
   const dx = sanitizeMedicalDiagnosis(structured?.medicalDiagnosis) || "Dx per MD referral / orders";
   const bed = structured?.func?.bedMobilityAssist ? `${structured.func.bedMobilityAssist} bed mobility` : "impaired bed mobility";
@@ -1135,7 +1116,6 @@ function parseStructuredFromFreeText(aiNotes = "") {
     },
     living: {
       evaluationText: "",
-      summaryText: "",
       patientLivesValue: "0",
       assistanceAvailableValue: "0",
       stepsPresent: false,
@@ -1330,20 +1310,8 @@ function parseStructuredFromFreeText(aiNotes = "") {
     const block = String(evalLivingBlock[1] || "").trim();
     if (block) result.living.evaluationText = block.replace(/\s+/g, " ").trim();
   }
-
-  // Living Situation Summary (explicit template label)
-  const livingSummaryBlock =
-    text.match(/(?:^|\n)\s*living\s+situation\s+summary\s*:\s*([\s\S]+?)(?=\n\s*[A-Za-z][^:\n]{0,80}\s*:\s*|\n{2,}|$)/i);
-  if (livingSummaryBlock) {
-    const block = String(livingSummaryBlock[1] || "").trim();
-    if (block) {
-      result.living.summaryText = block.replace(/\s+/g, " ").trim();
-      // Prefer explicit summary as the primary narrative
-      result.living.evaluationText = result.living.summaryText;
-    }
-  }
-
-if (text.toLowerCase().includes("pet")) result.living.hasPets = true;
+                                                      
+                                                      if (text.toLowerCase().includes("pet")) result.living.hasPets = true;
                                                       
                                                       
                                                       result.living = result.living || {};
@@ -1391,9 +1359,6 @@ if (text.toLowerCase().includes("pet")) result.living.hasPets = true;
                                                       // ---------------------------------------------------------
                                                       function inferPatientLivesValue(livingLine) {
     const s = (livingLine || "").toLowerCase().trim();
-
-    // family keyword should map to WITH OTHER PERSON(S)
-    const familyGuardForPatientLivesValue = /\bfamily\b|\bdaughter\b|\bson\b|\bspouse\b|\bhusband\b|\bwife\b/i.test(s);
     
     const ALONE = "Alone";
     const WITH_OTHERS = "With other person(s) in the home";
@@ -1474,7 +1439,6 @@ if (text.toLowerCase().includes("pet")) result.living.hasPets = true;
       /\bshared?\s*(room|home)\b/,
       /\bshare\s*(a\s*)?(room|home)\b/
     ];
-    if (familyGuardForPatientLivesValue) return WITH_OTHERS;
     if (withOthersPatterns.some((re) => re.test(s))) return WITH_OTHERS;
     
     return WITH_OTHERS;
@@ -1652,7 +1616,14 @@ if (text.toLowerCase().includes("pet")) result.living.hasPets = true;
     if (!result.living.stepsPresent) result.living.stepsCount = "";
   }
                                                       
-                                                      // NO HAZARDS identified (explicit field)
+                                                      
+  // LIVING SITUATION SUMMARY (explicit label; multi-line until next heading)
+  const livingSummaryBlock = text.match(/(?:^|\n)\s*living\s*situation\s*summary\s*:\s*([\s\S]+?)(?=\n\s*[A-Za-z][^:\n]{0,80}\s*:\s*|\n{2,}|$)/i);
+  if (livingSummaryBlock) {
+    const block = String(livingSummaryBlock[1] || "").trim();
+    if (block) result.living.summaryText = block.replace(/\s+/g, " " ).trim();
+  }
+// NO HAZARDS identified (explicit field)
                                                       const noHazMatch =
                                                       text.match(/(?:^|\n)\s*no\s+safety\s+hazards\s+identified\s*:\s*(yes|no)\b/i) ||
                                                       text.match(/(?:^|\n)\s*no\s+hazards\s+identified\s*:\s*(yes|no)\b/i);
@@ -2002,77 +1973,55 @@ async function extractNoteDataFromAI(aiNotes, visitType = "Evaluation") {
     return base;
   }
   
-  // If the note already has an explicit Assessment Summary / Clinical Statement block, prefer that and skip OpenAI
-  // UNLESS it is clearly an instruction like "Generate 6 sentences...".
-  const looksLikeInstruction = (s) => /\bgenerate\b\s*\d+\s*sentences?\b|\bgenerate\b.*\bsummary\b/i.test(String(s || ""));
-  if (base.clinicalStatement && base.clinicalStatement.length >= 40 && !looksLikeInstruction(base.clinicalStatement)) {
+  // If the note already has an explicit Assessment Summary / Clinical Statement block, prefer that and skip OpenAI.
+  // HOWEVER: if the captured text looks like an instruction (e.g., 'Generate 6 sentences...'), treat it as a TRIGGER and force OpenAI generation.
+  const csRaw = (base.clinicalStatement || "").trim();
+  const csLooksLikeInstruction = /\b(generate|write|create)\b/i.test(csRaw) && /\b(summary|sentences?)\b/i.test(csRaw);
+  if (csLooksLikeInstruction) {
+    base.clinicalStatement = "";
+  } else if (csRaw && csRaw.length >= 40) {
     return base;
   }
-  if (looksLikeInstruction(base.clinicalStatement)) {
-    base.clinicalStatement = "";
-  }
   
-  
+  // Extract minimal context for Assessment Summary generation (no invention)
+  const ageTxt = (text.match(/(\d{1,3})\s*y\/\s*o/i) || [])[1] || "___";
+  const genderTxt = (text.match(/\b(female|male)\b/i) || [])[1] || "___";
+  const pmhTxt = (base.relevantHistory || "___").trim() || "___";
+  const instrLine = csLooksLikeInstruction ? csRaw : "";
+  const probsFromInstr = (instrLine.match(/has\s+([^.]+?)(?:\.|$)/i) || [])[1] || "";
+  const probsTxt = (probsFromInstr || "muscle weakness, impaired mobility, impaired balance, impaired gait, reduced activity tolerance, and high fall risk").trim();
+  const adTxt = (base.func && base.func.gaitAD ? String(base.func.gaitAD).trim() : "") || (base.dme && base.dme.other ? String(base.dme.other).trim() : "") || "AD as indicated";
 
-  // Extract patient context for OpenAI summary (use provided info only)
-  const ageTxt = (text.match(/(\d{1,3})\s*y\/o/i) || [])[1] || "___";
-  const genderTxt = /\bfemale\b/i.test(text) ? "female" : (/\bmale\b/i.test(text) ? "male" : "___");
-  const pmhTxt = String(base.relevantHistory || "___").trim() || "___";
+  const prompt = `
+You are writing the "Clinical Statement of Assessment Findings and Recommendations" for a HOME HEALTH PT INITIAL EVALUATION.
 
-  // Primary problems/impairments (prefer an explicit prompt list; otherwise infer from keywords)
-  let probsTxt = "";
-  const probsMatch = text.match(/\bfor\b\s*([^\n\r]+?)\s*,\s*needing\s+pt\b/i);
-  if (probsMatch && probsMatch[1]) probsTxt = String(probsMatch[1]).trim();
+You MUST follow these rules exactly:
 
-  if (!probsTxt) {
-    const hits = [];
-    const add = (re, label) => { if (re.test(text)) hits.push(label); };
-    add(/weak|weakness/i, "muscle weakness");
-    add(/balance|unsteady/i, "impaired balance");
-    add(/\bgait\b|ambulat/i, "impaired gait");
-    add(/mobility|transfer|bed mobility/i, "impaired mobility");
-    add(/activity tolerance|endurance/i, "reduced activity tolerance");
-    add(/high\s*fall\s*risk|fall\s*risk|falls?/i, "high fall risk");
-    probsTxt = Array.from(new Set(hits)).join(", ") || "___";
-  }
+OUTPUT RULES (STRICT):
+- Output EXACTLY 6 sentences total.
+- Each sentence MUST start with "Pt".
+- Do NOT use he/she/they/his/her/their.
+- Do NOT add any new diagnoses, demographics, or medical history beyond what is provided.
+- Use professional, Medicare-justifiable language.
+- No bullet points, no headings, no line breaks—just 6 sentences separated by a single space.
 
-  // Assistive device wording (prefer explicit gait AD; fallback to DME other; otherwise generic)
-  const adTxt = String((base.func && base.func.gaitAD) || (base.dme && base.dme.other) || "AD as indicated").trim() || "AD as indicated";
-
-  const prompt = `Return ONLY valid JSON with double quotes.
-
-You must output exactly one key:
-- "clinicalStatement":
-  Generate EXACTLY 6 sentences, ONE paragraph, for a HH PT INITIAL EVALUATION Assessment Summary.
-
-Use this patient context (do not invent new diagnoses or demographics):
+PATIENT CONTEXT (USE ONLY THIS; DO NOT INVENT):
 - Age: ${ageTxt || "___"}
 - Gender: ${genderTxt || "___"}
 - Relevant Medical History (PMH): ${pmhTxt || "___"}
-- Primary problems/impairments: ${probsTxt}
-- Assistive device wording: ${adTxt}
+- Primary problems/impairments: ${probsTxt || "___"}
+- Assistive device wording (use this exact wording if referenced): ${adTxt || "AD as indicated"}
 
-Required content rules:
-- Sentence 1: demographics + relevant medical history (use only provided relevant medical history; do not add).
-- Sentence 2: must include PT initial evaluation + home safety assessment + DME assessment + HEP education + fall safety precautions/fall prevention + education on proper use of ${adTxt} + education on pain/edema management + PT POC/goal planning to return toward PLOF.
-- Sentence 3: objective functional deficits (bed mobility, transfers, gait, balance, generalized weakness) and high fall risk linkage.
-- Sentence 4: safety awareness/balance reactions and home risk statement (high fall risk).
-- Sentence 5: skilled need/medical necessity statement describing skilled interventions (TherEx, functional training, gait/balance training, safety education) to improve function and reduce fall/injury risk.
-- Sentence 6: must state continued skilled HH PT remains medically necessary per POC to progress toward PLOF.
+REQUIRED CONTENT BY SENTENCE:
+1) Pt demographics + relevant medical history (copy PMH ONLY; do not add).
+2) Pt must include: PT initial evaluation + home safety assessment + DME assessment + HEP education + fall safety precautions/fall prevention + education on proper use of ${adTxt || "AD as indicated"} + education on pain/edema management + PT POC/goal planning to return toward PLOF.
+3) Pt objective functional deficits: bed mobility, transfers, gait, balance, generalized weakness + link to HIGH fall risk.
+4) Pt safety awareness/balance reactions + home risk statement explicitly stating HIGH fall risk.
+5) Pt skilled need/medical necessity statement describing skilled interventions: TherEx, functional training, gait/balance training, safety education to improve function and reduce fall/injury risk.
+6) Pt closing sentence: continued skilled HH PT is medically necessary per POC to improve safety, mobility, and ADL performance and progress toward PLOF.
 
-Output constraints:
-- Each sentence MUST start with "Pt".
-
-Style constraints:
-- No bullets, no headings, no arrows.
-- No pronouns (he/she/they/his/her/their).
-- Medicare-justifiable language.
-- Keep it concise but complete.
-
-Free-text note (do not add details beyond this note and the provided PMH):
----
-${text}
----`;
+Now generate the 6 sentences.
+`.trim();
 
   
   try {
@@ -2830,6 +2779,7 @@ async function fillHomeSafetySection(context, data) {
   try {
     const evalArea = await firstVisibleLocator(frame, ["#frm_SafetySanHaz13"]);
     const narrative =
+    (living.summaryText || "").trim() ||
     (living.safetyNarrative || "").trim() ||
     (living.evaluationText || "").trim();
     
@@ -2840,7 +2790,7 @@ async function fillHomeSafetySection(context, data) {
   
   // ---- Current Types of Assistance (#frm_CurrTypAsst) ----
   try {
-    const currAssist = await firstVisibleLocator(frame, ["#frm_CurrTypAsst", "#frm_CurrentTypesAsst", "#frm_CurrAsstTypes", "textarea[id*='CurrTyp']", "textarea[name*='CurrTyp']", "textarea[id*='Asst'][id*='Type']", "textarea[name*='Asst'][name*='Type']"]);
+    const currAssist = await firstVisibleLocator(frame, ["#frm_CurrTypAsst", "#frm_CurrentTypesAsst", "#frm_CurrAsstTypes", "textarea[id*=\"CurrTyp\"]", "textarea[name*=\"CurrTyp\"]", "textarea[id*=\"Asst\"][id*=\"Type\"]", "textarea[name*=\"Asst\"][name*=\"Type\"]"]);
     await safeSetValue(
                        currAssist,
                        String(living.currentAssistanceTypes || "").trim(),
@@ -2858,7 +2808,7 @@ async function fillHomeSafetySection(context, data) {
       await safeCheck(stepsCheckbox, "Steps/Stairs (#frm_SafetySanHaz2)");
       
       if (living.stepsCount) {
-        const stepsText = await firstVisibleLocator(frame, ["#frm_SafetySanHaz3", "#frm_StepsCount", "input[id*='Steps'][type='text']", "input[name*='Steps'][type='text']"]);
+        const stepsText = await firstVisibleLocator(frame, ["#frm_SafetySanHaz3", "#frm_StepsCount", "input[id*=\"Steps\"][type=\"text\"]", "input[name*=\"Steps\"][type=\"text\"]"]);
         await safeType(stepsText, living.stepsCount, "Steps count (#frm_SafetySanHaz3)");
       }
     }
@@ -2866,27 +2816,6 @@ async function fillHomeSafetySection(context, data) {
     log("⚠️ Could not fill steps/stairs:", e.message);
   }
   
-
-
-  // ---- Living Situation Summary textarea (#frm_SafetySanHaz13) ----
-  try {
-    const narrative = String(living.summaryText || living.evaluationText || "").trim();
-    if (narrative) {
-      const evalArea = await firstVisibleLocator(frame, [
-        "#frm_SafetySanHaz13",
-        "textarea#frm_SafetySanHaz13",
-        "textarea[name='frm_SafetySanHaz13']",
-      ]);
-      if (evalArea) {
-        await safeFillLargeText(evalArea, narrative, "Living Situation Summary (#frm_SafetySanHaz13)");
-        log("🧾 Living Situation Summary filled: frm_SafetySanHaz13");
-      } else {
-        log("⚠️ Could not find frm_SafetySanHaz13 for Living Situation Summary.");
-      }
-    }
-  } catch (e) {
-    log("⚠️ Living Situation Summary fill error:", e.message);
-  }
   // ---- Safety / Sanitation Hazards checkboxes ----
   try {
     const txt = String(living.evaluationText || "").toLowerCase();
@@ -3651,6 +3580,7 @@ async function fillFrequencyAndDate(context, data, visitDate) {
         "button#btnSave",
         "input[type='button'][value='Save']",
         "input[type='submit'][value='Save']",
+        "xpath=//input[contains(@onclick, \"modifyForm('save'\") )]",
         "xpath=//*[self::input or self::button][contains(translate(normalize-space(.),'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'save')]",
         ];
         
@@ -3787,44 +3717,6 @@ async function fillFrequencyAndDate(context, data, visitDate) {
   throw new Error("SAVE_BUTTON_NOT_FOUND");
 }
 
-// =========================
-// Post-save audit (prevents false "completed")
-// =========================
-async function postSaveAudit(context, expected = {}) {
-  const frame = await findTemplateScope(context, { timeoutMs: 20000, pollMs: 300 });
-  if (!frame) throw new Error("POST_SAVE_AUDIT_FAIL: template scope not found after save");
-
-  const expDate = normalizeDateToMMDDYYYY(expected.visitDate || "");
-  const expIn = normalizeTimeToHHMM(expected.timeIn || "");
-  const expOut = normalizeTimeToHHMM(expected.timeOut || "");
-  const expDx = String(expected.medicalDiagnosis || "").trim();
-
-  async function readVal(sel) {
-    const loc = frame.locator(sel).first();
-    const vis = await loc.isVisible().catch(() => false);
-    if (!vis) return "";
-    const v = (await loc.inputValue().catch(async () => (await loc.innerText().catch(() => "")))) || "";
-    return String(v).trim();
-  }
-
-  const gotDate = await readVal("#frm_visitdate");
-  const gotIn = await readVal("#frm_timein");
-  const gotOut = await readVal("#frm_timeout");
-  const gotDx = await readVal("#frm_MedDiagText");
-
-  const problems = [];
-  if (expDate && normalizeDateToMMDDYYYY(gotDate) !== expDate) problems.push(`visitdate expected ${expDate} got ${gotDate}`);
-  if (expIn && normalizeTimeToHHMM(gotIn) !== expIn) problems.push(`timein expected ${expIn} got ${gotIn}`);
-  if (expOut && normalizeTimeToHHMM(gotOut) !== expOut) problems.push(`timeout expected ${expOut} got ${gotOut}`);
-  if (expDx && (!gotDx || gotDx.length < 2)) problems.push("medical dx empty after save");
-
-  if (problems.length) {
-    throw new Error(`POST_SAVE_AUDIT_FAIL: ${problems.join(" | ")}`);
-  }
-
-  log("✅ Post-save audit passed:", { gotDate, gotIn, gotOut });
-}
-
 
 
 /* =========================
@@ -3861,6 +3753,43 @@ async function fillPriorLevelAndPatientGoals(context, data) {
 /* =========================
  * EXPORTS
  * =======================*/
+
+// =========================
+// Post-save audit (prevents false 'completed')
+// =========================
+async function postSaveAudit(context, expected) {
+  const frame = await findTemplateScope(context, { timeoutMs: 20000, pollMs: 300 });
+  if (!frame) throw new Error('POST_SAVE_AUDIT_FAIL: template scope not found');
+
+  const wantDate = normalizeDateToMMDDYYYY(expected.visitDate || '');
+
+  function normTime(t) {
+    const s = String(t || '').trim();
+    if (!s) return '';
+    if (/^\d{4}$/.test(s)) return s.slice(0,2) + ':' + s.slice(2);
+    return s;
+  }
+
+  const wantIn = normTime(expected.timeIn);
+  const wantOut = normTime(expected.timeOut);
+
+  const gotDate = (await frame.locator('#frm_visitdate').first().inputValue().catch(() => '')).trim();
+  const gotIn = (await frame.locator('#frm_timein').first().inputValue().catch(() => '')).trim();
+  const gotOut = (await frame.locator('#frm_timeout').first().inputValue().catch(() => '')).trim();
+  const gotDx = (await frame.locator('#frm_MedDiagText').first().inputValue().catch(() => '')).trim();
+
+  const errs = [];
+  if (wantDate && gotDate !== wantDate) errs.push(`visitDate expected ${wantDate} got ${gotDate}`);
+  if (wantIn && gotIn && gotIn !== wantIn) errs.push(`timeIn expected ${wantIn} got ${gotIn}`);
+  if (wantOut && gotOut && gotOut !== wantOut) errs.push(`timeOut expected ${wantOut} got ${gotOut}`);
+  if (!gotDx) errs.push('Medical Dx empty after save');
+
+  if (errs.length) {
+    throw new Error('POST_SAVE_AUDIT_FAIL: ' + errs.join(' | '));
+  }
+
+  log('✅ Post-save audit passed');
+}
 
 // =========================
 // BOT LOGIC
@@ -3942,14 +3871,9 @@ async function runPtEvaluationBot({
     await fillFrequencyAndDate(context, aiData, visitDate);
     
     await clickSave(page);
-    await wait(1500);
-    await postSaveAudit(context, {
-      visitDate,
-      timeIn,
-      timeOut,
-      medicalDiagnosis: aiData.medicalDiagnosis,
-    });
-    await wait(500);
+    await wait(2000);
+    await postSaveAudit(context, { visitDate, timeIn, timeOut });
+
     
   } finally {
     // await browser.close();
