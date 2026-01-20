@@ -1,25 +1,48 @@
 const OpenAI = require("openai");
 const { scrubPHI, detectPHI } = require("./phiScrubber");
 
-// ============================================================
-// OpenAI Client Initialization (Render-safe)
-// ============================================================
-
+// Robust key handling for hosted envs (Render)
 const rawKey = String(process.env.OPENAI_API_KEY || "").trim();
 const openai = rawKey ? new OpenAI({ apiKey: rawKey }) : null;
 
-// ============================================================
-// Minimal redaction for template / conversion prompts
-// (DO NOT destroy structured templates)
-// ============================================================
+/**
+ * Strip PHI label lines that can trigger upstream PHI_BLOCKED types=name_label
+ * Drops whole lines that begin with obvious identifier labels.
+ * This is safe because it removes only identifiers, not clinical content.
+ */
+function stripPHILabelLines(text) {
+  const t = String(text || "");
+  if (!t) return t;
 
+  const lines = t.replace(/\r\n/g, "\n").split("\n");
+
+  // Very conservative: only lines that START with these labels
+  const labelLineRE =
+    /^\s*(?:patient\s*)?(?:name|mrn|member\s*id|policy\s*#|acct\s*#|account\s*#|dob|date\s*of\s*birth|address|phone|email|physician|md|dr\.?|pcp|agency|facility|provider)\s*[:#-]/i;
+
+  const kept = [];
+  for (const line of lines) {
+    if (labelLineRE.test(line)) continue;
+    kept.push(line);
+  }
+  return kept.join("\n");
+}
+
+// ------------------------------------------------------------
+// Minimal redaction for CONVERSION endpoints (do not destroy templates)
+// - Only redact obviously identifying tokens
+// - PLUS: strip PHI label lines to prevent name_label blocks
+// ------------------------------------------------------------
 function minimalRedact(text) {
   let t = String(text || "");
+
+  // Prevent "name_label" blocks even when value is blank
+  t = stripPHILabelLines(t);
 
   // Email
   t = t.replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, "[REDACTED_EMAIL]");
 
-  // Phone
+  // Phone (US-ish)
   t = t.replace(
     /\b(?:\+?1[\s\-\.]?)?(?:\(\s*\d{3}\s*\)|\d{3})[\s\-\.]?\d{3}[\s\-\.]?\d{4}\b/g,
     "[REDACTED_PHONE]"
@@ -31,21 +54,20 @@ function minimalRedact(text) {
   return t;
 }
 
-// ============================================================
-// STRICT PHI SAFE REDACTION (for HH Assessment Summary ONLY)
-// ============================================================
-
+/**
+ * Strict PHI safe (used for HH Assessment Summary context fields):
+ * - remove label lines
+ * - scrub values
+ * - keep conservative posture (no throwing, no PHI logs)
+ */
 function strictPHISafe(text) {
-  const scrubbed = scrubPHI(String(text || ""));
-  const findings = detectPHI(scrubbed);
-  // Fail closed, but never throw — we just return scrubbed content
-  return scrubbed;
+  let out = stripPHILabelLines(String(text || ""));
+  out = scrubPHI(out);
+  try { detectPHI(out); } catch {}
+  return out;
 }
 
-// ============================================================
-// OpenAI JSON Call
-// ============================================================
-
+// INCREASED timeoutMs to 90000 (90 seconds) to handle large notes
 async function callOpenAIJSON(prompt, timeoutMs = 90000) {
   if (!openai) throw new Error("OPENAI_API_KEY missing");
 
@@ -59,9 +81,7 @@ async function callOpenAIJSON(prompt, timeoutMs = 90000) {
         model: process.env.OPENAI_MODEL || "gpt-4o-mini",
         input: safePrompt,
         max_output_tokens: 4000,
-        text: {
-          format: { type: "json_object" },
-        },
+        text: { format: { type: "json_object" } },
       },
       { signal: controller.signal }
     );
@@ -77,10 +97,7 @@ async function callOpenAIJSON(prompt, timeoutMs = 90000) {
   }
 }
 
-// ============================================================
-// OpenAI Text Call
-// ============================================================
-
+// INCREASED default timeout here as well
 async function callOpenAIText(prompt, timeoutMs = 60000) {
   if (!openai) throw new Error("OPENAI_API_KEY missing");
 
@@ -108,11 +125,11 @@ async function callOpenAIText(prompt, timeoutMs = 60000) {
   }
 }
 
-// ============================================================
-// HH PT INITIAL EVALUATION – ASSESSMENT SUMMARY PROMPT
-// (PHI-safe, Medicare-safe, deterministic)
-// ============================================================
-
+// ------------------------------------------------------------
+// HH PT Evaluation Assessment Summary Prompt (6 sentences exact)
+// - avoids PHI labels/values by scrubbing each context field
+// - sentence 6 required exact closing phrase
+// ------------------------------------------------------------
 function buildHHEvalAssessmentPrompt({
   age,
   gender,
@@ -132,37 +149,33 @@ function buildHHEvalAssessmentPrompt({
   const adTxt = strictPHISafe(String(assistiveDeviceText ?? "AD").trim());
 
   return `
-Write an Assessment Summary for a Medicare HOME HEALTH physical therapy INITIAL EVALUATION.
+Write an Assessment Summary for a Medicare home health physical therapy INITIAL EVALUATION.
 
-OUTPUT RULES (STRICT):
-- Output EXACTLY 6 sentences total.
-- Each sentence MUST start with "Pt".
-- No names, no facilities, no providers.
-- No visit counts.
-- No bullets, no numbering, no line breaks.
-- Sentence 6 MUST be exactly: Continued skilled HH PT remains indicated.
+Output EXACTLY 6 sentences total, in one paragraph, no line breaks, no numbering, no bullets.
+Each sentence MUST start with "Pt".
+Do NOT use he/she/they/his/her/their.
+Do NOT include any names, facilities, providers, agencies, or identifiers.
+Do NOT mention visit counts.
+Sentence 6 MUST be exactly: Continued skilled HH PT remains indicated.
 
-USE ONLY THIS CONTEXT (DO NOT INVENT):
-- Age: ${ageTxt}
-- Gender: ${genderTxt}
-- Relevant Medical History (PMH): ${pmhTxt}
-- Primary problems/impairments: ${probsTxt}
-- Assistive device wording: ${adTxt}
+Use only this context (do not invent new diagnoses or demographics):
+Age: ${ageTxt}
+Gender: ${genderTxt}
+Relevant Medical History (PMH): ${pmhTxt}
+Primary problems/impairments: ${probsTxt}
+Assistive device wording: ${adTxt}
 
-REQUIRED SENTENCE CONTENT:
-1) Pt demographics + PMH only.
-2) Pt initial evaluation + home safety assessment + DME assessment + HEP education + fall prevention + education on proper use of ${adTxt} + pain/edema management + POC/goal planning toward PLOF.
-3) Pt objective deficits (bed mobility, transfers, gait, balance, generalized weakness) linked to HIGH fall risk.
-4) Pt safety awareness/balance reactions and home risk statement (HIGH fall risk).
-5) Pt skilled need/medical necessity (TherEx, functional training, gait/balance training, safety education).
-6) Continued skilled HH PT remains indicated.
+Required content rules:
+- Sentence 1: demographics + PMH only (use only provided PMH; do not add).
+- Sentence 2: PT initial evaluation + home safety assessment + DME assessment + HEP education + fall prevention + education on proper use of ${adTxt} + pain/edema management + POC/goal planning toward PLOF.
+- Sentence 3: objective deficits (bed mobility, transfers, gait, balance, generalized weakness) linked to HIGH fall risk.
+- Sentence 4: safety awareness/balance reactions + home risk statement stating HIGH fall risk.
+- Sentence 5: medical necessity with skilled interventions (TherEx, functional training, gait/balance training, safety education).
+- Sentence 6: Continued skilled HH PT remains indicated.
 `.trim();
 }
 
-// ============================================================
-// Vision JSON (unchanged)
-// ============================================================
-
+// Vision JSON (unchanged behavior; prompt still passes through minimalRedact)
 async function callOpenAIImageJSON(prompt, imageDataUrl, timeoutMs = 90000) {
   if (!openai) throw new Error("OPENAI_API_KEY missing");
   if (!imageDataUrl) throw new Error("imageDataUrl missing");
@@ -173,15 +186,12 @@ async function callOpenAIImageJSON(prompt, imageDataUrl, timeoutMs = 90000) {
   try {
     const resp = await openai.responses.create(
       {
-        model:
-          process.env.OPENAI_MODEL_VISION ||
-          process.env.OPENAI_MODEL ||
-          "gpt-4o-mini",
+        model: process.env.OPENAI_MODEL_VISION || process.env.OPENAI_MODEL || "gpt-4o-mini",
         input: [
           {
             role: "user",
             content: [
-              { type: "input_text", text: prompt },
+              { type: "input_text", text: minimalRedact(prompt) },
               { type: "input_image", image_url: imageDataUrl },
             ],
           },
@@ -203,13 +213,9 @@ async function callOpenAIImageJSON(prompt, imageDataUrl, timeoutMs = 90000) {
   }
 }
 
-// ============================================================
-// Exports
-// ============================================================
-
 module.exports = {
   callOpenAIJSON,
   callOpenAIText,
-  callOpenAIImageJSON,
   buildHHEvalAssessmentPrompt,
+  callOpenAIImageJSON,
 };
