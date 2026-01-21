@@ -40,18 +40,18 @@ function setJob(jobId, patch) {
     updatedAt: Date.now(),
     logs: [],
   };
-
+  
   const next = {
     ...prev,
     ...patch,
     updatedAt: Date.now(),
   };
-
+  
   // Auto-finish timestamps for terminal states
   if ((next.status === "completed" || next.status === "failed") && !next.finishedAt) {
     next.finishedAt = Date.now();
   }
-
+  
   JOBS.set(jobId, next);
   console.log(`[${jobId}] STATUS => ${next.status}: ${next.message || ""}`);
 }
@@ -91,14 +91,14 @@ function loadPublicTemplates() {
     const path = require("path");
     const p = path.join(__dirname, "public", "app.js");
     const js = fs.readFileSync(p, "utf8");
-
+    
     function grab(key) {
       // match: key: `...`
       const re = new RegExp(key + String.raw`\s*:\s*\`([\s\S]*?)\``, "m");
       const m = js.match(re);
       return m ? String(m[1] || "").trim() : "";
     }
-
+    
     return {
       pt_visit_default: grab("pt_visit_default"),
       pt_eval_default: grab("pt_eval_default"),
@@ -128,7 +128,7 @@ app.get("/", (req, res) => {
 
 app.post("/run-automation", async (req, res) => {
   const jobId = `job_${Date.now()}_${Math.random().toString(16).slice(2)}`;
-
+  
   // Single-run guard
   if (ACTIVE_JOB_ID) {
     return res.status(409).json({
@@ -136,7 +136,7 @@ app.post("/run-automation", async (req, res) => {
       activeJobId: ACTIVE_JOB_ID,
     });
   }
-
+  
   ACTIVE_JOB_ID = jobId;
   setJob(jobId, {
     status: "running",
@@ -145,10 +145,10 @@ app.post("/run-automation", async (req, res) => {
     finishedAt: null,
     logs: [],
   });
-
+  
   // Return immediately so UI can poll
   res.json({ status: "running", message: "Started", jobId });
-
+  
   // Background job
   (async () => {
     try {
@@ -158,18 +158,18 @@ app.post("/run-automation", async (req, res) => {
         kinnserPassword: req.body.kinnserPassword || process.env.KINNSER_PASSWORD,
         jobId,
         statusCb: (status, message) => setJob(jobId, { status, message }),
-};
-
+      };
+      
       if (!merged.patientName || !merged.visitDate || !merged.taskType) {
         throw new Error("Missing required fields: patientName, visitDate, taskType");
       }
       if (!merged.kinnserUsername || !merged.kinnserPassword) {
         throw new Error("Missing KINNSER_USERNAME / KINNSER_PASSWORD (set in environment)");
       }
-
+      
       appendJobLog(jobId, "➡️ Starting automation...");
       appendJobLog(jobId, `taskType: ${merged.taskType}`);
-
+      
       // Live UI logs: mirror ALL console output into job logs (single source of truth)
       const _origLog = console.log.bind(console);
       const _origErr = console.error.bind(console);
@@ -181,9 +181,9 @@ app.post("/run-automation", async (req, res) => {
         try { appendJobLog(jobId, args.map(String).join(' ')); } catch {}
         _origErr(...args);
       };
-
+      
       await runKinnserBot(merged);
-
+      
       setJob(jobId, { status: "completed", message: "Autofill completed" });
       appendJobLog(jobId, "✅ Completed: Autofill completed");
     } catch (e) {
@@ -205,12 +205,12 @@ app.post("/run-automation", async (req, res) => {
 function simpleFillTemplate(dictationText, templateText) {
   const dictation = String(dictationText || "").replace(/\r\n/g, "\n");
   const template = String(templateText || "").replace(/\r\n/g, "\n");
-
+  
   // Parse dictation into blocks keyed by heading (case-insensitive)
   const lines = dictation.split("\n");
   const blocks = new Map(); // keyLower -> { heading, valueLines[] }
   let curKey = null;
-
+  
   for (let i = 0; i < lines.length; i++) {
     const raw = lines[i];
     const m = raw.match(/^([A-Za-z][A-Za-z0-9\s\/\-\(\)']{0,80})\s*:\s*(.*)$/);
@@ -224,7 +224,7 @@ function simpleFillTemplate(dictationText, templateText) {
     }
     if (curKey) blocks.get(curKey).valueLines.push(raw);
   }
-
+  
   function renderBlock(b) {
     if (!b) return "";
     const arr = (b.valueLines || []).slice();
@@ -232,44 +232,99 @@ function simpleFillTemplate(dictationText, templateText) {
     while (arr.length && arr[arr.length - 1].trim() === "") arr.pop();
     return arr.join("\n").trimEnd();
   }
-
+  
   const outLines = template.split("\n");
-
+  
   const headingRe = /^([A-Za-z][A-Za-z0-9\s\/\-\(\)’']{0,80})\s*:\s*(.*)$/;
-
-  for (let i = 0; i < outLines.length; i++) {
+                                
+                                for (let i = 0; i < outLines.length; i++) {
     const line = outLines[i];
     const m = line.match(headingRe);
     if (!m) continue;
-
+    
     const headingRaw = m[1].trim();
     const keyLower = headingRaw.toLowerCase().replace(/’/g, "'");
-
+    
     const b = blocks.get(keyLower);
     if (!b) continue;
-
+    
     const replacement = renderBlock(b);
     const isMulti = replacement.includes("\n") || (m[2] ?? "").trim() === "";
-
+    
     if (!isMulti) {
       outLines[i] = `${headingRaw}: ${replacement}`.trimEnd();
       continue;
     }
-
+    
     const replLines = replacement ? replacement.split("\n") : [""];
     outLines[i] = `${headingRaw}: ${replLines[0] || ""}`.trimEnd();
-
+    
     // Remove existing non-heading lines until next heading
     let j = i + 1;
     while (j < outLines.length && !headingRe.test(outLines[j])) {
       outLines.splice(j, 1);
     }
-
+    
     if (replLines.length > 1) outLines.splice(i + 1, 0, ...replLines.slice(1));
   }
-
-  return outLines.join("\n").replace(/\n{3,}/g, "\n\n").trimEnd() + "\n";
+                                
+                                return outLines.join("\n").replace(/\n{3,}/g, "\n\n").trimEnd() + "\n";
 }
+// ------------------------------------------------------------
+// OpenAI-only: generate 6-sentence Medicare-justifiable HH PT Eval Assessment Summary
+// Triggered ONLY when the user explicitly prompts via "Assessment Summary:" containing "Generate 6 sentences"
+// ------------------------------------------------------------
+async function generateHHEvalAssessmentSummary({ dictation, problemsHint = "" }) {
+  const text = String(dictation || "").trim();
+  const hint = String(problemsHint || "").trim();
+  
+  // Extract a lightweight problems string from dictation (do NOT include names/PHI)
+  const problems = hint || (()=>{
+    const hits = [];
+    const add = (re, label) => { if (re.test(text)) hits.push(label); };
+    add(/muscle\s*weakness/i, "muscle weakness");
+    add(/functional\s*mobility|mobility\s*deficit|transfer/i, "impaired functional mobility");
+    add(/gait|ambulat/i, "impaired gait");
+    add(/balance|unsteady|fall\s*risk|falls?/i, "impaired balance and high fall risk");
+    add(/activity\s*tolerance|endurance/i, "reduced activity tolerance");
+    const uniq = Array.from(new Set(hits));
+    return uniq.length ? uniq.join(", ") : "muscle weakness, impaired functional mobility, and high fall risk";
+  })();
+  
+  const prompt = `Return ONLY valid JSON with double quotes.
+
+You must output exactly one key:
+- "clinicalStatement"
+
+GLOBAL RULES:
+- Write an Assessment Summary for a Medicare HOME HEALTH PHYSICAL THERAPY INITIAL EVALUATION.
+- Output EXACTLY 6–8 sentences total, in ONE paragraph.
+- No line breaks, no numbering, no bullets, no quotes.
+- Each sentence MUST start with "Pt".
+- Do NOT use he/she/they/his/her/their.
+- Do NOT include any proper names (people, agencies, facilities).
+- Do NOT invent diagnoses, PMH, or conditions not explicitly provided.
+
+REQUIRED SENTENCE STRUCTURE (follow strictly):
+Sentence 1: Pt demographics (age/sex ONLY if explicitly provided in dictation) + relevant PMH (use ONLY PMH provided; do not add or infer).
+Sentence 2: Pt PT initial evaluation summary INCLUDING home safety assessment, DME assessment, HEP education, fall safety/fall prevention education, education on proper AD use, education on pain and/or edema management if applicable, and PT plan of care/goal planning toward return to PLOF.
+Sentence 3: Pt objective functional deficits including bed mobility, transfers, gait, balance, generalized weakness, and linkage to high fall risk.
+Sentence 4: Pt safety awareness, balance reactions, environmental/home risk factors, and explicit statement of high fall risk.
+Sentence 5: Pt skilled need and medical necessity describing skilled interventions (TherEx, functional training, gait/balance training, safety education) required to improve function and reduce fall/injury risk.
+Sentence 6: Continued skilled HH PT remains indicated.
+Sentences 7–8 (ONLY if needed to reach clarity): Additional objective or skilled-need details consistent with Medicare HH PT documentation; do not repeat prior content.
+
+CLINICAL CONTEXT:
+- Primary impairments/problems: ${problems}
+
+Now generate the assessment summary following ALL rules exactly.`.trim();
+  
+  // callOpenAIJSON is already required/available in ui.js for convert routes
+  const parsed = await callOpenAIJSON(prompt, 12000);
+  const cs = (parsed && parsed.clinicalStatement ? String(parsed.clinicalStatement) : "").trim();
+  return cs;
+}
+
 
 // ------------------------------------------------------------
 // Convert Dictation → Selected Template (PT Visit / PT Eval)
@@ -281,16 +336,16 @@ app.post("/convert-dictation", async (req, res) => {
     const dictation = String(req.body?.dictation || "").trim();
     const taskType = String(req.body?.taskType || "").trim();
     const templateText = String(req.body?.templateText || "").trim();
-
+    
     if (!dictation) return res.status(400).json({ error: "Missing dictation" });
     if (!templateText) return res.status(400).json({ error: "Missing templateText" });
-
+    
     // If OpenAI is not configured, do a deterministic best-effort fill
     if (!process.env.OPENAI_API_KEY) {
       const filled = simpleFillTemplate(dictation, templateText);
       return res.json({ templateText: filled });
     }
-
+    
     const prompt = `
 You are converting messy PT dictation into the provided WellSky/Kinnser note template.
 
@@ -310,11 +365,40 @@ ${templateText}
 DICTATION:
 ${dictation}
 `.trim();
-
+    
     const out = await callOpenAIText(prompt, 60000).catch(() => "");
-    const finalText = String(out || "").trim() || simpleFillTemplate(dictation, templateText) || templateText;
-
-    return res.json({ templateText: finalText });
+    const finalText = String(out || "").trim() || simpleFillTemplate(dictation, templateText) || templateText;// ------------------------------------------------------------
+    // Optional: OpenAI generation for HH PT Eval Assessment Summary (6 sentences)
+    // Only runs when user explicitly prompts in dictation:
+    //   "Assessment Summary: Generate 6 sentences ..."
+    // ------------------------------------------------------------
+    let patchedText = finalText;
+    
+    try {
+      const wantsAssessmentGen = /\b(?:assessment\s*summary|clinical\s*statement|hh\s*pt\s*(?:initial\s*)?evaluation\s*(?:summary|assessment)|hh\s*pt\s*eval\s*(?:summary|assessment)|hh\s*pt\s*summary)\b[\s\S]*?\b(?:generate|write|give\s*me|create)\b[\s\S]*?\b(?:5\s*-\s*6|5\s*to\s*6|6|5)\s*sentences?\b/i.test(dictation || "");
+      if (wantsAssessmentGen && process.env.OPENAI_API_KEY) {
+        // If PT Diagnosis line exists, use it as a problems hint (non-PHI)
+        const ptDxLine = (String(dictation || "").match(/(?:^|\n)\s*pt\s*diagnosis\s*:\s*([^\n\r]+)/i) || [])[1] || "";
+        const problemsHint = ptDxLine ? ptDxLine.replace(/[^\x20-\x7E]/g, "").trim() : "";
+        
+        const cs = await generateHHEvalAssessmentSummary({ dictation, problemsHint });
+        
+        // Replace ONLY the Assessment Summary line content in the template (preserve heading)
+        if (cs) {
+          patchedText = patchedText.replace(
+                                            /(^|\n)(Assessment Summary\s*:\s*)([^\n\r]*)/i,
+                                            (m0, p1, p2) => `${p1}${p2}${cs}`
+                                            );
+        }
+      }
+    } catch (e) {
+      // Fail-soft: keep deterministic filled template
+      console.warn("[convert-dictation] Assessment Summary generation skipped:", (e && e.message) ? e.message : String(e));
+    }
+    
+    
+    
+    return res.json({ templateText: patchedText });
   } catch (e) {
     return res.status(500).json({ error: e?.message || "convert-dictation failed" });
   }
@@ -330,14 +414,14 @@ app.post("/convert-image", async (req, res) => {
     const imageDataUrl = String(req.body?.imageDataUrl || "").trim();
     const taskType = String(req.body?.taskType || "").trim();
     const templateText = String(req.body?.templateText || "").trim();
-
+    
     if (!imageDataUrl) return res.status(400).json({ error: "Missing imageDataUrl" });
     if (!templateText) return res.status(400).json({ error: "Missing templateText" });
-
+    
     if (!process.env.OPENAI_API_KEY) {
       return res.json({ templateText });
     }
-
+    
     const prompt = `
 You are extracting PT documentation from an image and formatting it into the provided WellSky/Kinnser template.
 
@@ -353,7 +437,7 @@ TASK TYPE: ${taskType || "PT Visit"}
 TEMPLATE:
 ${templateText}
 `.trim();
-
+    
     const obj = await callOpenAIImageJSON(prompt, imageDataUrl, 90000).catch(() => ({}));
     const finalText = String(obj?.templateText || "").trim();
     return res.json({ templateText: finalText || templateText });
