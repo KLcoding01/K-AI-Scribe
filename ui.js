@@ -14,7 +14,40 @@ const { runKinnserBot } = require("./index.js");
 
 const { callOpenAIText, callOpenAIImageJSON } = require("./bots/openaiClient");
 
-const { callOpenAIJSON } = require("./openaiClient");
+// OpenAI JSON helper: prefer root openaiClient if present, else use bots/openaiClient.
+// If neither exposes callOpenAIJSON, fall back to parsing callOpenAIText output.
+let callOpenAIJSON = null;
+try {
+  // Some builds keep this at repo root
+  ({ callOpenAIJSON } = require("./openaiClient"));
+} catch (e1) {
+  try {
+    ({ callOpenAIJSON } = require("./bots/openaiClient"));
+  } catch (e2) {
+    callOpenAIJSON = null;
+  }
+}
+
+async function callOpenAIJSONSafe(prompt, timeoutMs = 12000) {
+  if (typeof callOpenAIJSON === "function") {
+    return await callOpenAIJSONSafe(prompt, timeoutMs);
+  }
+  // Fallback: use text call and parse JSON
+  const raw = await callOpenAIText(prompt, timeoutMs);
+  const s = String(raw || "").trim();
+  try {
+    return JSON.parse(s);
+  } catch {
+    // Attempt to extract JSON object substring
+    const start = s.indexOf("{");
+    const end = s.lastIndexOf("}");
+    if (start >= 0 && end > start) {
+      return JSON.parse(s.slice(start, end + 1));
+    }
+    throw new Error("callOpenAIJSONSafe: unable to parse JSON from callOpenAIText output");
+  }
+}
+
 //
 // EXPIRATION CHECK – blocks use after Feb 1, 2026
 //
@@ -375,7 +408,7 @@ Pt is a __ y/o __ who presents with __ and PMH of __. Pt is seen for PT initial 
 Now generate the assessment summary following ALL rules exactly.`.trim();
 
       // callOpenAIJSON is already required/available in ui.js for convert routes
-      const parsed = await callOpenAIJSON(prompt, 12000);
+      const parsed = await callOpenAIJSONSafe(prompt, 12000);
 let cs = (parsed && parsed.clinicalStatement ? String(parsed.clinicalStatement) : "").trim();
 
 // Validate and do one repair attempt if needed
@@ -412,7 +445,7 @@ CLINICAL CONTEXT:
 BAD OUTPUT (for reference only; do not repeat):
 ${cs}`.trim();
 
-  const repaired = await callOpenAIJSON(repairPrompt, 12000);
+  const repaired = await callOpenAIJSONSafe(repairPrompt, 12000);
   cs = (repaired && repaired.clinicalStatement ? String(repaired.clinicalStatement) : "").trim();
   v = validateHHSummary(cs);
 }
