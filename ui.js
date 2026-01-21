@@ -312,12 +312,18 @@ function simpleFillTemplate(dictationText, templateText) {
 function buildHHSummaryFallback({ age = "", gender = "", medicalDx = "", pmh = "", problems = "" }) {
   const a = String(age || "").trim();
   const g = String(gender || "").trim();
+  const dx = String(medicalDx || "").trim();
   const p = String(pmh || "").trim();
+  const prob = String(problems || "").trim();
 
-  const demo = (a && g) ? `${a}-year-old ${g}` : (a ? `${a}-year-old` : (g ? `${g}` : ""));
-  const pmhPhrase = p ? ` with PMH significant for ${p}` : "";
+  const ageTok = a ? a : "__";
+  const genderTok = g ? g : "__";
+  const dxTok = dx ? dx : (prob ? prob : "__");
+  const pmhTok = p ? p : "__";
 
-  const s1 = `Pt is ${demo ? "a " + demo + " " : "a "}evaluated in the home setting${pmhPhrase}.`.replace(/\s+/g, " ").trim();
+  // Sentence 1: exact requested opener style
+  const s1 = `Pt is a ${ageTok} y/o ${genderTok} who presents with HNP of ${dxTok} which consists of PMH of ${pmhTok}.`;
+
   const s2 = `Pt underwent PT initial evaluation with completion of home safety assessment, DME assessment, and initiation of HEP education, with education provided on fall prevention strategies, proper use of AD, pain and edema management as indicated, and establishment of PT POC and functional goals to progress pt toward PLOF.`;
   const s3 = `Objective findings demonstrate impaired bed mobility, transfers, and gait with AD, poor balance reactions, and generalized weakness contributing to limited household mobility and dependence with ADLs, placing pt at high fall risk.`;
   const s4 = `Pt demonstrates decreased safety awareness and delayed balance reactions within the home environment, with environmental risk factors that further increase fall risk.`;
@@ -326,6 +332,7 @@ function buildHHSummaryFallback({ age = "", gender = "", medicalDx = "", pmh = "
 
   return [s1, s2, s3, s4, s5, s6].join(" ");
 }
+
 
 
 
@@ -386,14 +393,17 @@ function validateHHSummary(text, spec = { min: 6, max: 6 }) {
     return { ok: false, reason: "last sentence not exact required string" };
   }
 
+  // Sentence 1 must match requested opener style
+  if (!/^Pt\s+is\s+a\b/.test(sentences[0] || "")) return { ok: false, reason: "sentence 1 must start with 'Pt is a'" };
+  if (!/\bpresents\s+with\b/i.test(sentences[0] || "")) return { ok: false, reason: "sentence 1 must include 'presents with'" };
+  if (!/\bpmh\b/i.test(sentences[0] || "")) return { ok: false, reason: "sentence 1 must include PMH wording" };
+
   // Required starters
-  if (!/^Pt\s+is\b/.test(sentences[0] || "")) return { ok: false, reason: "sentence 1 must start with 'Pt is'" };
   if (!/^Pt\s+underwent\b/.test(sentences[1] || "")) return { ok: false, reason: "sentence 2 must start with 'Pt underwent'" };
   if (!/^Objective\s+findings\b/.test(sentences[2] || "")) return { ok: false, reason: "sentence 3 must start with 'Objective findings'" };
   if (!/^Pt\s+demonstrates\b/.test(sentences[3] || "")) return { ok: false, reason: "sentence 4 must start with 'Pt demonstrates'" };
 
   if (n == 5) {
-    // For 5 sentences: sentence 4 must also include skilled need language
     const s4 = sentences[3] || "";
     if (!/\bskilled\s+hh\s+pt\b/i.test(s4) || !/\b(medically\s+necessary|medical\s+necessity)\b/i.test(s4)) {
       return { ok: false, reason: "5-sentence mode requires skilled need/medical necessity in sentence 4" };
@@ -401,17 +411,15 @@ function validateHHSummary(text, spec = { min: 6, max: 6 }) {
     return { ok: true, reason: "ok" };
   }
 
-  // For 6-9 sentences:
-  // sentence 5 must start with Skilled HH PT (medical necessity line)
   if (!/^Skilled\s+HH\s+PT\b/.test(sentences[4] || "")) return { ok: false, reason: "sentence 5 must start with 'Skilled HH PT'" };
 
-  // Any optional sentences between sentence 6 and the last must start with Pt
   for (let i = 5; i < n - 1; i++) {
     if (!/^Pt\b/.test(sentences[i])) return { ok: false, reason: `sentence ${i+1} must start with 'Pt'` };
   }
 
   return { ok: true, reason: "ok" };
 }
+
 
 
 
@@ -442,27 +450,29 @@ You must output exactly one key:
 GLOBAL RULES:
 - Write an Assessment Summary for a Medicare HOME HEALTH PHYSICAL THERAPY INITIAL EVALUATION.
 - Sentence count: output between ${sentenceSpec.min} and ${sentenceSpec.max} sentences total.
-- Output the requested number of sentences (5–9) based on the user prompt; if none is specified, output 6 sentences., in ONE paragraph.
-- No line breaks, no numbering, no bullets, no quotes.
+- One paragraph only. No line breaks, no numbering, no bullets, no quotes.
 - Do NOT use he/she/they/his/her/their.
 - Do NOT include the word "patient".
 - Do NOT include any proper names (people, agencies, facilities).
-- Do NOT invent diagnoses, PMH, or conditions not explicitly provided.
+- Use ONLY the provided diagnosis/PMH; do not add or invent.
 
-REQUIRED SENTENCE FORMAT (follow strictly; must match these sentence starters):
-1) Must start with: "Pt is" and include demographics (age/sex ONLY if explicitly provided) + PMH (use ONLY PMH provided; do not add).
+REQUIRED STRUCTURE (follow strictly; must match these starters):
+1) Must start with: "Pt is a" and must be written EXACTLY in this style:
+   "Pt is a ${ageForPrompt} y/o ${genderForPrompt} who presents with HNP of ${medicalDxForPrompt} which consists of PMH of ${pmhForPrompt}."
+   - If age or gender is unknown, use "__" in its place (do not omit "y/o").
+   - If PMH is unknown, use "__".
+   - Do NOT replace PMH with PT diagnosis/problem list.
 2) Must start with: "Pt underwent" and include PT initial evaluation + home safety assessment + DME assessment + initiation of HEP education + fall prevention + proper AD use education + pain/edema management education as indicated + establish PT POC/goals toward PLOF.
 3) Must start with: "Objective findings" and include deficits in bed mobility, transfers, gait with AD, balance reactions, generalized weakness, and high fall risk linkage with ADL limitations.
 4) Must start with: "Pt demonstrates" and include decreased safety awareness/balance reactions + home/environment risk statement (high fall risk).
-5) Must start with: "Skilled HH PT" and include Medicare medical necessity describing TherEx, functional mobility training, gait and balance training, and skilled safety education to improve function and reduce fall/injury risk.
-Last sentence must be EXACTLY: Continued skilled HH PT remains indicated.
+5) If total sentences >= 6: Sentence 5 must start with: "Skilled HH PT" and include Medicare medical necessity describing TherEx, functional mobility training, gait and balance training, and skilled safety education to improve function and reduce fall/injury risk.
 Optional extra sentences (if >6 total): any additional sentences before the last must start with "Pt" and add non-redundant objective or skilled-need details.
+Last sentence must be EXACTLY: Continued skilled HH PT remains indicated.
 
-CLINICAL CONTEXT (use only what is provided):
-- Primary impairments/problems: ${problems}
-
-STYLE TARGET (do not copy verbatim; follow structure and starters):
-Pt is a __-year-old __ evaluated in the home setting with PMH significant for __. Pt underwent PT initial evaluation with completion of home safety assessment, DME assessment, and initiation of HEP education, with education provided on fall prevention strategies, proper use of AD, pain and edema management as indicated, and establishment of PT POC and functional goals to progress pt toward PLOF. Objective findings demonstrate impaired bed mobility, transfers, and gait with AD, poor balance reactions, and...
+PROVIDED CONTEXT (use exactly; do not invent):
+- Medical Diagnosis (HNP): ${medicalDxForPrompt}
+- PMH: ${pmhForPrompt}
+- Problems (for objective/skilled need support): ${problems}
 
 Now generate the assessment summary following ALL rules exactly.`.trim();
 
