@@ -1109,13 +1109,13 @@ function parseStructuredFromFreeText(aiNotes = "") {
   const result = {
     medicalDiagnosis: "",
     ptDiagnosis: "",
-    precautions: "",
     relevantHistory: "",
     hasExplicitPMH: false,
     clinicalStatement: "",
     subjective: "",
     priorLevel: "",
     patientGoals: "",
+    precautions: "",
     vitalsComment: "",
     vitals: {
       temperature: "",
