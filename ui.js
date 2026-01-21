@@ -311,23 +311,21 @@ function simpleFillTemplate(dictationText, templateText) {
 function buildHHSummaryFallback({ age = "", gender = "", medicalDx = "", pmh = "", problems = "" }) {
   const a = String(age || "").trim();
   const g = String(gender || "").trim();
-  const dx = String(medicalDx || "").trim();
   const p = String(pmh || "").trim();
-  const prob = String(problems || "").trim() || "muscle weakness, impaired functional mobility, and high fall risk";
 
-  const demo = (a && g) ? `${a} y/o ${g}` : (a ? `${a} y/o` : (g ? `${g}` : ""));
-  const dxPhrase = dx ? dx : prob;
-  const pmhPhrase = p ? ` which consists of PMH of ${p}` : "";
+  const demo = (a && g) ? `${a}-year-old ${g}` : (a ? `${a}-year-old` : (g ? `${g}` : ""));
+  const pmhPhrase = p ? ` with PMH significant for ${p}` : "";
 
-  const s1 = `Pt is ${demo ? "a " + demo + " " : "a "}who presents with HNP of ${dxPhrase}${pmhPhrase}.`.replace(/\s+/g, " ").trim();
-  const s2 = `Pt is seen for PT initial evaluation, home safety assessment, DME assessment, HEP training/education, fall safety precautions and fall prevention education, education on proper use of AD, education on pain and edema management as indicated, and PT POC/goal planning to return toward PLOF.`;
-  const s3 = `Pt demonstrates objective deficits including weakness, impaired balance, impaired gait, and impaired functional mobility with difficulty in bed mobility, transfers, and gait contributing to high fall risk.`;
-  const s4 = `Pt demonstrates decreased safety awareness and impaired balance reactions with environmental risk factors in the home, and Pt is at high fall risk.`;
-  const s5 = `Pt requires skilled HH PT for TherEx, functional training, gait and balance training, and safety education with clinical monitoring and progression to reduce fall and injury risk and improve ADL performance.`;
+  const s1 = `Pt is ${demo ? "a " + demo + " " : "a "}evaluated in the home setting${pmhPhrase}.`.replace(/\s+/g, " ").trim();
+  const s2 = `Pt underwent PT initial evaluation with completion of home safety assessment, DME assessment, and initiation of HEP education, with education provided on fall prevention strategies, proper use of AD, pain and edema management as indicated, and establishment of PT POC and functional goals to progress pt toward PLOF.`;
+  const s3 = `Objective findings demonstrate impaired bed mobility, transfers, and gait with AD, poor balance reactions, and generalized weakness contributing to limited household mobility and dependence with ADLs, placing pt at high fall risk.`;
+  const s4 = `Pt demonstrates decreased safety awareness and delayed balance reactions within the home environment, with environmental risk factors that further increase fall risk.`;
+  const s5 = `Skilled HH PT is medically necessary to provide TherEx, functional mobility training, gait and balance training, and skilled safety education to improve strength, mobility, and functional independence while reducing risk of falls and injury.`;
   const s6 = `Continued skilled HH PT remains indicated.`;
 
   return [s1, s2, s3, s4, s5, s6].join(" ");
 }
+
 
 
 function validateHHSummary(text) {
@@ -335,27 +333,30 @@ function validateHHSummary(text) {
   if (!t) return { ok: false, reason: "empty" };
   if (/\n/.test(t)) return { ok: false, reason: "contains line breaks" };
   if (/\b(the\s+patient|patient)\b/i.test(t)) return { ok: false, reason: "contains the word patient" };
+  if (/\b(he|she|they|his|her|their)\b/i.test(t)) return { ok: false, reason: "contains pronouns" };
 
   const sentences = t.split(/(?<=[.!?])\s+/).map(s => s.trim()).filter(Boolean);
+  if (sentences.length !== 6) return { ok: false, reason: `sentence count ${sentences.length} (need exactly 6)` };
 
-  if (sentences.length < 6 || sentences.length > 8) {
-    return { ok: false, reason: `sentence count ${sentences.length} (need 6-8)` };
-  }
+  const starters = [
+    /^Pt\s+is\b/,
+    /^Pt\s+underwent\b/,
+    /^Objective\s+findings\b/,
+    /^Pt\s+demonstrates\b/,
+    /^Skilled\s+HH\s+PT\b/,
+  ];
 
-  for (let i = 0; i < sentences.length; i++) {
-    if (!/^Pt\b/.test(sentences[i])) return { ok: false, reason: `sentence ${i+1} does not start with Pt` };
+  for (let i = 0; i < 5; i++) {
+    if (!starters[i].test(sentences[i])) return { ok: false, reason: `sentence ${i+1} has wrong starter` };
   }
 
   if (sentences[5] !== "Continued skilled HH PT remains indicated.") {
     return { ok: false, reason: "sentence 6 not exact required string" };
   }
 
-  if (/\b(he|she|they|his|her|their)\b/i.test(t)) {
-    return { ok: false, reason: "contains pronouns" };
-  }
-
   return { ok: true, reason: "ok" };
 }
+
 
 
 async function generateHHEvalAssessmentSummary({ dictation, problemsHint = "" }) {
@@ -382,28 +383,26 @@ You must output exactly one key:
 
 GLOBAL RULES:
 - Write an Assessment Summary for a Medicare HOME HEALTH PHYSICAL THERAPY INITIAL EVALUATION.
-- Output EXACTLY 6–8 sentences total, in ONE paragraph.
+- Output EXACTLY 6 sentences total, in ONE paragraph.
 - No line breaks, no numbering, no bullets, no quotes.
-- Each sentence MUST start with "Pt".
 - Do NOT use he/she/they/his/her/their.
 - Do NOT include the word "patient".
 - Do NOT include any proper names (people, agencies, facilities).
 - Do NOT invent diagnoses, PMH, or conditions not explicitly provided.
 
-REQUIRED SENTENCE STRUCTURE (follow strictly):
-Sentence 1: Pt demographics (age/sex ONLY if explicitly provided in dictation) + relevant PMH (use ONLY PMH provided; do not add or infer).
-Sentence 2: Pt PT initial evaluation summary INCLUDING home safety assessment, DME assessment, HEP education, fall safety/fall prevention education, education on proper AD use, education on pain and/or edema management if applicable, and PT plan of care/goal planning toward return to PLOF.
-Sentence 3: Pt objective functional deficits including bed mobility, transfers, gait, balance, generalized weakness, and linkage to high fall risk.
-Sentence 4: Pt safety awareness, balance reactions, environmental/home risk factors, and explicit statement of high fall risk.
-Sentence 5: Pt skilled need and medical necessity describing skilled interventions (TherEx, functional training, gait/balance training, safety education) required to improve function and reduce fall/injury risk.
-Sentence 6: Continued skilled HH PT remains indicated.
-Sentences 7–8 (ONLY if needed to reach clarity): Additional objective or skilled-need details consistent with Medicare HH PT documentation; do not repeat prior content.
+REQUIRED 6-SENTENCE FORMAT (follow strictly; must match these sentence starters):
+1) Must start with: "Pt is" and include demographics (age/sex ONLY if explicitly provided) + PMH (use ONLY PMH provided; do not add).
+2) Must start with: "Pt underwent" and include PT initial evaluation + home safety assessment + DME assessment + initiation of HEP education + fall prevention + proper AD use education + pain/edema management education as indicated + establish PT POC/goals toward PLOF.
+3) Must start with: "Objective findings" and include deficits in bed mobility, transfers, gait with AD, balance reactions, generalized weakness, and high fall risk linkage with ADL limitations.
+4) Must start with: "Pt demonstrates" and include decreased safety awareness/balance reactions + home/environment risk statement (high fall risk).
+5) Must start with: "Skilled HH PT" and include Medicare medical necessity describing TherEx, functional mobility training, gait and balance training, and skilled safety education to improve function and reduce fall/injury risk.
+6) Must be EXACTLY: Continued skilled HH PT remains indicated.
 
-CLINICAL CONTEXT:
+CLINICAL CONTEXT (use only what is provided):
 - Primary impairments/problems: ${problems}
 
-STYLE EXAMPLE (do not copy verbatim; follow structure):
-Pt is a __ y/o __ who presents with __ and PMH of __. Pt is seen for PT initial evaluation, home safety assessment, DME assessment, HEP education, fall prevention education, AD use education, pain/edema management education as indicated, and PT POC/goal planning toward PLOF. Pt demonstrates deficits in bed mobility, transfers, gait, balance, and weakness contributing to high fall risk. Pt demonstrates decreased safety awareness and impaired balance reactions and Pt is at high fall risk. Pt requires skilled HH PT for TherEx, functional training, gait and balance training, and safety education. Continued skilled HH PT remains indicated.
+STYLE TARGET (do not copy verbatim; follow structure and starters):
+Pt is a __-year-old __ evaluated in the home setting with PMH significant for __. Pt underwent PT initial evaluation with completion of home safety assessment, DME assessment, and initiation of HEP education, with education provided on fall prevention strategies, proper use of AD, pain and edema management as indicated, and establishment of PT POC and functional goals to progress pt toward PLOF. Objective findings demonstrate impaired bed mobility, transfers, and gait with AD, poor balance reactions, and...
 
 Now generate the assessment summary following ALL rules exactly.`.trim();
 
