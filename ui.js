@@ -273,36 +273,49 @@ function simpleFillTemplate(dictationText, templateText) {
 // ------------------------------------------------------------
     // OpenAI-only: generate 6-sentence Medicare-justifiable HH PT Eval Assessment Summary
     // Triggered ONLY when the user explicitly prompts via "Assessment Summary:" containing "Generate 6 sentences"
-    // ------------------------------------------------------------
-    function validateHHSummary(text) {
+function buildHHSummaryFallback({ age = "", gender = "", pmh = "", problems = "" }) {
+  const a = String(age || "").trim();
+  const g = String(gender || "").trim();
+  const p = String(pmh || "").trim();
+  const prob = String(problems || "").trim() || "muscle weakness, impaired functional mobility, and high fall risk";
+
+  const demo = (a && g) ? `${a} y/o ${g}` : (a ? `${a} y/o` : (g ? `${g}` : ""));
+  const s1 = `Pt is ${demo ? "a " + demo + " " : "a "}who presents with primary impairments of ${prob}${p ? ", with PMH of " + p : ""}.`.replace(/\s+/g, " ").trim();
+  const s2 = `Pt is seen for PT initial evaluation, home safety assessment, DME assessment, HEP training/education, fall safety precautions and fall prevention education, education on proper use of AD, education on pain and edema management as indicated, and PT POC/goal planning to return toward PLOF.`;
+  const s3 = `Pt demonstrates objective deficits including weakness, impaired balance, impaired gait, and impaired functional mobility with difficulty in bed mobility, transfers, and gait contributing to high fall risk.`;
+  const s4 = `Pt demonstrates decreased safety awareness and impaired balance reactions with environmental risk factors in the home, and Pt is at high fall risk.`;
+  const s5 = `Pt requires skilled HH PT for TherEx, functional training, gait and balance training, and safety education with clinical monitoring and progression to reduce fall and injury risk and improve ADL performance.`;
+  const s6 = `Continued skilled HH PT remains indicated.`;
+  return [s1, s2, s3, s4, s5, s6].join(" ");
+}
+
+function validateHHSummary(text) {
   const t = String(text || "").trim();
   if (!t) return { ok: false, reason: "empty" };
   if (/\n/.test(t)) return { ok: false, reason: "contains line breaks" };
+  if (/\b(the\s+patient|patient)\b/i.test(t)) return { ok: false, reason: "contains the word patient" };
 
-  // Split sentences conservatively.
   const sentences = t.split(/(?<=[.!?])\s+/).map(s => s.trim()).filter(Boolean);
 
   if (sentences.length < 6 || sentences.length > 8) {
     return { ok: false, reason: `sentence count ${sentences.length} (need 6-8)` };
   }
 
-  // Each sentence must start with "Pt"
   for (let i = 0; i < sentences.length; i++) {
     if (!/^Pt\b/.test(sentences[i])) return { ok: false, reason: `sentence ${i+1} does not start with Pt` };
   }
 
-  // Sentence 6 must be exact
   if (sentences[5] !== "Continued skilled HH PT remains indicated.") {
     return { ok: false, reason: "sentence 6 not exact required string" };
   }
 
-  // No pronouns
   if (/\b(he|she|they|his|her|their)\b/i.test(t)) {
     return { ok: false, reason: "contains pronouns" };
   }
 
   return { ok: true, reason: "ok" };
 }
+
 
 async function generateHHEvalAssessmentSummary({ dictation, problemsHint = "" }) {
       const text = String(dictation || "").trim();
@@ -332,6 +345,7 @@ GLOBAL RULES:
 - No line breaks, no numbering, no bullets, no quotes.
 - Each sentence MUST start with "Pt".
 - Do NOT use he/she/they/his/her/their.
+- Do NOT include the word "patient".
 - Do NOT include any proper names (people, agencies, facilities).
 - Do NOT invent diagnoses, PMH, or conditions not explicitly provided.
 
@@ -347,16 +361,19 @@ Sentences 7–8 (ONLY if needed to reach clarity): Additional objective or skill
 CLINICAL CONTEXT:
 - Primary impairments/problems: ${problems}
 
+STYLE EXAMPLE (do not copy verbatim; follow structure):
+Pt is a __ y/o __ who presents with __ and PMH of __. Pt is seen for PT initial evaluation, home safety assessment, DME assessment, HEP education, fall prevention education, AD use education, pain/edema management education as indicated, and PT POC/goal planning toward PLOF. Pt demonstrates deficits in bed mobility, transfers, gait, balance, and weakness contributing to high fall risk. Pt demonstrates decreased safety awareness and impaired balance reactions and Pt is at high fall risk. Pt requires skilled HH PT for TherEx, functional training, gait and balance training, and safety education. Continued skilled HH PT remains indicated.
+
 Now generate the assessment summary following ALL rules exactly.`.trim();
 
       // callOpenAIJSON is already required/available in ui.js for convert routes
       const parsed = await callOpenAIJSON(prompt, 12000);
-      let cs = (parsed && parsed.clinicalStatement ? String(parsed.clinicalStatement) : "").trim();
+let cs = (parsed && parsed.clinicalStatement ? String(parsed.clinicalStatement) : "").trim();
 
-      // Validate and do one repair attempt if needed
-      let v = validateHHSummary(cs);
-      if (!v.ok) {
-        const repairPrompt = `Return ONLY valid JSON with double quotes.
+// Validate and do one repair attempt if needed
+let v = validateHHSummary(cs);
+if (!v.ok) {
+  const repairPrompt = `Return ONLY valid JSON with double quotes.
 
 You must output exactly one key:
 - "clinicalStatement"
@@ -368,6 +385,7 @@ Rewrite the assessment summary so it passes ALL rules:
 - Output EXACTLY 6–8 sentences total, one paragraph, no line breaks, no numbering, no bullets, no quotes.
 - Each sentence MUST start with "Pt".
 - Do NOT use he/she/they/his/her/their.
+- Do NOT include the word "patient".
 - Sentence 6 MUST be exactly: Continued skilled HH PT remains indicated.
 - Do NOT include any proper names (people, agencies, facilities).
 - Do NOT invent diagnoses, PMH, or conditions not explicitly provided.
@@ -386,16 +404,22 @@ CLINICAL CONTEXT:
 BAD OUTPUT (for reference only; do not repeat):
 ${cs}`.trim();
 
-        // REPAIR PROMPT
-        const repaired = await callOpenAIJSON(repairPrompt, 12000);
-        cs = (repaired && repaired.clinicalStatement ? String(repaired.clinicalStatement) : "").trim();
-        v = validateHHSummary(cs);
-      }
+  const repaired = await callOpenAIJSON(repairPrompt, 12000);
+  cs = (repaired && repaired.clinicalStatement ? String(repaired.clinicalStatement) : "").trim();
+  v = validateHHSummary(cs);
+}
 
-      // If still invalid, return empty so we fail-soft to deterministic template
-      if (!v.ok) return "";
+// If still invalid, return deterministic fallback (never blank)
+if (!v.ok) {
+  const ageMatch = String(dictation || "").match(/(\d{1,3})\s*y\/o/i);
+  const age = ageMatch ? ageMatch[1] : "";
+  const gender = /\bfemale\b/i.test(dictation || "") ? "female" : (/\bmale\b/i.test(dictation || "") ? "male" : "");
+  const pmhMatch = String(dictation || "").match(/(?:^|\n)\s*(?:relevant\s*medical\s*history|pmh)\s*:\s*([^\n\r]+)/i);
+  const pmh = pmhMatch ? pmhMatch[1].trim() : "";
+  return buildHHSummaryFallback({ age, gender, pmh, problems });
+}
 
-      return cs;
+return cs;
 }
 
 
