@@ -515,7 +515,25 @@ let patchedText = finalText;
 
 try {
   const triggerHay = `${String(dictation || "")}\n${String(templateText || "")}`;
-  const wantsAssessmentGen = /\b(?:assessment\s*summary|clinical\s*statement|hh\s*pt\s*(?:initial\s*)?evaluation\s*(?:summary|assessment)|hh\s*pt\s*eval\s*(?:summary|assessment)|hh\s*pt\s*summary)\b[\s\S]*?\b(?:generate|write|give\s*me|create)\b[\s\S]*?\b(?:5\s*-\s*6|5\s*to\s*6|6|5)\s*sentences?\b/i.test(triggerHay);
+
+// Explicit triggers (user prompt)
+const explicitTrigger =
+  /\b(?:assessment\s*summary|clinical\s*statement|hh\s*pt\s*(?:initial\s*)?evaluation\s*(?:summary|assessment)|hh\s*pt\s*eval\s*(?:summary|assessment)|hh\s*pt\s*summary)\b[\s\S]*?\b(?:generate|write|give\s*me|create)\b[\s\S]*?\b(?:6|5\s*-\s*6|5\s*to\s*6)\s*sentences?\b/i
+    .test(triggerHay);
+
+// Auto-rewrite trigger: if Assessment Summary exists but is not in required format OR contains banned words
+const existingAsmtLine =
+  (triggerHay.match(/(?:^|\n)\s*assessment\s*summary\s*:\s*([^\n\r]+)/i) || [])[1] || "";
+
+const looksNonCompliant =
+  !!existingAsmtLine &&
+  (
+    /\b(the\s+patient|patient)\b/i.test(existingAsmtLine) ||
+    /\b(he|she|they|his|her|their)\b/i.test(existingAsmtLine) ||
+    !validateHHSummary(existingAsmtLine).ok
+  );
+
+const wantsAssessmentGen = explicitTrigger || looksNonCompliant;
 if (wantsAssessmentGen && process.env.OPENAI_API_KEY) {
     // If PT Diagnosis line exists, use it as a problems hint (non-PHI)
     const ptDxLine = (String(triggerHay).match(/(?:^|\n)\s*pt\s*diagnosis\s*:\s*([^\n\r]+)/i) || [])[1] || "";
@@ -590,11 +608,25 @@ let patchedText = finalText;
 
 try {
   const triggerHay = `${String(finalText || "")}\n${String(templateText || "")}`;
-  const wantsAssessmentGen =
-    /\b(?:assessment\s*summary|clinical\s*statement|hh\s*pt\s*(?:initial\s*)?evaluation\s*(?:summary|assessment)|hh\s*pt\s*eval\s*(?:summary|assessment)|hh\s*pt\s*summary)\b[\s\S]*?\b(?:generate|write|give\s*me|create)\b[\s\S]*?\b(?:5\s*-\s*6|5\s*to\s*6|6|5)\s*sentences?\b/i
-      .test(triggerHay);
+// Explicit triggers (user prompt)
+const explicitTrigger =
+  /\b(?:assessment\s*summary|clinical\s*statement|hh\s*pt\s*(?:initial\s*)?evaluation\s*(?:summary|assessment)|hh\s*pt\s*eval\s*(?:summary|assessment)|hh\s*pt\s*summary)\b[\s\S]*?\b(?:generate|write|give\s*me|create)\b[\s\S]*?\b(?:6|5\s*-\s*6|5\s*to\s*6)\s*sentences?\b/i
+    .test(triggerHay);
 
-  if (wantsAssessmentGen && process.env.OPENAI_API_KEY) {
+// Auto-rewrite trigger: if Assessment Summary exists but is not in required format OR contains banned words
+const existingAsmtLine =
+  (triggerHay.match(/(?:^|\n)\s*assessment\s*summary\s*:\s*([^\n\r]+)/i) || [])[1] || "";
+
+const looksNonCompliant =
+  !!existingAsmtLine &&
+  (
+    /\b(the\s+patient|patient)\b/i.test(existingAsmtLine) ||
+    /\b(he|she|they|his|her|their)\b/i.test(existingAsmtLine) ||
+    !validateHHSummary(existingAsmtLine).ok
+  );
+
+const wantsAssessmentGen = explicitTrigger || looksNonCompliant;
+if (wantsAssessmentGen && process.env.OPENAI_API_KEY) {
     const ptDxLine = (triggerHay.match(/(?:^|\n)\s*pt\s*diagnosis\s*:\s*([^\n\r]+)/i) || [])[1] || "";
     const problemsHint = ptDxLine ? ptDxLine.replace(/[^\x20-\x7E]/g, "").trim() : "";
 
