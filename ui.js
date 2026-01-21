@@ -16,21 +16,21 @@ const { callOpenAIText, callOpenAIImageJSON } = require("./bots/openaiClient");
 
 // OpenAI JSON helper: prefer root openaiClient if present, else use bots/openaiClient.
 // If neither exposes callOpenAIJSON, fall back to parsing callOpenAIText output.
-let callOpenAIJSON = null;
+let _callOpenAIJSON = null;
 try {
   // Some builds keep this at repo root
-  ({ callOpenAIJSON } = require("./openaiClient"));
+  ({ callOpenAIJSON: _callOpenAIJSON } = require("./openaiClient"));
 } catch (e1) {
   try {
-    ({ callOpenAIJSON } = require("./bots/openaiClient"));
+    ({ callOpenAIJSON: _callOpenAIJSON } = require("./bots/openaiClient"));
   } catch (e2) {
-    callOpenAIJSON = null;
+    _callOpenAIJSON = null;
   }
 }
 
 async function callOpenAIJSONSafe(prompt, timeoutMs = 12000) {
-  if (typeof callOpenAIJSON === "function") {
-    return await callOpenAIJSONSafe(prompt, timeoutMs);
+  if (typeof _callOpenAIJSON === "function") {
+    return await _callOpenAIJSON(prompt, timeoutMs);
   }
   // Fallback: use text call and parse JSON
   const raw = await callOpenAIText(prompt, timeoutMs);
@@ -47,6 +47,7 @@ async function callOpenAIJSONSafe(prompt, timeoutMs = 12000) {
     throw new Error("callOpenAIJSONSafe: unable to parse JSON from callOpenAIText output");
   }
 }
+
 
 //
 // EXPIRATION CHECK – blocks use after Feb 1, 2026
