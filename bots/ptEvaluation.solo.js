@@ -28,6 +28,12 @@ function logErr(...args) {
 // Backwards-safe alias if you want to keep calling logErrSafe in other places
 function logErrSafe(...args) { return logErr(...args); }
 
+
+// =========================
+// Updated: 2026-01-20
+// =========================
+
+
 // =========================
 // SOLO BOT FILE (no ./common.js dependency)
 // Generated from common.js + bot-specific logic
@@ -57,6 +63,88 @@ try {
 require("dotenv").config({
   path: path.resolve(__dirname, "../.env"),
 });
+
+const PT_EVALUATION_TEMPLATE = `Medical Diagnosis:
+PT Diagnosis:
+Relevant Medical History:
+
+Prior Level of Function:
+Patient’s Goals:
+Precautions:
+
+Subjective:
+
+Vital Signs
+Temp:
+Temp Type: Temporal
+BP:  /
+Heart Rate:
+Respirations:
+Comments:
+
+Pain Assessment
+Pain: Yes/No
+Primary Location Other:
+Intensity (0–10):
+Increased by:
+Relieved by:
+Interferes with:
+
+Edema: absent/present
+
+Living / Social Support
+Patient Lives:
+Assistance is Available:
+Current assistance types:
+Steps/Stairs present: Yes/No
+Steps Count:
+No hazards identified: Yes/No
+Evaluation of Living Situation:
+
+Durable Medical Equipment
+DME other:
+
+Neuro / Physical Assessment
+Orientation:
+Speech:
+Vision:
+Hearing:
+Skin:
+Muscle Tone:
+Coordination:
+Sensation:
+Endurance:
+Posture:
+
+Functional Status
+Bed Mobility:
+Transfers:
+Gait:
+Stairs:
+Weight Bearing Status:
+
+Response to tx: Bed mobility:
+Response to tx: Transfers:
+Response to tx: Gait:
+
+Gross ROM for UE:
+Gross strength for UE:
+Gross ROM for LE:
+Gross strength for LE:
+
+Goals:
+1)
+2)
+3)
+4)
+5)
+6)
+
+Frequency:
+Plan for next visit:
+
+Assessment Summary: Generate 6 sentences for HH PT initial evaluation noting impairments, fall risk, skilled need, interventions, and medical necessity per POC.`;
+
 
 /* =========================
  * ENV
@@ -1980,7 +2068,7 @@ async function extractNoteDataFromAI(aiNotes, visitType = "Evaluation") {
     return base;
   }
   
-
+  
   // If the note already has an explicit Assessment Summary / Clinical Statement block, prefer that and skip OpenAI
   // UNLESS it is clearly an instruction like "Generate 6 sentences...".
   const looksLikeInstruction = (s) => /\b(generate|write|create)\b[\s\S]*\b(\d+\s*sentences?|summary)\b/i.test(String(s || ""));
@@ -1990,7 +2078,7 @@ async function extractNoteDataFromAI(aiNotes, visitType = "Evaluation") {
   if (looksLikeInstruction(base.clinicalStatement)) {
     base.clinicalStatement = ""; // force OpenAI generation
   }
-
+  
   // Sanitize potential name-like tokens before sending to OpenAI (PHI guard may block on name_value).
   function stripNameLikeTokens(x) {
     let t = String(x || "");
@@ -2007,12 +2095,12 @@ async function extractNoteDataFromAI(aiNotes, visitType = "Evaluation") {
     });
     return t.replace(/\s+/g, " ").trim();
   }
-
+  
   // Extract patient context (use only provided info)
   const ageTxt = (text.match(/(\d{1,3})\s*y\/o/i) || [])[1] || "___";
   const genderTxt = /\bfemale\b/i.test(text) ? "female" : (/\bmale\b/i.test(text) ? "male" : "___");
   const pmhTxt = stripNameLikeTokens(base.relevantHistory || "___") || "___";
-
+  
   // Problems/impairments: prefer instruction after Assessment Summary line, otherwise infer lightly
   let probsTxt = "";
   const instrLine = (text.match(/(?:^|\n)\s*assessment summary\s*:\s*([^\n\r]+)/i) || [])[1] || "";
@@ -2030,9 +2118,9 @@ async function extractNoteDataFromAI(aiNotes, visitType = "Evaluation") {
     probsTxt = Array.from(new Set(hits)).join(", ") || "___";
   }
   probsTxt = stripNameLikeTokens(probsTxt) || "___";
-
+  
   const adTxt = stripNameLikeTokens((base.func && base.func.gaitAD) || (base.dme && base.dme.other) || "AD as indicated") || "AD as indicated";
-
+  
   const prompt = `Return ONLY valid JSON with double quotes.
 
 You must output exactly one key:
@@ -2063,7 +2151,7 @@ REQUIRED CONTENT BY SENTENCE:
 6) Pt closing sentence: continued skilled HH PT is medically necessary per POC to improve safety, mobility, and ADL performance and progress toward PLOF.
 
 Now generate the 6 sentences.`.trim();
-
+  
   try {
     const safePrompt = (typeof scrubPHI === "function") ? scrubPHI(prompt) : prompt;
     // Extra safety: if detectPHI exists and still finds PHI, fail closed and keep copy-through
@@ -3739,40 +3827,40 @@ async function fillFrequencyAndDate(context, data, visitDate) {
         // No dialog captured. Still allow time for any inline validation to render.
         await wait(1000);
       }
-
+  
       // Check for inline page validation/errors after save
       await assertNoOnPageErrors(pageOrFrame);
-
+  
       // Extra settle time for Kinnser to persist
       await wait(1500);
       return true;
     }
-
+  
     return false;
   }
-
+  
   // Try on main scope/page
   if (await tryClick(scope, "scope")) return true;
-
+  
   // Try all iframes (common in Kinnser/WellSky)
   const page = normalizeScope(scope);
   const frames = typeof page.frames === "function" ? page.frames() : [];
   for (const fr of frames) {
     if (await tryClick(fr, "frame")) return true;
   }
-
+  
   throw new Error("SAVE_BUTTON_NOT_FOUND");
-}
-
-
-async function postSaveAudit(context, expected = {}) {
+  }
+  
+  
+  async function postSaveAudit(context, expected = {}) {
   // Verifies that the visit actually persisted before marking job completed.
   // Use minimal, high-signal fields to avoid format-related false negatives.
   const frame = await findTemplateScope(context);
   if (!frame) throw new Error("POST_SAVE_AUDIT_FAIL: template scope not found");
-
+  
   const expDate = expected.visitDate ? normalizeDateToMMDDYYYY(expected.visitDate) : "";
-
+  
   async function readVal(selectors) {
     const loc = await firstVisibleLocator(frame, selectors);
     if (!loc) return "";
@@ -3782,15 +3870,15 @@ async function postSaveAudit(context, expected = {}) {
     }
     return (await loc.inputValue().catch(() => "")).trim();
   }
-
+  
   const gotDate = await readVal(["#frm_visitdate", "input[name^='frm_visitdate']"]);
   const gotTimeIn = await readVal(["#frm_timein", "input[name^='frm_timein']"]);
   const gotTimeOut = await readVal(["#frm_timeout", "input[name^='frm_timeout']"]);
-
+  
   // Narrative signal: Medical Dx or Clinical Statement should not be empty in typical evals.
   const gotMedDx = await readVal(["#frm_MedDiagText"]);
   const gotEASI1 = await readVal(["#frm_EASI1"]);
-
+  
   const failures = [];
   if (!gotDate) failures.push("visitDate empty");
   if (expDate && gotDate && gotDate != expDate) failures.push(`visitDate mismatch (expected ${expDate}, got ${gotDate})`);
@@ -3930,4 +4018,4 @@ async function runPtEvaluationBot({
   }
 }
 
-module.exports = { runPtEvaluationBot };
+module.exports = { runPtEvaluationBot, PT_EVALUATION_TEMPLATE };
