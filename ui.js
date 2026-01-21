@@ -238,6 +238,15 @@ app.post("/run-automation", async (req, res) => {
 // - For multi-line blocks like "Subjective:" it captures until next Heading:
 // - Preserves template headings/order; never invents new headings.
 // ------------------------------------------------------------
+function stripMarkdownNoise(s) {
+  let t = String(s || "");
+  // remove bold markers like **Heading:**
+  t = t.replace(/\*\*/g, "");
+  // normalize smart quotes
+  t = t.replace(/’/g, "'");
+  return t;
+}
+
 function simpleFillTemplate(dictationText, templateText) {
   const dictation = String(dictationText || "").replace(/\r\n/g, "\n");
   const template = String(templateText || "").replace(/\r\n/g, "\n");
@@ -626,7 +635,52 @@ if (wantsAssessmentGen && process.env.OPENAI_API_KEY) {
 
 
 
-    return res.json({ templateText: patchedText });
+    // ------------------------------------------------------------
+// Final enforcement: if OUTPUT Assessment Summary is non-compliant,
+// overwrite it with generated/validated (or fallback) summary.
+// This catches cases where dictation/template had markdown (**) or
+// upstream OpenAI conversion inserted a noncompliant summary.
+// ------------------------------------------------------------
+try {
+  const outText = stripMarkdownNoise(patchedText || "");
+  const asmtMatch = outText.match(/(?:^|\n)\s*Assessment Summary\s*:\s*([^\n\r]+)/i);
+  const asmtLine = asmtMatch ? asmtMatch[1].trim() : "";
+  const spec = getDesiredSentenceSpec(`${String(dictation || "")}\n${String(templateText || "")}`);
+
+  if (asmtLine) {
+    const vOut = validateHHSummary(asmtLine, spec);
+    if (!vOut.ok) {
+      const triggerHay2 = stripMarkdownNoise(`${String(dictation || "")}\n${String(templateText || "")}`);
+
+      let cs = "";
+      if (process.env.OPENAI_API_KEY) {
+        cs = await generateHHEvalAssessmentSummary({ dictation: triggerHay2 });
+      }
+      if (!cs) {
+        const ageMatch = String(triggerHay2).match(/(\d{1,3})\s*y\/o/i);
+        const age = ageMatch ? ageMatch[1] : "";
+        const gender = /\bfemale\b/i.test(triggerHay2) ? "female" : (/\bmale\b/i.test(triggerHay2) ? "male" : "");
+        const pmhMatch = String(triggerHay2).match(/(?:^|\n)\s*(?:relevant\s*medical\s*history|pmh)\s*:\s*([^\n\r]+)/i);
+        const pmh = pmhMatch ? pmhMatch[1].trim() : "";
+        const mdMatch = String(triggerHay2).match(/(?:^|\n)\s*medical\s*diagnosis\s*:\s*([^\n\r]+)/i);
+        const medicalDx = mdMatch ? mdMatch[1].trim() : "";
+        cs = buildHHSummaryFallback({ age, gender, medicalDx, pmh, problems: "" });
+      }
+
+      if (cs) {
+        // Replace in patchedText (keep original formatting around headings)
+        patchedText = String(patchedText || "").replace(
+          /(^|\n)(\*\*)?Assessment Summary(\*\*)?\s*:\s*([^\n\r]*)/i,
+          (m0, p1) => `${p1}Assessment Summary: ${cs}`
+        );
+      }
+    }
+  }
+} catch (e) {
+  console.warn("[convert-dictation] final enforcement skipped:", (e && e.message) ? e.message : String(e));
+}
+
+return res.json({ templateText: patchedText });
   } catch (e) {
     return res.status(500).json({ error: e?.message || "convert-dictation failed" });
   }
