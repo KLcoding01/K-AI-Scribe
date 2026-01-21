@@ -273,21 +273,27 @@ function simpleFillTemplate(dictationText, templateText) {
 // ------------------------------------------------------------
     // OpenAI-only: generate 6-sentence Medicare-justifiable HH PT Eval Assessment Summary
     // Triggered ONLY when the user explicitly prompts via "Assessment Summary:" containing "Generate 6 sentences"
-function buildHHSummaryFallback({ age = "", gender = "", pmh = "", problems = "" }) {
+function buildHHSummaryFallback({ age = "", gender = "", medicalDx = "", pmh = "", problems = "" }) {
   const a = String(age || "").trim();
   const g = String(gender || "").trim();
+  const dx = String(medicalDx || "").trim();
   const p = String(pmh || "").trim();
   const prob = String(problems || "").trim() || "muscle weakness, impaired functional mobility, and high fall risk";
 
   const demo = (a && g) ? `${a} y/o ${g}` : (a ? `${a} y/o` : (g ? `${g}` : ""));
-  const s1 = `Pt is ${demo ? "a " + demo + " " : "a "}who presents with primary impairments of ${prob}${p ? ", with PMH of " + p : ""}.`.replace(/\s+/g, " ").trim();
+  const dxPhrase = dx ? dx : prob;
+  const pmhPhrase = p ? ` which consists of PMH of ${p}` : "";
+
+  const s1 = `Pt is ${demo ? "a " + demo + " " : "a "}who presents with HNP of ${dxPhrase}${pmhPhrase}.`.replace(/\s+/g, " ").trim();
   const s2 = `Pt is seen for PT initial evaluation, home safety assessment, DME assessment, HEP training/education, fall safety precautions and fall prevention education, education on proper use of AD, education on pain and edema management as indicated, and PT POC/goal planning to return toward PLOF.`;
   const s3 = `Pt demonstrates objective deficits including weakness, impaired balance, impaired gait, and impaired functional mobility with difficulty in bed mobility, transfers, and gait contributing to high fall risk.`;
   const s4 = `Pt demonstrates decreased safety awareness and impaired balance reactions with environmental risk factors in the home, and Pt is at high fall risk.`;
   const s5 = `Pt requires skilled HH PT for TherEx, functional training, gait and balance training, and safety education with clinical monitoring and progression to reduce fall and injury risk and improve ADL performance.`;
   const s6 = `Continued skilled HH PT remains indicated.`;
+
   return [s1, s2, s3, s4, s5, s6].join(" ");
 }
+
 
 function validateHHSummary(text) {
   const t = String(text || "").trim();
@@ -416,7 +422,9 @@ if (!v.ok) {
   const gender = /\bfemale\b/i.test(dictation || "") ? "female" : (/\bmale\b/i.test(dictation || "") ? "male" : "");
   const pmhMatch = String(dictation || "").match(/(?:^|\n)\s*(?:relevant\s*medical\s*history|pmh)\s*:\s*([^\n\r]+)/i);
   const pmh = pmhMatch ? pmhMatch[1].trim() : "";
-  return buildHHSummaryFallback({ age, gender, pmh, problems });
+  const mdMatch = String(dictation || "").match(/(?:^|\n)\s*medical\s*diagnosis\s*:\s*([^\n\r]+)/i);
+  const medicalDx = mdMatch ? mdMatch[1].trim() : "";
+  return buildHHSummaryFallback({ age, gender, medicalDx, pmh, problems });
 }
 
 return cs;
