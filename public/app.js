@@ -303,83 +303,73 @@ Education provided to improve postural awareness.
 Assessment:
 5 sentences HH PT tx focusing on TherEx, TherAct, functional safety training, HEP review, and gait training. Tx tolerated fairly. Pt continues to demonstrate weakness and impaired balance with high fall risk. Continued skilled HH PT remains indicated to progress toward goals and improve functional independence.
 `,
-    pt_eval_default: `Medical Diagnosis: 
-
-Relevant Medical History: 
-
-Subjective: Pt agreeable to PT evaluation at this time.
-
-Prior Level of Function: Indep with mobility/gait and ADLs
-
-Patient Goals: To improve strengthen, functional endurance/activity tolerance, decrease fall risk.
-
-Vital Signs
-Temp: 
+    pt_eval_default: `Medical Diagnosis:
+PT Diagnosis: Muscle weakness, Functional Mobility Deficit, Impaired Gait/Balance, Impaired Activity Tolerance
+Relevant Medical History:
+Prior Level of Function: Needing assistance from family and ADLs.
+Patient’s Goals: To improve mobility, strength, activity tolerance, decrease fall risk, and improve quality of life
+Precautions: Fall risk 
+Patient Lives: With family in home
+Assistance is Available: Around the clock
+Current assistance types: Family
+Steps/Stairs present: Yes/No
+Steps Count:
+No hazards identified: Yes/No
+Evaluation of Living Situation: Pt lives in a SSH with family providing care around the clock. The home has hard surface flooring, bath tub/step in shower, 4 steps at entrance with rail. No hazard found. 
+Subjective: Pt agreeable to PT evaluation and treatment.
+Temp:
 Temp Type: Temporal
-BP: 
-Heart Rate: 
+BP: /
+Heart Rate:
 Respirations: 18
-Comments: Pt currently symptom-free with no adverse reactions noted. Cleared to continue with PT as planned.
+Comments: Pt is currently symptom-free and demonstrates no adverse reactions. Cleared to continue with physical therapy as planned. 
+Pain: Yes/No
+Primary Location Other:
+Intensity (0–10):
+Increased by:
+Relieved by:
+Interferes with:
+Edema: absent/present
+Edema Type:
+Pitting Grade:
+Location:
+DME other:
 
-Living Situation: With other person
-
-Assistance Available: around the clock 
-
-Current assistance types: Family/Spouse
-
-Steps/Stairs present: 
-
-Steps Count: 
-
-Safety Narrative: Pt lives in a SSH with family providing care around the clock. The home has hard surface flooring, bath tub/step in shower. No hazard found.
-
-Pain Assessment
-Pain: no  
-Location Other:  
-Intensity (0–10):  
-Increased by: Movement, standing, transfers.
-Relieved by: Rest, pain meds
-Interferes with: Functional mobility
-
-Neuro / Physical Assessment
-Orientation: AOx3, forgetfulness
-Speech: Unremarkable
+Orientation: AOx3, forgetful
+Speech: Unremarkable 
 Vision: Unremarkable
 Hearing: Unremarkable
-Skin: Intact 
+Skin: Intact
 Muscle Tone: Muscle weakness
-Coordination: Fair-
+Coordination: Fair
 Sensation: NT
 Endurance: Fair-
-Posture: Forward head, rounded shoulders, slouched posture, increased mid thoracic kyphosis
-
-Edema: absent
-
-Functional Status
-Bed Mobility: Min A 
-
-Transfers: Mod A 
-
-Gait: Min A 
-
-Durable Medical Equipment
-DME other: 
-
-Assessment Summary: 
-[AI-generated – 6 sentences for HH PT Evaluation for Pt is a 74 y/o female, generalized weakness, impaired bed mobility, transfers, gait, and balance. Identify high fall risk and justify skilled HH PT for functional training, safety education, fall prevention, and reduction of fall risk.]
-
-Goals
+Posture: Forward head lean, round shoulder, increased mid T-spine kyphosis 
+Bed Mobility: SBA
+Transfers: SBA
+Gait: SBA x 50ft with FWW
+Stairs:
+Weight Bearing Status: FWB
+Response to tx: Bed mobility: Forgetfulness, improper sequence/mechanics, decrease activity tolerance, weakness, decrease safety awareness.
+Response to tx: Transfers: Forgetfulness, improper sequence/mechanics, decrease activity tolerance, weakness, decrease safety awareness. 
+Response to tx: Gait: Forgetfulness, improper sequence/mechanics, decrease activity tolerance, weakness, decrease safety awareness. Gait Analysis: Decreased step/stride length, slow cadence, wide BOS, forward trunk lean, decrease walking tolerance, decrease safety awareness and surrounding environment awareness. 
+Gross ROM for UE:
+Gross strength for UE:
+Gross ROM for LE:
+Gross strength for LE:
+ 
 Short-Term Goals (STG):
-Pt will demonstrate safe bed mobility with Indep within 4 visits.
-Pt will demonstrate safe transfers with Indep within 4 visits.
+- Pt will perform bed mobility with Indep using appropriate sequencing and safety strategies.
+- Pt will perform transfers bed from/to chair/toilet with Indep using appropriate AD and safe mechanics.
+(within a total of 4 visits)
 
 Long-Term Goals (LTG):
-Pt will ambulate 150 ft using FWW with Indep within 7 visits.
-Pt will demonstrate Indep with HEP, fall/safety precautions, improved safety awareness, and improved activity tolerance with ADLs within 7 visits.
-Pt will improve B LE strength by ≥0.5 MMT grade to enhance functional mobility within 7 visits.
-Pt will improve Tinetti Poma score to 20/28 or more to decrease fall risk within 7 visits.
-
-Frequency: 1w1, 2w3`
+- Pt will ambulate 150 ft with FWW with Indep to improve household mobility and reduce fall risk.
+- Pt/CG will be independent with HEP and fall-prevention strategies with safe technique and pacing.
+- Pt will improve Tinetti Poma score to 20/28 or more to decrease fall risk. 
+(within a total of 7 visits)
+Frequency: 1w1, 2w3
+Assessment Summary: Generate 6 sentences for HH PT initial evaluation noting impairments, fall risk, skilled need, interventions, and medical necessity per POC.`
   };
 
   function initTemplates() {
