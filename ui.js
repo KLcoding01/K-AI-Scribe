@@ -328,7 +328,44 @@ function buildHHSummaryFallback({ age = "", gender = "", medicalDx = "", pmh = "
 
 
 
-function validateHHSummary(text) {
+function getDesiredSentenceSpec(hay) {
+  const t = String(hay || "");
+
+  // Default: 6 sentences
+  let min = 6;
+  let max = 6;
+
+  // Range like "5-9 sentences" or "5 to 9 sentences"
+  const range = t.match(/\b(\d{1,2})\s*(?:-|to)\s*(\d{1,2})\s*sentences?\b/i);
+  if (range) {
+    min = parseInt(range[1], 10);
+    max = parseInt(range[2], 10);
+  } else {
+    // Exact like "exactly 7 sentences"
+    const exact = t.match(/\bexactly\s*(\d{1,2})\s*sentences?\b/i);
+    if (exact) {
+      min = max = parseInt(exact[1], 10);
+    } else {
+      // Loose like "7 sentences"
+      const single = t.match(/\b(\d{1,2})\s*sentences?\b/i);
+      if (single) {
+        min = max = parseInt(single[1], 10);
+      }
+    }
+  }
+
+  // Clamp to sane bounds
+  if (!Number.isFinite(min)) min = 6;
+  if (!Number.isFinite(max)) max = 6;
+  min = Math.max(5, Math.min(9, min));
+  max = Math.max(5, Math.min(9, max));
+  if (max < min) [min, max] = [max, min];
+
+  // We always require the closing sentence, so practical minimum is 5 (supports 5 by combining skilled need into sentence 4).
+  return { min, max };
+}
+
+function validateHHSummary(text, spec = { min: 6, max: 6 }) {
   const t = String(text || "").trim();
   if (!t) return { ok: false, reason: "empty" };
   if (/\n/.test(t)) return { ok: false, reason: "contains line breaks" };
@@ -336,22 +373,40 @@ function validateHHSummary(text) {
   if (/\b(he|she|they|his|her|their)\b/i.test(t)) return { ok: false, reason: "contains pronouns" };
 
   const sentences = t.split(/(?<=[.!?])\s+/).map(s => s.trim()).filter(Boolean);
-  if (sentences.length !== 6) return { ok: false, reason: `sentence count ${sentences.length} (need exactly 6)` };
+  const n = sentences.length;
 
-  const starters = [
-    /^Pt\s+is\b/,
-    /^Pt\s+underwent\b/,
-    /^Objective\s+findings\b/,
-    /^Pt\s+demonstrates\b/,
-    /^Skilled\s+HH\s+PT\b/,
-  ];
+  const min = Number(spec?.min || 6);
+  const max = Number(spec?.max || 6);
 
-  for (let i = 0; i < 5; i++) {
-    if (!starters[i].test(sentences[i])) return { ok: false, reason: `sentence ${i+1} has wrong starter` };
+  if (n < min || n > max) return { ok: false, reason: `sentence count ${n} (need ${min}-${max})` };
+
+  // Required fixed last sentence
+  if (sentences[n - 1] !== "Continued skilled HH PT remains indicated.") {
+    return { ok: false, reason: "last sentence not exact required string" };
   }
 
-  if (sentences[5] !== "Continued skilled HH PT remains indicated.") {
-    return { ok: false, reason: "sentence 6 not exact required string" };
+  // Required starters
+  if (!/^Pt\s+is\b/.test(sentences[0] || "")) return { ok: false, reason: "sentence 1 must start with 'Pt is'" };
+  if (!/^Pt\s+underwent\b/.test(sentences[1] || "")) return { ok: false, reason: "sentence 2 must start with 'Pt underwent'" };
+  if (!/^Objective\s+findings\b/.test(sentences[2] || "")) return { ok: false, reason: "sentence 3 must start with 'Objective findings'" };
+  if (!/^Pt\s+demonstrates\b/.test(sentences[3] || "")) return { ok: false, reason: "sentence 4 must start with 'Pt demonstrates'" };
+
+  if (n == 5) {
+    // For 5 sentences: sentence 4 must also include skilled need language
+    const s4 = sentences[3] || "";
+    if (!/\bskilled\s+hh\s+pt\b/i.test(s4) || !/\b(medically\s+necessary|medical\s+necessity)\b/i.test(s4)) {
+      return { ok: false, reason: "5-sentence mode requires skilled need/medical necessity in sentence 4" };
+    }
+    return { ok: true, reason: "ok" };
+  }
+
+  // For 6-9 sentences:
+  // sentence 5 must start with Skilled HH PT (medical necessity line)
+  if (!/^Skilled\s+HH\s+PT\b/.test(sentences[4] || "")) return { ok: false, reason: "sentence 5 must start with 'Skilled HH PT'" };
+
+  // Any optional sentences between sentence 6 and the last must start with Pt
+  for (let i = 5; i < n - 1; i++) {
+    if (!/^Pt\b/.test(sentences[i])) return { ok: false, reason: `sentence ${i+1} must start with 'Pt'` };
   }
 
   return { ok: true, reason: "ok" };
@@ -359,8 +414,10 @@ function validateHHSummary(text) {
 
 
 
+
 async function generateHHEvalAssessmentSummary({ dictation, problemsHint = "" }) {
       const text = String(dictation || "").trim();
+      const sentenceSpec = getDesiredSentenceSpec(text);
       const hint = String(problemsHint || "").trim();
 
       // Extract a lightweight problems string from dictation (do NOT include names/PHI)
@@ -383,20 +440,22 @@ You must output exactly one key:
 
 GLOBAL RULES:
 - Write an Assessment Summary for a Medicare HOME HEALTH PHYSICAL THERAPY INITIAL EVALUATION.
-- Output EXACTLY 6 sentences total, in ONE paragraph.
+- Sentence count: output between ${sentenceSpec.min} and ${sentenceSpec.max} sentences total.
+- Output the requested number of sentences (5–9) based on the user prompt; if none is specified, output 6 sentences., in ONE paragraph.
 - No line breaks, no numbering, no bullets, no quotes.
 - Do NOT use he/she/they/his/her/their.
 - Do NOT include the word "patient".
 - Do NOT include any proper names (people, agencies, facilities).
 - Do NOT invent diagnoses, PMH, or conditions not explicitly provided.
 
-REQUIRED 6-SENTENCE FORMAT (follow strictly; must match these sentence starters):
+REQUIRED SENTENCE FORMAT (follow strictly; must match these sentence starters):
 1) Must start with: "Pt is" and include demographics (age/sex ONLY if explicitly provided) + PMH (use ONLY PMH provided; do not add).
 2) Must start with: "Pt underwent" and include PT initial evaluation + home safety assessment + DME assessment + initiation of HEP education + fall prevention + proper AD use education + pain/edema management education as indicated + establish PT POC/goals toward PLOF.
 3) Must start with: "Objective findings" and include deficits in bed mobility, transfers, gait with AD, balance reactions, generalized weakness, and high fall risk linkage with ADL limitations.
 4) Must start with: "Pt demonstrates" and include decreased safety awareness/balance reactions + home/environment risk statement (high fall risk).
 5) Must start with: "Skilled HH PT" and include Medicare medical necessity describing TherEx, functional mobility training, gait and balance training, and skilled safety education to improve function and reduce fall/injury risk.
-6) Must be EXACTLY: Continued skilled HH PT remains indicated.
+Last sentence must be EXACTLY: Continued skilled HH PT remains indicated.
+Optional extra sentences (if >6 total): any additional sentences before the last must start with "Pt" and add non-redundant objective or skilled-need details.
 
 CLINICAL CONTEXT (use only what is provided):
 - Primary impairments/problems: ${problems}
@@ -411,7 +470,7 @@ Now generate the assessment summary following ALL rules exactly.`.trim();
 let cs = (parsed && parsed.clinicalStatement ? String(parsed.clinicalStatement) : "").trim();
 
 // Validate and do one repair attempt if needed
-let v = validateHHSummary(cs);
+let v = validateHHSummary(cs, sentenceSpec);
 if (!v.ok) {
   const repairPrompt = `Return ONLY valid JSON with double quotes.
 
@@ -422,11 +481,11 @@ The previous output FAILED validation for this reason: ${v.reason}
 
 Rewrite the assessment summary so it passes ALL rules:
 - Medicare HOME HEALTH PHYSICAL THERAPY INITIAL EVALUATION
-- Output EXACTLY 6–8 sentences total, one paragraph, no line breaks, no numbering, no bullets, no quotes.
+- Output ${sentenceSpec.min}–${sentenceSpec.max} sentences total, one paragraph, no line breaks, no numbering, no bullets, no quotes.
 - Each sentence MUST start with "Pt".
 - Do NOT use he/she/they/his/her/their.
 - Do NOT include the word "patient".
-- Sentence 6 MUST be exactly: Continued skilled HH PT remains indicated.
+- The last sentence MUST be exactly: Continued skilled HH PT remains indicated.
 - Do NOT include any proper names (people, agencies, facilities).
 - Do NOT invent diagnoses, PMH, or conditions not explicitly provided.
 - Follow this sentence structure:
@@ -446,7 +505,7 @@ ${cs}`.trim();
 
   const repaired = await callOpenAIJSONSafe(repairPrompt, 12000);
   cs = (repaired && repaired.clinicalStatement ? String(repaired.clinicalStatement) : "").trim();
-  v = validateHHSummary(cs);
+  v = validateHHSummary(cs, sentenceSpec);
 }
 
 // If still invalid, return deterministic fallback (never blank)
@@ -518,7 +577,7 @@ try {
 
 // Explicit triggers (user prompt)
 const explicitTrigger =
-  /\b(?:assessment\s*summary|clinical\s*statement|hh\s*pt\s*(?:initial\s*)?evaluation\s*(?:summary|assessment)|hh\s*pt\s*eval\s*(?:summary|assessment)|hh\s*pt\s*summary)\b[\s\S]*?\b(?:generate|write|give\s*me|create)\b[\s\S]*?\b(?:6|5\s*-\s*6|5\s*to\s*6)\s*sentences?\b/i
+  /\b(?:assessment\s*summary|clinical\s*statement|hh\s*pt\s*(?:initial\s*)?evaluation\s*(?:summary|assessment)|hh\s*pt\s*eval\s*(?:summary|assessment)|hh\s*pt\s*summary)\b[\s\S]*?\b(?:generate|write|create|compose|draft|build|produce|summarize|summarise|give\s*me|make|formulate|construct)\b[\s\S]*?\b(?:6|5\s*-\s*6|5\s*to\s*6)\s*sentences?\b/i
     .test(triggerHay);
 
 // Auto-rewrite trigger: if Assessment Summary exists but is not in required format OR contains banned words
@@ -530,7 +589,7 @@ const looksNonCompliant =
   (
     /\b(the\s+patient|patient)\b/i.test(existingAsmtLine) ||
     /\b(he|she|they|his|her|their)\b/i.test(existingAsmtLine) ||
-    !validateHHSummary(existingAsmtLine).ok
+    !validateHHSummary(existingAsmtLine, getDesiredSentenceSpec(triggerHay)).ok
   );
 
 const wantsAssessmentGen = explicitTrigger || looksNonCompliant;
@@ -610,7 +669,7 @@ try {
   const triggerHay = `${String(finalText || "")}\n${String(templateText || "")}`;
 // Explicit triggers (user prompt)
 const explicitTrigger =
-  /\b(?:assessment\s*summary|clinical\s*statement|hh\s*pt\s*(?:initial\s*)?evaluation\s*(?:summary|assessment)|hh\s*pt\s*eval\s*(?:summary|assessment)|hh\s*pt\s*summary)\b[\s\S]*?\b(?:generate|write|give\s*me|create)\b[\s\S]*?\b(?:6|5\s*-\s*6|5\s*to\s*6)\s*sentences?\b/i
+  /\b(?:assessment\s*summary|clinical\s*statement|hh\s*pt\s*(?:initial\s*)?evaluation\s*(?:summary|assessment)|hh\s*pt\s*eval\s*(?:summary|assessment)|hh\s*pt\s*summary)\b[\s\S]*?\b(?:generate|write|create|compose|draft|build|produce|summarize|summarise|give\s*me|make|formulate|construct)\b[\s\S]*?\b(?:6|5\s*-\s*6|5\s*to\s*6)\s*sentences?\b/i
     .test(triggerHay);
 
 // Auto-rewrite trigger: if Assessment Summary exists but is not in required format OR contains banned words
@@ -622,7 +681,7 @@ const looksNonCompliant =
   (
     /\b(the\s+patient|patient)\b/i.test(existingAsmtLine) ||
     /\b(he|she|they|his|her|their)\b/i.test(existingAsmtLine) ||
-    !validateHHSummary(existingAsmtLine).ok
+    !validateHHSummary(existingAsmtLine, getDesiredSentenceSpec(triggerHay)).ok
   );
 
 const wantsAssessmentGen = explicitTrigger || looksNonCompliant;
