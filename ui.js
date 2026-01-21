@@ -13,6 +13,8 @@ const { runKinnserBot } = require("./index.js");
 
 
 const { callOpenAIText, callOpenAIImageJSON } = require("./bots/openaiClient");
+
+const { callOpenAIJSON } = require("./openaiClient");
 //
 // EXPIRATION CHECK – blocks use after Feb 1, 2026
 //
