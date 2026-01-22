@@ -28,12 +28,6 @@ function logErr(...args) {
 // Backwards-safe alias if you want to keep calling logErrSafe in other places
 function logErrSafe(...args) { return logErr(...args); }
 
-
-// =========================
-// Updated: 2026-01-20
-// =========================
-
-
 // =========================
 // SOLO BOT FILE (no ./common.js dependency)
 // Generated from common.js + bot-specific logic
@@ -46,105 +40,9 @@ const { chromium } = require("playwright");
 const path = require("path");
 const { callOpenAIJSON } = require("./openaiClient");
 
-// PHI scrubber helpers (optional). We scrub the prompt we send to OpenAI to avoid
-// openaiClient's fail-closed PHI gate blocking the request/response.
-let scrubPHI = null;
-let detectPHI = null;
-try {
-  const phi = require("./phiScrubber");
-  scrubPHI = typeof phi.scrubPHI === "function" ? phi.scrubPHI : null;
-  detectPHI = typeof phi.detectPHI === "function" ? phi.detectPHI : null;
-} catch {
-  // If phiScrubber.js is not present in this build, proceed without it.
-}
-
-
-
 require("dotenv").config({
   path: path.resolve(__dirname, "../.env"),
 });
-
-const PT_EVALUATION_TEMPLATE = `Medical Diagnosis:
-PT Diagnosis:
-Relevant Medical History:
-
-Prior Level of Function:
-Patient’s Goals:
-Precautions:
-
-Subjective:
-
-Vital Signs
-Temp:
-Temp Type: Temporal
-BP:  /
-Heart Rate:
-Respirations:
-Comments:
-
-Pain Assessment
-Pain: Yes/No
-Primary Location Other:
-Intensity (0–10):
-Increased by:
-Relieved by:
-Interferes with:
-
-Edema: absent/present
-
-Living / Social Support
-Patient Lives:
-Assistance is Available:
-Current assistance types:
-Steps/Stairs present: Yes/No
-Steps Count:
-No hazards identified: Yes/No
-Evaluation of Living Situation:
-
-Durable Medical Equipment
-DME other:
-
-Neuro / Physical Assessment
-Orientation:
-Speech:
-Vision:
-Hearing:
-Skin:
-Muscle Tone:
-Coordination:
-Sensation:
-Endurance:
-Posture:
-
-Functional Status
-Bed Mobility:
-Transfers:
-Gait:
-Stairs:
-Weight Bearing Status:
-
-Response to tx: Bed mobility:
-Response to tx: Transfers:
-Response to tx: Gait:
-
-Gross ROM for UE:
-Gross strength for UE:
-Gross ROM for LE:
-Gross strength for LE:
-
-Goals:
-1)
-2)
-3)
-4)
-5)
-6)
-
-Frequency:
-Plan for next visit:
-
-Assessment Summary: Generate 6 sentences for HH PT initial evaluation noting impairments, fall risk, skilled need, interventions, and medical necessity per POC.`;
-
 
 /* =========================
  * ENV
@@ -265,6 +163,89 @@ function normalizeDateToMMDDYYYY(raw) {
   
   // Fallback – if we don't recognize it, just return as-is
   return s;
+}
+
+/* =========================
+ * Helpers: active-page locking + post-save audit
+ * =======================*/
+
+function getActivePageFromContext(context) {
+  try {
+    if (!context || typeof context.pages !== "function") return null;
+    const pages = context.pages();
+    if (!pages || !pages.length) return null;
+    // The most recently opened page is typically the visit/task edit screen.
+    return pages[pages.length - 1];
+  } catch {
+    return null;
+  }
+}
+
+function normalizeTimeToHHMM(raw) {
+  const s = String(raw ?? "").trim();
+  if (!s) return "";
+  // If already HH:MM
+  if (/^\d{1,2}:\d{2}$/.test(s)) {
+    const [h, m] = s.split(":");
+    return `${String(Number(h)).padStart(2, "0")}:${m}`;
+  }
+  // Common input: 4 digits "1715" -> "17:15"
+  if (/^\d{4}$/.test(s)) {
+    const h = s.slice(0, 2);
+    const m = s.slice(2);
+    return `${h}:${m}`;
+  }
+  // Common input: "715" -> "07:15"
+  if (/^\d{3}$/.test(s)) {
+    const h = s.slice(0, 1);
+    const m = s.slice(1);
+    return `${h.padStart(2, "0")}:${m}`;
+  }
+  return s;
+}
+
+async function postSaveAudit(target, expected = {}) {
+  const page = target?.page || target;
+  const frame = await findTemplateScope(page, { timeoutMs: 15000 }).catch(() => null);
+  if (!frame) throw new Error("POST-SAVE AUDIT FAIL: could not resolve active template scope");
+  
+  const expectDate = normalizeDateToMMDDYYYY(expected.visitDate);
+  const expectIn = normalizeTimeToHHMM(expected.timeIn);
+  const expectOut = normalizeTimeToHHMM(expected.timeOut);
+  
+  async function readVal(sel) {
+    const loc = await firstVisibleLocator(frame, [sel]);
+    if (!loc) return "";
+    return (await loc.inputValue().catch(() => "")).trim();
+  }
+  
+  const gotDate = await readVal("#frm_visitdate");
+  const gotIn = await readVal("#frm_timein");
+  const gotOut = await readVal("#frm_timeout");
+  
+  // Also verify a narrative field that should change frequently.
+  const gotMedDx = await readVal("#frm_MedDiagText");
+  
+  const failures = [];
+  if (expectDate && gotDate && gotDate !== expectDate) failures.push(`visitDate expected ${expectDate} got ${gotDate}`);
+  if (expectIn && gotIn && normalizeTimeToHHMM(gotIn) !== expectIn) failures.push(`timeIn expected ${expectIn} got ${gotIn}`);
+  if (expectOut && gotOut && normalizeTimeToHHMM(gotOut) !== expectOut) failures.push(`timeOut expected ${expectOut} got ${gotOut}`);
+  
+  if (expected.medicalDiagnosis) {
+    const want = String(expected.medicalDiagnosis).trim();
+    if (want && gotMedDx && gotMedDx !== want) failures.push("Medical Dx did not persist");
+  }
+  
+  if (failures.length) {
+    throw new Error(`POST-SAVE AUDIT FAIL: ${failures.join("; ")}`);
+  }
+  
+  // If fields are empty, that can indicate a stale/hidden frame; fail fast.
+  if ((expectDate && !gotDate) || (expectIn && !gotIn) || (expectOut && !gotOut)) {
+    throw new Error(`POST-SAVE AUDIT FAIL: one or more key fields are blank after save (date="${gotDate}", in="${gotIn}", out="${gotOut}")`);
+  }
+  
+  log("✅ Post-save audit passed (key fields persisted in active visit form).");
 }
 
 /* =========================
@@ -849,12 +830,20 @@ async function findTemplateScope(target, opts = {}) {
   return null;
 }
 
-async function selectTemplateGW2(context) {
+async function selectTemplateGW2(target) {
   log("➡️ Selecting GW2...");
   
   await wait(2000);
   
-  for (const page of context.pages()) {
+  // Accept BrowserContext OR Page OR { page }
+  let pages = [];
+  try {
+    if (target && typeof target.pages === "function") pages = target.pages();
+    else if (target && typeof target.frames === "function") pages = [target];
+    else if (target?.page && typeof target.page.frames === "function") pages = [target.page];
+  } catch {}
+  
+  for (const page of pages) {
     for (const frame of page.frames()) {
       const select = frame.locator("select[name='jump1']").first();
       
@@ -1197,13 +1186,13 @@ function parseStructuredFromFreeText(aiNotes = "") {
   const result = {
     medicalDiagnosis: "",
     ptDiagnosis: "",
+    precautions: "",
     relevantHistory: "",
     hasExplicitPMH: false,
     clinicalStatement: "",
     subjective: "",
     priorLevel: "",
     patientGoals: "",
-    precautions: "",
     vitalsComment: "",
     vitals: {
       temperature: "",
@@ -1253,10 +1242,20 @@ function parseStructuredFromFreeText(aiNotes = "") {
       bedMobilityDevice: "",
       transfersAssist: "",
       transfersDevice: "",
-      gaitAssist: "",
-      gaitDistanceFt: "",
-      gaitAD: "",
-      stairsAssist: "",
+      
+      // Gait grid (3 rows): Level / Unlevel / Steps-Stairs
+      gaitAssist: "",            // Level row assist
+      gaitDistanceFt: "",        // Level row distance
+      gaitAD: "",                // Level row AD
+      
+      gaitUnevenAssist: "",      // Unlevel row assist (aka Uneven Surfaces)
+      gaitUnevenDistanceFt: "",  // Unlevel row distance
+      gaitUnevenAD: "",          // Unlevel row AD
+      
+      stairsAssist: "",          // Steps/Stairs row assist
+      stairsDistanceFt: "",      // Steps/Stairs row distance
+      stairsAD: "",              // Steps/Stairs row AD
+      
       weightBearing: "",
       bedMobilityFactors: "",
       transfersFactors: "",
@@ -1800,6 +1799,86 @@ function parseStructuredFromFreeText(aiNotes = "") {
     result.func.gaitAD = parsed.device;
   }
                                                       
+                                                      // ---------------------------------------------------------
+                                                      // ---------------------------------------------------------
+                                                      // ---------------------------------------------------------
+                                                      // Gait grid (preferred colon-based fields)
+                                                      // Supports (captures value AS-IS after the colon):
+                                                      //  - Gait: Unable / DEP / SBA ...
+                                                      //  - Gait Distance:
+                                                      //  - Gait AD:
+                                                      //  - Uneven Surfaces: DEP (or: Gait Uneven Surfaces: DEP)
+                                                      //  - Uneven Surfaces Distance:
+                                                      //  - Uneven Surfaces AD:
+                                                      //  - Stairs: DEP
+                                                      //  - Stairs Distance:
+                                                      //  - Stairs AD:
+                                                      //
+                                                      // NOTE: Kinnser "Gait" is a 3-row table: Level / Unlevel / Steps-Stairs.
+                                                      // We only set these if they are currently blank to preserve combined-format parsing.
+                                                      // ---------------------------------------------------------
+                                                      try {
+    const lines = String(text || "").split(/\r?\n/);
+    const grabAfterColon = (re) => {
+      for (const line of lines) {
+        if (!line) continue;
+        if (re.test(line)) {
+          const idx = line.indexOf(':');
+          if (idx >= 0) return String(line.slice(idx + 1) || '').trim();
+        }
+      }
+      return '';
+    };
+    
+    // Level row ("Gait")
+    const gaitDistanceVal = grabAfterColon(/^\s*gait\s*distance\s*:/i);
+    if (gaitDistanceVal && !result.func.gaitDistanceFt) result.func.gaitDistanceFt = gaitDistanceVal;
+    
+    const gaitAdVal = grabAfterColon(/^\s*gait\s*(?:ad|assistive\s*device)\s*:/i);
+    if (gaitAdVal && !result.func.gaitAD) result.func.gaitAD = gaitAdVal;
+    
+    // Unlevel row ("Uneven Surfaces")
+    const unevenAssistVal = grabAfterColon(/^\s*(?:gait\s*)?uneven\s*surfaces?\s*:/i);
+    if (unevenAssistVal && !result.func.gaitUnevenAssist) {
+      const parsed = parseAssistLevelBlock(unevenAssistVal);
+      result.func.gaitUnevenAssist = (parsed.level || unevenAssistVal).trim();
+      if (parsed.distanceFt && !result.func.gaitUnevenDistanceFt) result.func.gaitUnevenDistanceFt = parsed.distanceFt;
+      if (parsed.device && !result.func.gaitUnevenAD) result.func.gaitUnevenAD = parsed.device;
+    }
+    
+    const unevenDistanceVal = grabAfterColon(/^\s*(?:gait\s*)?uneven\s*surfaces?\s*distance\s*:/i);
+    if (unevenDistanceVal && !result.func.gaitUnevenDistanceFt) result.func.gaitUnevenDistanceFt = unevenDistanceVal;
+    
+    const unevenAdVal = grabAfterColon(/^\s*(?:gait\s*)?uneven\s*surfaces?\s*(?:ad|assistive\s*device)\s*:/i);
+    if (unevenAdVal && !result.func.gaitUnevenAD) result.func.gaitUnevenAD = unevenAdVal;
+    
+    // Some notes label it explicitly as "Gait Uneven Surfaces:".
+    const gaitUnevenAssistVal2 = grabAfterColon(/^\s*gait\s*uneven\s*surfaces?\s*:/i);
+    if (gaitUnevenAssistVal2 && !result.func.gaitUnevenAssist) {
+      const parsed = parseAssistLevelBlock(gaitUnevenAssistVal2);
+      result.func.gaitUnevenAssist = (parsed.level || gaitUnevenAssistVal2).trim();
+      if (parsed.distanceFt && !result.func.gaitUnevenDistanceFt) result.func.gaitUnevenDistanceFt = parsed.distanceFt;
+      if (parsed.device && !result.func.gaitUnevenAD) result.func.gaitUnevenAD = parsed.device;
+    }
+    
+    // Steps/Stairs row
+    const stairsAssistVal = grabAfterColon(/^\s*stairs\s*:/i);
+    if (stairsAssistVal && !result.func.stairsAssist) {
+      const parsed = parseAssistLevelBlock(stairsAssistVal);
+      result.func.stairsAssist = (parsed.level || stairsAssistVal).trim();
+      if (parsed.distanceFt && !result.func.stairsDistanceFt) result.func.stairsDistanceFt = parsed.distanceFt;
+      if (parsed.device && !result.func.stairsAD) result.func.stairsAD = parsed.device;
+    }
+    
+    const stairsDistanceVal = grabAfterColon(/^\s*stairs\s*distance\s*:/i);
+    if (stairsDistanceVal && !result.func.stairsDistanceFt) result.func.stairsDistanceFt = stairsDistanceVal;
+    
+    const stairsAdVal = grabAfterColon(/^\s*stairs\s*(?:ad|assistive\s*device)\s*:/i);
+    if (stairsAdVal && !result.func.stairsAD) result.func.stairsAD = stairsAdVal;
+  } catch {
+    // ignore parser errors
+  }
+                                                      
                                                       // GOALS BLOCK (bounded; stops before Frequency/other headings)
                                                       
                                                       function stripWithinVisits(line) {
@@ -2054,132 +2133,7 @@ async function extractNoteDataFromAI(aiNotes, visitType = "Evaluation") {
     clinicalStatement: (structured.clinicalStatement || "").trim(),
   };
   
-  // Only use OpenAI for Assessment Summary (frm_EASI1). Everything else is copy-through.
-  // If there is no API key or no text, return copy-through.
-  if (!text || !process.env.OPENAI_API_KEY) return base;
-  
-  // ✅ SAFEGUARD: never send identifiers/secrets to OpenAI
-  const forbidden = [USERNAME, PASSWORD, process.env.OPENAI_API_KEY]
-  .filter(Boolean)
-  .map((v) => String(v).toLowerCase());
-  
-  if (forbidden.some((v) => v && hay.includes(v))) {
-    console.warn("⚠️ Possible identifier/secret detected in aiNotes. Skipping OpenAI call; using copy-through.");
-    return base;
-  }
-  
-  
-  // If the note already has an explicit Assessment Summary / Clinical Statement block, prefer that and skip OpenAI
-  // UNLESS it is clearly an instruction like "Generate 6 sentences...".
-  const looksLikeInstruction = (s) => /\b(generate|write|create)\b[\s\S]*\b(\d+\s*sentences?|summary)\b/i.test(String(s || ""));
-  if (base.clinicalStatement && base.clinicalStatement.length >= 40 && !looksLikeInstruction(base.clinicalStatement)) {
-    return base;
-  }
-  if (looksLikeInstruction(base.clinicalStatement)) {
-    base.clinicalStatement = ""; // force OpenAI generation
-  }
-  
-  // Sanitize potential name-like tokens before sending to OpenAI (PHI guard may block on name_value).
-  function stripNameLikeTokens(x) {
-    let t = String(x || "");
-    if (!t) return "";
-    // Remove common provider name patterns
-    t = t.replace(/\bDr\.?\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?\b/g, "provider");
-    t = t.replace(/\bMD\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?\b/g, "provider");
-    // Remove Last, First patterns (often pt name)
-    t = t.replace(/\b[A-Z][a-z]+,\s*[A-Z][a-z]+\b/g, "");
-    // Remove two-word ProperName patterns conservatively
-    t = t.replace(/\b[A-Z][a-z]+\s+[A-Z][a-z]+\b/g, (m) => {
-      const keep = ["Parkinson Disease", "Alzheimer Disease", "Heart Failure", "Diabetes Mellitus", "Chronic Kidney", "Atrial Fibrillation"];
-      return keep.includes(m) ? m : "";
-    });
-    return t.replace(/\s+/g, " ").trim();
-  }
-  
-  // Extract patient context (use only provided info)
-  const ageTxt = (text.match(/(\d{1,3})\s*y\/o/i) || [])[1] || "___";
-  const genderTxt = /\bfemale\b/i.test(text) ? "female" : (/\bmale\b/i.test(text) ? "male" : "___");
-  const pmhTxt = stripNameLikeTokens(base.relevantHistory || "___") || "___";
-  
-  // Problems/impairments: prefer instruction after Assessment Summary line, otherwise infer lightly
-  let probsTxt = "";
-  const instrLine = (text.match(/(?:^|\n)\s*assessment summary\s*:\s*([^\n\r]+)/i) || [])[1] || "";
-  const hasMatch = instrLine.match(/\bhas\b\s*([\s\S]+)$/i);
-  if (hasMatch && hasMatch[1]) probsTxt = hasMatch[1].trim();
-  if (!probsTxt) {
-    const hits = [];
-    const add = (re, label) => { if (re.test(text)) hits.push(label); };
-    add(/weak|weakness/i, "muscle weakness");
-    add(/unsteady|balance|falls?/i, "impaired balance");
-    add(/gait|ambulat/i, "impaired gait");
-    add(/mobility|transfer|bed mobility/i, "impaired mobility");
-    add(/activity tolerance|endurance/i, "reduced activity tolerance");
-    add(/high\s*fall\s*risk|fall\s*risk/i, "high fall risk");
-    probsTxt = Array.from(new Set(hits)).join(", ") || "___";
-  }
-  probsTxt = stripNameLikeTokens(probsTxt) || "___";
-  
-  const adTxt = stripNameLikeTokens((base.func && base.func.gaitAD) || (base.dme && base.dme.other) || "AD as indicated") || "AD as indicated";
-  
-  const prompt = `Return ONLY valid JSON with double quotes.
 
-You must output exactly one key:
-- "clinicalStatement":
-  Output EXACTLY 6 sentences total.
-  Each sentence MUST start with "Pt".
-  Do NOT use he/she/they/his/her/their.
-  Do NOT add any new diagnoses, demographics, or medical history beyond what is provided.
-  Use professional, Medicare-justifiable language.
-  No bullet points, no headings, no arrows, no line breaks—just 6 sentences separated by a single space.
-
-  IMPORTANT PHI RULE: Do NOT include any proper names (people, agencies, physicians, facilities). Do NOT include commas in a name format (e.g., 'Last, First').
-  Formatting rule: After the leading word 'Pt', keep the rest of each sentence in lowercase (except numbers). Do not capitalize medical conditions or organizations.
-
-PATIENT CONTEXT (USE ONLY THIS; DO NOT INVENT):
-- Age: ${ageTxt || "___"}
-- Gender: ${genderTxt || "___"}
-- Relevant Medical History (PMH): ${pmhTxt || "___"}
-- Primary problems/impairments: ${probsTxt || "___"}
-- Assistive device wording (use this exact wording if referenced): ${adTxt || "AD as indicated"}
-
-REQUIRED CONTENT BY SENTENCE:
-1) Pt demographics + relevant medical history (copy PMH ONLY; do not add).
-2) Pt must include: PT initial evaluation + home safety assessment + DME assessment + HEP education + fall safety precautions/fall prevention + education on proper use of ${adTxt || "AD as indicated"} + education on pain/edema management + PT POC/goal planning to return toward PLOF.
-3) Pt objective functional deficits (bed mobility, transfers, gait, balance, generalized weakness) and HIGH fall risk linkage.
-4) Pt safety awareness/balance reactions and home risk statement explicitly stating HIGH fall risk.
-5) Pt skilled need/medical necessity statement describing skilled interventions (TherEx, functional training, gait/balance training, safety education) to improve function and reduce fall/injury risk.
-6) Pt closing sentence: continued skilled HH PT is medically necessary per POC to improve safety, mobility, and ADL performance and progress toward PLOF.
-
-Now generate the 6 sentences.`.trim();
-  
-  try {
-    const safePrompt = (typeof scrubPHI === "function") ? scrubPHI(prompt) : prompt;
-    // Extra safety: if detectPHI exists and still finds PHI, fail closed and keep copy-through
-    if (typeof detectPHI === "function") {
-      const findings = detectPHI(safePrompt);
-      if (Array.isArray(findings) && findings.length) {
-        throw new Error("PHI_BLOCKED types=" + findings.map(f=>f.type).join(',') );
-      }
-    }
-    const parsed = await callOpenAIJSON(safePrompt, 12000);
-    const cs = (parsed && parsed.clinicalStatement ? String(parsed.clinicalStatement) : "").trim();
-    
-    if (cs) {
-      // Optional validation (if helper exists)
-      if (typeof isValidSixSentencePtParagraph === "function") {
-        if (isValidSixSentencePtParagraph(cs)) {
-          base.clinicalStatement = cs;
-        } else {
-          log("⚠️ OpenAI clinicalStatement failed 6-sentence validation; keeping copy-through.");
-        }
-      } else {
-        base.clinicalStatement = cs;
-      }
-    }
-  } catch (err) {
-    logErrSafe("⚠️ OpenAI/JSON error (Assessment Summary only); using copy-through:", String((err && err.message) || err || ""));
-  }
-  
   return base;
 }
 
@@ -2764,8 +2718,7 @@ async function fillHomeSafetySection(context, data) {
     if (!locatorOrNull || !v) return;
     try {
       if (!(await ensureReady(locatorOrNull, label, 2500))) return;
-      await withTimeout(locatorOrNull.fill(""), 1400, `${label}.fill`);
-      await withTimeout(locatorOrNull.fill(v), 1600, `${label}.fill(value)`);
+      await safeSetValue(locatorOrNull, v, label, 60000);
       log(`✅ ${label} filled`);
     } catch (e) {
       log(`⚠️ ${label} skipped:`, e.message);
@@ -2777,9 +2730,9 @@ async function fillHomeSafetySection(context, data) {
     if (!locatorOrNull || !v) return;
     try {
       if (!(await ensureReady(locatorOrNull, label, 2500))) return;
-      await withTimeout(locatorOrNull.fill(""), 1400, `${label}.fill`);
-      await withTimeout(locatorOrNull.type(v, { delay: typeDelay }), 2600, `${label}.type`);
-      log(`✅ ${label} typed`);
+      // Prefer hardened setter (more reliable than type in Render/headless)
+      await safeSetValue(locatorOrNull, v, label, 60000);
+      log(`✅ ${label} set`);
     } catch (e) {
       // fallback to fill if type fails
       try {
@@ -3420,6 +3373,53 @@ async function fillFunctionalSection(context, data) {
     }
   }
   
+  
+  // --- Gait grid rows (Level / Unlevel / Steps-Stairs) ---
+  // For Unlevel + Steps/Stairs rows, use robust row-text matching so we don't rely on brittle #frm_FAPTxx ids.
+  async function fillGaitGridRow(rowLabel, assist, distance, ad) {
+    const a = String(assist || "").trim();
+    const d = String(distance || "").trim();
+    const dev = String(ad || "").trim();
+    if (!a && !d && !dev) return;
+    
+    // Try to locate the correct row by visible label text
+    const row = frame.locator("tr").filter({ hasText: rowLabel }).first();
+    if (!(await row.isVisible().catch(() => false))) {
+      log(`⚠️ Gait row not found for label: ${rowLabel}`);
+      return;
+    }
+    
+    // Most Kinnser grids use 3 text inputs per row (assist, distance, AD)
+    const inputs = row.locator("input");
+    const n = await inputs.count().catch(() => 0);
+    if (n < 1) {
+      log(`⚠️ No inputs found in gait row: ${rowLabel}`);
+      return;
+    }
+    
+    // Fill in order if present
+    try {
+      if (a && n >= 1) {
+        await safeSetValue(inputs.nth(0), a, `Gait ${rowLabel} Assist`, 60000).catch(() => {});
+      }
+      if (d && n >= 2) {
+        await safeSetValue(inputs.nth(1), d, `Gait ${rowLabel} Distance`, 60000).catch(() => {});
+      }
+      if (dev && n >= 3) {
+        await safeSetValue(inputs.nth(2), dev, `Gait ${rowLabel} AD`, 60000).catch(() => {});
+      }
+    } catch (e) {
+      log(`⚠️ Could not fill gait row ${rowLabel}:`, e.message);
+    }
+  }
+  
+  // Unlevel row (Uneven Surfaces)
+  await fillGaitGridRow("Unlevel", func.gaitUnevenAssist, func.gaitUnevenDistanceFt, func.gaitUnevenAD);
+  
+  // Steps/Stairs row
+  await fillGaitGridRow("Steps/Stairs", func.stairsAssist, func.stairsDistanceFt, func.stairsAD);
+  
+  
   // Stairs – Assist Level (FAPT33)
   if (func.stairsAssist) {
     const f = frame.locator("#frm_FAPT33").first();
@@ -3827,71 +3827,31 @@ async function fillFrequencyAndDate(context, data, visitDate) {
         // No dialog captured. Still allow time for any inline validation to render.
         await wait(1000);
       }
-  
+
       // Check for inline page validation/errors after save
       await assertNoOnPageErrors(pageOrFrame);
-  
+
       // Extra settle time for Kinnser to persist
       await wait(1500);
       return true;
     }
-  
+
     return false;
   }
-  
+
   // Try on main scope/page
   if (await tryClick(scope, "scope")) return true;
-  
+
   // Try all iframes (common in Kinnser/WellSky)
   const page = normalizeScope(scope);
   const frames = typeof page.frames === "function" ? page.frames() : [];
   for (const fr of frames) {
     if (await tryClick(fr, "frame")) return true;
   }
-  
+
   throw new Error("SAVE_BUTTON_NOT_FOUND");
-  }
-  
-  
-  async function postSaveAudit(context, expected = {}) {
-  // Verifies that the visit actually persisted before marking job completed.
-  // Use minimal, high-signal fields to avoid format-related false negatives.
-  const frame = await findTemplateScope(context);
-  if (!frame) throw new Error("POST_SAVE_AUDIT_FAIL: template scope not found");
-  
-  const expDate = expected.visitDate ? normalizeDateToMMDDYYYY(expected.visitDate) : "";
-  
-  async function readVal(selectors) {
-    const loc = await firstVisibleLocator(frame, selectors);
-    if (!loc) return "";
-    const tag = await loc.evaluate((el) => (el && el.tagName ? el.tagName.toLowerCase() : "")).catch(() => "");
-    if (tag === "select") {
-      return (await loc.inputValue().catch(() => "")).trim();
-    }
-    return (await loc.inputValue().catch(() => "")).trim();
-  }
-  
-  const gotDate = await readVal(["#frm_visitdate", "input[name^='frm_visitdate']"]);
-  const gotTimeIn = await readVal(["#frm_timein", "input[name^='frm_timein']"]);
-  const gotTimeOut = await readVal(["#frm_timeout", "input[name^='frm_timeout']"]);
-  
-  // Narrative signal: Medical Dx or Clinical Statement should not be empty in typical evals.
-  const gotMedDx = await readVal(["#frm_MedDiagText"]);
-  const gotEASI1 = await readVal(["#frm_EASI1"]);
-  
-  const failures = [];
-  if (!gotDate) failures.push("visitDate empty");
-  if (expDate && gotDate && gotDate != expDate) failures.push(`visitDate mismatch (expected ${expDate}, got ${gotDate})`);
-  if (!gotTimeIn) failures.push("timeIn empty");
-  if (!gotTimeOut) failures.push("timeOut empty");
-  if (!gotMedDx && !gotEASI1) failures.push("no narrative persisted (MedDx/EASI1 empty)");
-
-  if (failures.length) {
-    throw new Error("POST_SAVE_AUDIT_FAIL: " + failures.join("; "));
-  }
-
-  log("✅ Post-save audit passed:", { visitDate: gotDate, timeIn: gotTimeIn, timeOut: gotTimeOut });
 }
+
 
 
 /* =========================
@@ -3958,64 +3918,85 @@ async function runPtEvaluationBot({
     
     // 3) Open Hotbox row
     await openHotboxPatientTask(page, patientName, visitDate, taskType);
+
+    // Lock to the ACTIVE visit page (prevents "filled but nothing changed" caused by stale frames/pages)
+    await wait(1200);
+    const activePage = getActivePageFromContext(context) || page;
+    try {
+      activePage.on("dialog", async (dialog) => {
+        log("⚠️ POPUP:", dialog.message());
+        try {
+          await dialog.accept();
+          log("✅ Popup accepted");
+        } catch (e) {
+          log("⚠️ Popup already handled:", e.message);
+        }
+      });
+    } catch {}
     
     // 4) Select Template
-    await selectTemplateGW2(context);
+    await selectTemplateGW2(activePage);
     
     // 5) Visit basics
-    await fillVisitBasics(context, { timeIn, timeOut, visitDate });
+    await fillVisitBasics(activePage, { timeIn, timeOut, visitDate });
     
     // 6) Parse AI notes (Eval)
     const aiData = await extractNoteDataFromAI(aiNotes, "Evaluation");
     
     // 7) Vitals + Relevant History + Clinical Statement
     // NOTE: your fillVitalsAndNarratives() already fills frm_RlvntMedHist + frm_EASI1 per your code
-    await fillVitalsAndNarratives(context, aiData);
+    await fillVitalsAndNarratives(activePage, aiData);
     
     // 8) Medical Dx (frm_MedDiagText)
-    await fillMedDiagnosisAndSubjective(context, aiData);
+    await fillMedDiagnosisAndSubjective(activePage, aiData);
     
     // 9) Subjective
-    await fillSubjectiveOnly(context, aiData);
+    await fillSubjectiveOnly(activePage, aiData);
     
     // 10) Prior level + Patient goals
-    await fillPriorLevelAndPatientGoals(context, aiData);
+    await fillPriorLevelAndPatientGoals(activePage, aiData);
     
     // 11) Living situation / safety hazards
-    await fillHomeSafetySection(context, aiData);
+    await fillHomeSafetySection(activePage, aiData);
     
     // 12) Pain section
-    await fillPainSection(context, aiData);
+    await fillPainSection(activePage, aiData);
     
     // 13) Neuro / Physical assessment text fields
-    await fillNeuroPhysical(context, aiData);
+    await fillNeuroPhysical(activePage, aiData);
     
     // 14) Edema
-    await fillEdemaSection(context, aiData);
+    await fillEdemaSection(activePage, aiData);
     
     // 15) ROM/Strength
-    await fillPhysicalRomStrength(context, aiData.romStrength);
+    await fillPhysicalRomStrength(activePage, aiData.romStrength);
     
     // 16) Functional (FAPT)
-    await fillFunctionalSection(context, aiData);
+    await fillFunctionalSection(activePage, aiData);
     
     // 17) DME checkboxes + other
-    await fillDMESection(context, aiData);
+    await fillDMESection(activePage, aiData);
     
     // 18) Treatment goals + pain plan (if pain)
-    await fillTreatmentGoalsAndPainPlan(context, aiData);
+    await fillTreatmentGoalsAndPainPlan(activePage, aiData);
     
     // 19) Frequency + effective date
-    await fillFrequencyAndDate(context, aiData, visitDate);
+    await fillFrequencyAndDate(activePage, aiData, visitDate);
     
-    await clickSave(page);
-    // Post-save audit: ensure values truly persisted before marking completed
-    await postSaveAudit(context, { visitDate, timeIn, timeOut });
-    await wait(1200);
+    await clickSave(activePage);
+    await wait(2500);
+
+    // Post-save verification: if it doesn't stick, FAIL the job (so UI never shows false "completed")
+    await postSaveAudit(activePage, {
+      visitDate,
+      timeIn,
+      timeOut,
+      medicalDiagnosis: aiData?.medicalDiagnosis || "",
+    });
     
   } finally {
     // await browser.close();
   }
 }
 
-module.exports = { runPtEvaluationBot, PT_EVALUATION_TEMPLATE };
+module.exports = { runPtEvaluationBot };
