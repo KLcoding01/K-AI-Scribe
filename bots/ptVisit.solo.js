@@ -477,6 +477,11 @@ async function navigateToHotBox(page) {
   throw new Error("Unable to navigate to HotBox (layout differs or access blocked).");
 }
 
+// Alias for consistency with other bots (Visit persistence audit)
+async function navigateToHotBoxRobust(page) {
+  return navigateToHotBox(page);
+}
+
 
 async function setHotboxShow100(page) {
   console.log("➡️ Setting Hotbox to Show 100 entries...");
