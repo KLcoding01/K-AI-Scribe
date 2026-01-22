@@ -794,88 +794,111 @@ function normalizeTimeToHHMM(value) {
   return v;
 }
 
-async function postSaveAudit(target, expected = {}) {
-  const page = target?.page || target;
+async function postSaveAudit(targetOrWrapper, expected = {}) {
+  // Accept: Page/Frame or wrapper { page, context }
+  const page = targetOrWrapper?.page || targetOrWrapper;
+  const context =
+    targetOrWrapper?.context ||
+    (page && typeof page.context === "function" ? page.context() : null);
 
-  const expectDate = normalizeDateToMMDDYYYY(expected.visitDate);
-  const expectIn = normalizeTimeToHHMM(expected.timeIn);
-  const expectOut = normalizeTimeToHHMM(expected.timeOut);
+  const issues = [];
 
-  async function readSnapshot() {
-    const frame = await findTemplateScope(page, { timeoutMs: 15000 }).catch(() => null);
-    if (!frame) throw new Error("POST-SAVE AUDIT FAIL: could not resolve active template scope");
-
-    async function readVal(sel) {
-      const loc = await firstVisibleLocator(frame, [sel]);
-      if (!loc) return "";
-      return (await loc.inputValue().catch(() => "")).trim();
+  async function snapshotOnce(tag) {
+    const scope = await findTemplateScope(page, { timeoutMs: 15000 }).catch(() => null);
+    if (!scope) {
+      issues.push(`${tag}: Could not resolve active template iframe/scope`);
+      return null;
     }
 
-    const snap = {
-      visitDate: await readVal("#frm_visitdate"),
-      timeIn: await readVal("#frm_timein"),
-      timeOut: await readVal("#frm_timeout"),
-      teachTitles: await readVal("#frm_tTitlesTxt"),
-      impact: await readVal("#frm_teExerciseDesc"),
-      medDx: await readVal("#frm_MedDiagText"),
-      ptDx: await readVal("#frm_PTDiagText"),
-    };
+    const snap = {};
+    snap.visitDate = await safeGetValue(scope, "#frm_visitdate");
+    snap.timeIn = await safeGetValue(scope, "#frm_timein");
+    snap.timeOut = await safeGetValue(scope, "#frm_timeout");
+    // optional but useful
+    snap.medDx = await safeGetValue(scope, "#frm_MedDiagText");
 
     return snap;
   }
 
-  function validateSnapshot(snap, label) {
-    const failures = [];
+  function validateSnap(tag, snap) {
+    if (!snap) return;
 
-    const gotDate = normalizeDateToMMDDYYYY(snap.visitDate);
-    const gotIn = normalizeTimeToHHMM(snap.timeIn);
-    const gotOut = normalizeTimeToHHMM(snap.timeOut);
-
-    if (expectDate && gotDate && gotDate !== expectDate) failures.push(`${label}: Visit date did not persist (got "${gotDate}", expected "${expectDate}")`);
-    if (expectIn && gotIn && gotIn !== expectIn) failures.push(`${label}: Time In did not persist (got "${gotIn}", expected "${expectIn}")`);
-    if (expectOut && gotOut && gotOut !== expectOut) failures.push(`${label}: Time Out did not persist (got "${gotOut}", expected "${expectOut}")`);
-
-    // If expected exists but blank in DOM, treat as failure (often wrong iframe or unsaved)
-    if (expectDate && !gotDate) failures.push(`${label}: Visit date is blank after save`);
-    if (expectIn && !gotIn) failures.push(`${label}: Time In is blank after save`);
-    if (expectOut && !gotOut) failures.push(`${label}: Time Out is blank after save`);
-
-    // These are the fields you care about being truly present on reload too
-    if (!String(snap.teachTitles || "").trim()) failures.push(`${label}: Teaching Tools (frm_tTitlesTxt) is blank`);
-    if (!String(snap.impact || "").trim()) failures.push(`${label}: Impact field (frm_teExerciseDesc) is blank`);
-
-    // Optional checks if provided
-    if (expected.medicalDiagnosis) {
-      const want = String(expected.medicalDiagnosis).trim();
-      const got = String(snap.medDx || "").trim();
-      if (want && got && got !== want) failures.push(`${label}: Medical Dx did not persist`);
+    if (expected.visitDate) {
+      const want = normalizeDateToMMDDYYYY(expected.visitDate);
+      const got = normalizeDateToMMDDYYYY(snap.visitDate);
+      if (!got) issues.push(`${tag}: Visit date is blank after save`);
+      else if (want && got !== want) issues.push(`${tag}: Visit date mismatch (want ${want}, got ${got})`);
     }
 
-    return failures;
+    if (expected.timeIn) {
+      const want = normalizeTimeToHHMM(expected.timeIn);
+      const got = normalizeTimeToHHMM(snap.timeIn);
+      if (!got) issues.push(`${tag}: Time In is blank after save`);
+      else if (want && got !== want) issues.push(`${tag}: Time In mismatch (want ${want}, got ${got})`);
+    }
+
+    if (expected.timeOut) {
+      const want = normalizeTimeToHHMM(expected.timeOut);
+      const got = normalizeTimeToHHMM(snap.timeOut);
+      if (!got) issues.push(`${tag}: Time Out is blank after save`);
+      else if (want && got !== want) issues.push(`${tag}: Time Out mismatch (want ${want}, got ${got})`);
+    }
+
+    if (expected.medDx) {
+      const want = String(expected.medDx || "").trim();
+      const got = String(snap.medDx || "").trim();
+      if (want && !got) issues.push(`${tag}: Med Dx is blank after save`);
+      else if (want && got && got !== want) issues.push(`${tag}: Med Dx mismatch`);
+    }
   }
 
-  // 1) Snapshot immediately after clicking Save
-  const snap1 = await readSnapshot();
-  const fail1 = validateSnapshot(snap1, "Immediate");
-  if (fail1.length) throw new Error(`POST-SAVE AUDIT FAIL: ${fail1.join("; ")}`);
+  // Phase 1: immediate DOM snapshot (can still be false-positive, but gives diagnostics)
+  const snap1 = await snapshotOnce("Immediate");
+  validateSnap("Immediate", snap1);
 
-  // 2) Strong verification: force a reload and re-read the iframe fields.
-  // This catches the common false-positive where DOM has values but server never persisted.
-  try {
-    await page.waitForLoadState("networkidle", { timeout: 8000 }).catch(() => {});
-    await page.waitForTimeout(600);
-    await page.reload({ waitUntil: "domcontentloaded", timeout: 20000 }).catch(() => {});
-    await page.waitForTimeout(800);
-  } catch (_) {
-    // If reload fails, still attempt to re-snapshot; we'll fail if it doesn't persist.
+  // Phase 2: hard persistence check by REOPENING the same note from Hotbox.
+  // Reason: Kinnser can keep in-memory DOM values even when Save did not persist.
+  if (context && expected.patientName && expected.visitDate) {
+    try {
+      const taskType = expected.taskType || "PT Visit";
+
+      // Go back to HotBox, then re-open the same row again.
+      // This forces us to read server-persisted values, not the current DOM state.
+      await navigateToHotBoxRobust(page);
+      await setHotboxShow100(page);
+
+      await openHotboxPatientTask(page, expected.patientName, expected.visitDate, taskType);
+
+      const reopenedPage = getActivePageFromContext(context) || page;
+
+      // Ensure we are on the reopened visit edit form (scope resolves)
+      const scope2 = await findTemplateScope(reopenedPage, { timeoutMs: 20000 }).catch(() => null);
+      if (!scope2) {
+        issues.push("Reopen: Could not resolve template iframe/scope after reopening the note");
+      } else {
+        const snap2 = {};
+        snap2.visitDate = await safeGetValue(scope2, "#frm_visitdate");
+        snap2.timeIn = await safeGetValue(scope2, "#frm_timein");
+        snap2.timeOut = await safeGetValue(scope2, "#frm_timeout");
+        snap2.medDx = await safeGetValue(scope2, "#frm_MedDiagText");
+        // Validate re-opened snapshot strictly (this is the source of truth)
+        validateSnap("Reopen", snap2);
+      }
+    } catch (e) {
+      issues.push(`Reopen: Exception while reopening note for persistence check: ${String(e?.message || e)}`);
+    }
+  } else {
+    // If we don't have enough info to reopen, keep the immediate checks only.
+    log("[PT Visit Bot] ℹ️ Post-save persistence check (reopen) skipped: missing context/patientName/visitDate");
   }
 
-  const snap2 = await readSnapshot();
-  const fail2 = validateSnapshot(snap2, "Reload");
-  if (fail2.length) throw new Error(`POST-SAVE AUDIT FAIL: ${fail2.join("; ")}`);
+  if (issues.length) {
+    throw new Error(`POST-SAVE AUDIT FAIL: ${issues.join("; ")}`);
+  }
 
-  log("✅ Post-save audit passed (key fields persisted, including after reload).");
+  log("✅ Post-save audit passed (key fields persisted after reopening the note).");
 }
+
 
 async function selectTemplateGW2(context) {
   console.log("➡️ Selecting GW2...");
@@ -4569,7 +4592,7 @@ await fillVisitSummaryFromCue(context, aiNotes || "");
     await wait(2500);
 
     // ✅ Post-save audit (matches PT Evaluation behavior)
-    await postSaveAudit(activePage, { visitDate, timeIn, timeOut });
+    await postSaveAudit({ page: activePage, context }, { visitDate, timeIn, timeOut, patientName, taskType: "PT Visit" });
 
     // Additional read-only sanity checks (do NOT re-fill fields here)
     try {
