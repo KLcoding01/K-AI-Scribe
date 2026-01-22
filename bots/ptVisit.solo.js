@@ -1,4 +1,3 @@
-
 function sanitizeAssessmentText(text) {
   if (!text) return "";
 
@@ -743,7 +742,15 @@ async function findTemplateScope(target, opts = {}) {
     const urls = pages.map((p) => p.url());
     console.log("⚠️ findTemplateScope: no template scope found. Pages:", urls);
   } catch {}
-  async function postSaveAudit(target, expected = {}) {
+  
+
+
+
+return null;
+}
+
+
+async function postSaveAudit(target, expected = {}) {
   const page = target?.page || target;
   const frame = await findTemplateScope(page, { timeoutMs: 15000 }).catch(() => null);
   if (!frame) throw new Error("POST-SAVE AUDIT FAIL: could not resolve active template scope");
@@ -785,11 +792,6 @@ async function findTemplateScope(target, opts = {}) {
   }
   
   log("✅ Post-save audit passed (key fields persisted in active visit form).");
-}
-
-
-
-return null;
 }
 
 async function selectTemplateGW2(context) {
