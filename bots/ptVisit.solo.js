@@ -58,6 +58,30 @@ const PASSWORD = process.env.KINNSER_PASSWORD;
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+
+
+async function maybeSwitchToNewPage(context, currentPage, actionFn) {
+  // Runs actionFn; if it opens a new tab/page, returns that page; else returns currentPage.
+  let newPage = null;
+  let listener = null;
+
+  try {
+    if (context && typeof context.waitForEvent === "function") {
+      listener = context.waitForEvent("page", { timeout: 2500 }).then((p) => (newPage = p)).catch(() => null);
+    }
+    await actionFn();
+    if (listener) await listener;
+  } catch {
+    // ignore
+  }
+
+  if (newPage) {
+    try { await newPage.bringToFront().catch(() => {}); } catch {}
+    return newPage;
+  }
+  return currentPage;
+}
+
 function getActivePageFromContext(context) {
   try {
     if (!context || typeof context.pages !== "function") return null;
@@ -371,13 +395,13 @@ async function isAlreadyOnHotbox(page) {
   return false;
 }
 
-async function navigateToHotBox(page) {
+async function navigateToHotBox(page, context) {
   console.log("➡️ Checking if we are already on the HotBox screen...");
 
   // 1) If we already see HotBox rows, just skip navigation
   if (await isAlreadyOnHotbox(page)) {
     console.log("🔥 Already on HotBox; skipping navigation.");
-    return;
+    return page;
   }
 
   console.log("➡️ Navigating to HotBox (robust mode)...");
@@ -388,11 +412,13 @@ async function navigateToHotBox(page) {
   try {
     const hotboxLink = page.locator("a", { hasText: /hotbox/i }).first();
     if (await hotboxLink.isVisible().catch(() => false)) {
+      page = await maybeSwitchToNewPage(context, page, async () => {
       await hotboxLink.click({ timeout: 5000 }).catch(() => {});
-      await wait(1200);
-      if (await isAlreadyOnHotbox(page)) {
+    });
+    await wait(1200);
+    if (await isAlreadyOnHotbox(page)) {
         console.log("✅ HotBox opened via direct link.");
-        return;
+        return page;
       }
     }
   } catch {
@@ -439,12 +465,13 @@ async function navigateToHotBox(page) {
       }
 
       if (hotboxMenu) {
-        await hotboxMenu.click({ force: true }).catch(() => {});
+        page = await maybeSwitchToNewPage(context, page, async () => {
+          await hotboxMenu.click({ force: true }).catch(() => {});
+        });
         await wait(1200);
-
         if (await isAlreadyOnHotbox(page)) {
           console.log("✅ HotBox opened via Go To menu.");
-          return;
+          return page;
         }
       }
     } catch (e) {
@@ -467,7 +494,7 @@ async function navigateToHotBox(page) {
       await wait(1500);
       if (await isAlreadyOnHotbox(page)) {
         console.log(`✅ HotBox opened via direct URL: ${url}`);
-        return;
+        return page;
       }
     } catch {
       // ignore and try next
@@ -478,8 +505,8 @@ async function navigateToHotBox(page) {
 }
 
 // Alias for consistency with other bots (Visit persistence audit)
-async function navigateToHotBoxRobust(page) {
-  return navigateToHotBox(page);
+async function navigateToHotBoxRobust(page, context) {
+  return navigateToHotBox(page, context);
 }
 
 
@@ -531,7 +558,7 @@ async function setHotboxShow100(page) {
  * Open Hotbox patient row
  * =======================*/
 
-async function openHotboxPatientTask(page, patientName, visitDate, taskType) {
+async function openHotboxPatientTask(auditPage, patientName, visitDate, taskType) {
   console.log(
     `➡️ Searching Hotbox for patient "${patientName}" on "${visitDate}" with task "${taskType}"...`
   );
@@ -825,6 +852,7 @@ function normalizeTimeToHHMM(value) {
 async function postSaveAudit(targetOrWrapper, expected = {}) {
   // Accept: Page/Frame or wrapper { page, context }
   const page = targetOrWrapper?.page || targetOrWrapper;
+  let auditPage = page;
   const context =
     targetOrWrapper?.context ||
     (page && typeof page.context === "function" ? page.context() : null);
@@ -832,7 +860,7 @@ async function postSaveAudit(targetOrWrapper, expected = {}) {
   const issues = [];
 
   async function snapshotOnce(tag) {
-    const scope = await findTemplateScope(page, { timeoutMs: 15000 }).catch(() => null);
+    const scope = await findTemplateScope(auditPage, { timeoutMs: 15000 }).catch(() => null);
     if (!scope) {
       issues.push(`${tag}: Could not resolve active template iframe/scope`);
       return null;
@@ -892,10 +920,10 @@ async function postSaveAudit(targetOrWrapper, expected = {}) {
 
       // Go back to HotBox, then re-open the same row again.
       // This forces us to read server-persisted values, not the current DOM state.
-      await navigateToHotBoxRobust(page);
+      auditPage = (await navigateToHotBoxRobust(page, context)) || auditPage;
       await setHotboxShow100(page);
 
-      await openHotboxPatientTask(page, expected.patientName, expected.visitDate, taskType);
+      await openHotboxPatientTask(auditPage, expected.patientName, expected.visitDate, taskType);
 
       const reopenedPage = getActivePageFromContext(context) || page;
 
@@ -3441,7 +3469,7 @@ async function fillVisitSummaryFromCue(context, aiNotes) {
   
   const page = context?.page || context;
   
-  const frame = await findTemplateScope(page);
+  const frame = await findTemplateScope(auditPage);
   if (!frame) {
     console.log("[PT Visit Bot] Could not find PT Visit frame for summary.");
     return;
@@ -4585,10 +4613,10 @@ async function runPtVisitBot({
       password: kinnserPassword,
     });
     
-    await navigateToHotBox(page);
+    await navigateToHotBox(page, context);
     await setHotboxShow100(page);
     
-    await openHotboxPatientTask(page, patientName, visitDate, "PT Visit");
+    await openHotboxPatientTask(auditPage, patientName, visitDate, "PT Visit");
     
     // Lock to the most recently opened tab (Kinnser often opens the visit in a new page)
     const activePage = getActivePageFromContext(context) || page;
