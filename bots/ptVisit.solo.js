@@ -1,3 +1,4 @@
+
 function sanitizeAssessmentText(text) {
   if (!text) return "";
 
@@ -749,6 +750,36 @@ async function findTemplateScope(target, opts = {}) {
 return null;
 }
 
+
+// =========================
+// Time normalization helper (audit-safe)
+// Accepts "9:30", "09:30", "930", "0930", "1530"
+// Returns "HH:MM"
+// =========================
+function normalizeTimeToHHMM(value) {
+  if (value === null || value === undefined) return "";
+  let v = String(value).trim();
+
+  // Already HH:MM (or H:MM)
+  const hm = v.match(/^\s*(\d{1,2})\s*:\s*(\d{2})\s*$/);
+  if (hm) {
+    const h = Number(hm[1]);
+    const m = Number(hm[2]);
+    if (Number.isFinite(h) && Number.isFinite(m)) {
+      return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+    }
+  }
+
+  // HMM / HHMM (e.g. 930, 0930, 1530)
+  const digits = v.replace(/[^0-9]/g, "");
+  if (/^\d{3,4}$/.test(digits)) {
+    const padded = digits.padStart(4, "0");
+    return `${padded.slice(0, 2)}:${padded.slice(2, 4)}`;
+  }
+
+  // Fallback: return trimmed input
+  return v;
+}
 
 async function postSaveAudit(target, expected = {}) {
   const page = target?.page || target;
