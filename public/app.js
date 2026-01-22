@@ -1,7 +1,3 @@
-// =========================
-// Updated: 2026-01-20
-// =========================
-
 (() => {
   const el = (id) => document.getElementById(id);
 
@@ -179,6 +175,7 @@
       // Choose template: dropdown first, else based on task type
       let templateText = "";
       if (templateKey && TEMPLATES[templateKey]) templateText = TEMPLATES[templateKey];
+      else if ((taskType || "").toLowerCase().includes("re-evaluation") && TEMPLATES.pt_reeval_default) templateText = TEMPLATES.pt_reeval_default;
       else if ((taskType || "").toLowerCase().includes("evaluation") && TEMPLATES.pt_eval_default) templateText = TEMPLATES.pt_eval_default;
       else templateText = TEMPLATES.pt_visit_default || "";
 
@@ -227,6 +224,7 @@
 
       let templateText = "";
       if (templateKey && TEMPLATES[templateKey]) templateText = TEMPLATES[templateKey];
+      else if ((taskType || "").toLowerCase().includes("re-evaluation") && TEMPLATES.pt_reeval_default) templateText = TEMPLATES.pt_reeval_default;
       else if ((taskType || "").toLowerCase().includes("evaluation") && TEMPLATES.pt_eval_default) templateText = TEMPLATES.pt_eval_default;
       else templateText = TEMPLATES.pt_visit_default || "";
 
@@ -307,83 +305,169 @@ Education provided to improve postural awareness.
 Assessment:
 5 sentences HH PT tx focusing on TherEx, TherAct, functional safety training, HEP review, and gait training. Tx tolerated fairly. Pt continues to demonstrate weakness and impaired balance with high fall risk. Continued skilled HH PT remains indicated to progress toward goals and improve functional independence.
 `,
-    pt_eval_default: `Medical Diagnosis:
-PT Diagnosis: Muscle weakness, Functional Mobility Deficit, Impaired Gait/Balance, Impaired Activity Tolerance
-Relevant Medical History:
-Prior Level of Function: Needing assistance from family and ADLs.
-Patient’s Goals: To improve mobility, strength, activity tolerance, decrease fall risk, and improve quality of life
-Precautions: Fall risk
+    pt_eval_default: `Medical Diagnosis: 
+PT Diagnosis: Muscle weakness, Functional Mobility Deficit, Unsteady Gait/Balance, Impaired Activity Tolerance 
+Precautions: Fall Risk
+Relevant Medical History: 
+Prior Level of Function: Need some assistance with functional mobility, gait, and ADLs.
+Patient Goals: To improve mobility, strength, activity tolerance, decrease fall risk, and return to PLOF.
 
-Patient Lives: With family in home
-Assistance is Available: Around the clock
-Current assistance types: Family
-Steps/Stairs present: Yes/No
-Steps Count:
-No hazards identified: Yes/No
-Evaluation of Living Situation: Pt lives in a SSH with family providing care around the clock. The home has hard surface flooring, bath tub/step in shower, 4 steps at entrance with rail. No hazard found.
-
-Subjective: Pt agreeable to PT evaluation and treatment.
-
-Temp:
+Vital Signs
+Temp: 97.6
 Temp Type: Temporal
-BP: / 
-Heart Rate:
+BP:  / 
+Heart Rate: 
 Respirations: 18
-Comments: Pt is currently symptom-free and demonstrates no adverse reactions. Cleared to continue with physical therapy as planned.
+Comments: Pt is currently symptom-free and demonstrates no adverse reactions. Cleared to continue with physical therapy as planned. 
+
+Subjective: Pt agrees to PT evaluation.
 
 Pain: Yes/No
-Primary Location Other:
-Intensity (0–10):
-Increased by:
-Relieved by:
+Primary Location Other: 
+Intensity (0–10): 
+Increased by: 
+Relieved by: 
 Interferes with:
 
-Edema: absent/present
-Edema Type:
-Pitting Grade:
-Location:
+Living Situation
+Patient Lives: With other in home
+Assistance Available: around the clock
+Current Assistance Types: Family/daughter
+Steps/Stairs Present: No
+Steps Count:
 
-DME other:
-
-Orientation: AOx3, forgetful
+Neuro / Physical
+Orientation: AOx2 
 Speech: Unremarkable
-Vision: Unremarkable
-Hearing: Unremarkable
+Vision: Blurred vision
+Hearing: B HOH
 Skin: Intact
-Muscle Tone: Muscle weakness
-Coordination: Fair
+Muscle Tone: Muscle Weakness
+Coordination: Fair-
 Sensation: NT
-Endurance: Fair-
-Posture: Forward head lean, round shoulder, increased mid T-spine kyphosis
+Endurance: Poor
+Posture: Forward head lean, slouch posture, rounded shoulders, increased mid T-spine kyphosis
 
-Bed Mobility: SBA
-Transfers: SBA
-Gait: SBA x 50ft with FWW
-Stairs:
-Weight Bearing Status: FWB
+Functional Status
+Bed Mobility: DEP
+Bed Mobility AD:
+Transfers: DEP
+Transfers AD:
 
-Response to tx: Bed mobility: Forgetfulness, improper sequence/mechanics, decrease activity tolerance, weakness, decrease safety awareness.
-Response to tx: Transfers: Forgetfulness, improper sequence/mechanics, decrease activity tolerance, weakness, decrease safety awareness.
-Response to tx: Gait: Forgetfulness, improper sequence/mechanics, decrease activity tolerance, weakness, decrease safety awareness. Gait Analysis: Decreased step/stride length, slow cadence, wide BOS, forward trunk lean, decrease walking tolerance, decrease safety awareness and surrounding environment awareness.
+Gait
+Level Surfaces
+Gait: Unable
+Gait Distance:
+Gait AD:
 
-Gross ROM for UE:
-Gross strength for UE:
-Gross ROM for LE:
-Gross strength for LE:
+Uneven Surfaces: Unable
+Uneven Surfaces Distance:
+Uneven Surfaces AD:
 
-Short-Term Goals (STG):
-- Pt will perform bed mobility with Indep using appropriate sequencing and safety strategies.
-- Pt will perform transfers bed from/to chair/toilet with Indep using appropriate AD and safe mechanics.
-(within a total of 4 visits)
+Stairs: Unable
+Stairs Distance:
+Stairs AD:
 
-Long-Term Goals (LTG):
-- Pt will ambulate 150 ft with FWW with Indep to improve household mobility and reduce fall risk.
-- Pt/CG will be independent with HEP and fall-prevention strategies with safe technique and pacing.
-- Pt will improve Tinetti Poma score to 20/28 or more to decrease fall risk.
-(within a total of 7 visits)
+Weight Bearing: FWB
 
+DME Other: FWW and Transport Chair
+
+Edema: Absent
+Type:
+Location:
+Pitting Grade:
+
+Assessment Summary: Pt presents for HH PT evaluation with chronic low back and knee pain, generalized weakness, and significant functional decline in the setting of multiple comorbidities. Pt is currently bed bound and demonstrates markedly impaired bed mobility, decreased strength, and limited tolerance to positional changes, placing pt at high risk for further deconditioning and skin breakdown. Pain and weakness contribute to difficulty with functional transfers, upright tolerance, and initiation of mobility tasks. Current impairments significantly limit safe participation in ADLs and increase overall fall risk once mobility is attempted. Skilled HH PT is required to address pain management, improve strength, initiate safe bed mobility and transfer training, and provide caregiver education to reduce complications and promote functional recovery. Continued skilled HH PT remains medically necessary to maximize functional potential, improve safety, and support progression toward the highest achievable level of independence within the home setting.
+
+Goals
+Short-Term Goals (2)
+STG 1: Pt will demonstrate safe bed mobility with Indep within 4 visits.
+STG 2: Pt will demonstrate safe transfers with Indep within 4 visits.
+
+Long-Term Goals (3)
+LTG 1: Pt will ambulate 150 ft using FWW with Indep within 7 visits.
+LTG 2: Pt will demonstrate Indep with HEP, fall/safety precautions, improved safety awareness, and improved activity tolerance with ADLs within 7 visits.
+LTG 3: Pt will improve B LE strength by ≥0.5 MMT grade to enhance functional mobility within 7 visits.
+LTG 4: Pt will improve Tinetti Poma score to 20/28 or more to decrease fall risk within 7 visits.
+
+Plan
 Frequency: 1w1, 2w3
-Assessment Summary: Generate 6 sentences for HH PT initial evaluation noting impairments, fall risk, skilled need, interventions, and medical necessity per POC.`
+Effective Date: `
+,
+pt_reeval_default: `Subjective: Pt agrees to PT Re-evaluation.
+
+Vital Signs
+Temp: 97.6
+Temp Type: Temporal
+BP:  / 
+Heart Rate: 
+Respirations: 18
+Comments: Pt is currently symptom-free and demonstrates no adverse reactions. Cleared to continue with physical therapy as planned. 
+
+Pain: Yes/No
+Primary Location Other: 
+Intensity (0–10): 
+Increased by: 
+Relieved by: 
+Interferes with:
+
+Neuro / Physical
+Orientation: AOx3 
+Speech: Unremarkable
+Vision: Blurred vision
+Hearing: B HOH
+Skin: Intact
+Muscle Tone: Muscle Weakness
+Coordination: Fair-
+Sensation: NT
+Endurance: Poor
+Posture: Forward head lean, slouch posture, rounded shoulders, increased mid T-spine kyphosis
+
+Bed Mobility:
+Bed Mobility AD:
+
+Transfers: 
+Transfers AD:
+
+Gait
+Level Surfaces
+Gait: Unable
+Gait Distance:
+Gait AD:
+
+Uneven Surfaces: Unable
+Uneven Surfaces Distance:
+Uneven Surfaces AD:
+
+Stairs: Unable
+Stairs Distance:
+Stairs AD:
+
+Weight Bearing: FWB
+
+DME Other: 
+
+Edema: Absent
+Type:
+Location:
+Pitting Grade:
+
+Assessment Summary: Patient has been receiving skilled home health PT to address functional mobility deficits secondary to muscle weakness, impaired balance, and unsteady gait. Currently, patient is progressing slowly and still has difficulty with functional bed mobility, transfer, decreased gait tolerance, unsteady gait, and poor balance leading to high fall risk. Patient/CG will need further training with HEP, fall prevention, and safety with functional mobility to decrease fall risk and meet goals. Patient still has potential and will continue to benefit from further skilled HH PT to work toward personal goals, as well as, improve overall ADLs. 
+
+Goals
+Short-Term Goals (2)
+STG 1: Pt will demonstrate safe bed mobility with Indep within 3 visits.
+STG 2: Pt will demonstrate safe transfers with Indep within 3 visits.
+
+Long-Term Goals (3)
+LTG 1: Pt will ambulate 150 ft using FWW with Indep within 4 visits.
+LTG 2: Pt will demonstrate Indep with HEP, fall/safety precautions, improved safety awareness, and improved activity tolerance with ADLs within 4 visits.
+LTG 3: Pt will improve B LE strength by ≥0.5 MMT grade to enhance functional mobility within 4 visits.
+LTG 4: Pt will improve Tinetti Poma score to 20/28 or more to decrease fall risk within 4 visits.
+
+Plan
+Frequency: 1w4
+Effective Date: `
   };
 
   function initTemplates() {
@@ -393,6 +477,7 @@ Assessment Summary: Generate 6 sentences for HH PT initial evaluation noting imp
       <option value="">(None)</option>
       <option value="pt_eval_default">PT Evaluation (Default)</option>
       <option value="pt_visit_default">PT Visit (Default)</option>
+      <option value="pt_reeval_default">PT Re-Evaluation (Default)</option>
     `;
     dd.addEventListener("change", () => {
       const key = dd.value;
@@ -402,6 +487,37 @@ Assessment Summary: Generate 6 sentences for HH PT initial evaluation noting imp
       setStatus(`Loaded template: ${key}`);
     });
   }
+
+
+  // Auto-pick default template based on Task type (only when Template dropdown is (None))
+  const taskDD = el("taskType");
+  if (taskDD) {
+    taskDD.addEventListener("change", () => {
+      try {
+        const tk = (dd.value || "").trim();
+        if (tk) return; // user already chose a template
+        const tt = (taskDD.value || "").toLowerCase();
+        if (tt.includes("re-evaluation") && TEMPLATES.pt_reeval_default) {
+          dd.value = "pt_reeval_default";
+          el("aiNotes").value = TEMPLATES.pt_reeval_default;
+          setBadge("Template loaded", "ok");
+          setStatus("Loaded template: pt_reeval_default");
+        } else if (tt.includes("evaluation") && TEMPLATES.pt_eval_default) {
+          dd.value = "pt_eval_default";
+          el("aiNotes").value = TEMPLATES.pt_eval_default;
+          setBadge("Template loaded", "ok");
+          setStatus("Loaded template: pt_eval_default");
+        } else if (TEMPLATES.pt_visit_default) {
+          dd.value = "pt_visit_default";
+          el("aiNotes").value = TEMPLATES.pt_visit_default;
+          setBadge("Template loaded", "ok");
+          setStatus("Loaded template: pt_visit_default");
+        }
+      } catch {}
+    });
+  }
+
+} 
 
   // ------------------------------
   // Remember Kinnser credentials (localStorage)
