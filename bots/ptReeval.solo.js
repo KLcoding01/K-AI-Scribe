@@ -2213,64 +2213,7 @@ async function extractNoteDataFromAI(aiNotes, visitType = "Evaluation") {
     clinicalStatement: (structured.clinicalStatement || "").trim(),
   };
   
-  // Only use OpenAI for Assessment Summary (frm_EASI1). Everything else is copy-through.
-  // If there is no API key or no text, return copy-through.
-  if (!text || !process.env.OPENAI_API_KEY) return base;
-  
-  // ✅ SAFEGUARD: never send identifiers/secrets to OpenAI
-  const forbidden = [USERNAME, PASSWORD, process.env.OPENAI_API_KEY]
-  .filter(Boolean)
-  .map((v) => String(v).toLowerCase());
-  
-  if (forbidden.some((v) => v && hay.includes(v))) {
-    console.warn("⚠️ Possible identifier/secret detected in aiNotes. Skipping OpenAI call; using copy-through.");
-    return base;
-  }
-  
-  // If the note already has an explicit Assessment Summary / Clinical Statement block, prefer that and skip OpenAI.
-  if (base.clinicalStatement && base.clinicalStatement.length >= 40) {
-    return base;
-  }
-  
-  const prompt = `You are helping a home health PT fill out a Kinnser/WellSky PT RE-EVALUATION note.
 
-Return ONLY valid JSON with double quotes.
-
-You must output exactly one key:
-- "clinicalStatement":
-  Write an Assessment Summary appropriate for HH PT Initial Evaluation.
-  Write EXACTLY 6 sentences, ONE paragraph, and EVERY sentence must start with "Pt".
-  No bullets, no headings, no arrows, no pronouns (he/she/they).
-  Keep it Medicare-justifiable.
-
-Use ONLY information present in the Free-text note.
-If the note lacks key details, keep statements general and avoid inventing specifics.
-
-Free-text note:
----
-${text}
----`;
-  
-  try {
-    const parsed = await callOpenAIJSON(prompt, 12000);
-    const cs = (parsed && parsed.clinicalStatement ? String(parsed.clinicalStatement) : "").trim();
-    
-    if (cs) {
-      // Optional validation (if helper exists)
-      if (typeof isValidSixSentencePtParagraph === "function") {
-        if (isValidSixSentencePtParagraph(cs)) {
-          base.clinicalStatement = cs;
-        } else {
-          log("⚠️ OpenAI clinicalStatement failed 6-sentence validation; keeping copy-through.");
-        }
-      } else {
-        base.clinicalStatement = cs;
-      }
-    }
-  } catch (err) {
-    logErrSafe("⚠️ OpenAI/JSON error (Assessment Summary only); using copy-through:", String((err && err.message) || err || ""));
-  }
-  
   return base;
 }
 
