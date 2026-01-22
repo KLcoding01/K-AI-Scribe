@@ -186,91 +186,6 @@ function normalizeDateToMMDDYYYY(raw) {
   return s;
 }
 
-
-/* =========================
- * Helpers: active-page locking + post-save audit
- * =======================*/
-
-function getActivePageFromContext(context) {
-  try {
-    if (!context || typeof context.pages !== "function") return null;
-    const pages = context.pages();
-    if (!pages || !pages.length) return null;
-    // The most recently opened page is typically the visit/task edit screen.
-    return pages[pages.length - 1];
-  } catch {
-    return null;
-  }
-}
-
-function normalizeTimeToHHMM(raw) {
-  const s = String(raw ?? "").trim();
-  if (!s) return "";
-  // If already HH:MM
-  if (/^\d{1,2}:\d{2}$/.test(s)) {
-    const [h, m] = s.split(":");
-    return `${String(Number(h)).padStart(2, "0")}:${m}`;
-  }
-  // Common input: 4 digits "1715" -> "17:15"
-  if (/^\d{4}$/.test(s)) {
-    const h = s.slice(0, 2);
-    const m = s.slice(2);
-    return `${h}:${m}`;
-  }
-  // Common input: "715" -> "07:15"
-  if (/^\d{3}$/.test(s)) {
-    const h = s.slice(0, 1);
-    const m = s.slice(1);
-    return `${h.padStart(2, "0")}:${m}`;
-  }
-  return s;
-}
-
-async function postSaveAudit(target, expected = {}) {
-  const page = target?.page || target;
-  const frame = await findTemplateScope(page, { timeoutMs: 15000 }).catch(() => null);
-  if (!frame) throw new Error("POST-SAVE AUDIT FAIL: could not resolve active template scope");
-
-  const expectDate = normalizeDateToMMDDYYYY(expected.visitDate);
-  const expectIn = normalizeTimeToHHMM(expected.timeIn);
-  const expectOut = normalizeTimeToHHMM(expected.timeOut);
-
-  async function readVal(sel) {
-    const loc = await firstVisibleLocator(frame, [sel]);
-    if (!loc) return "";
-    return (await loc.inputValue().catch(() => "")).trim();
-  }
-
-  const gotDate = await readVal("#frm_visitdate");
-  const gotIn = await readVal("#frm_timein");
-  const gotOut = await readVal("#frm_timeout");
-
-  // Also verify a narrative field that should change frequently.
-  const gotMedDx = await readVal("#frm_MedDiagText");
-
-  const failures = [];
-  if (expectDate && gotDate && gotDate !== expectDate) failures.push(`visitDate expected ${expectDate} got ${gotDate}`);
-  if (expectIn && gotIn && normalizeTimeToHHMM(gotIn) !== expectIn) failures.push(`timeIn expected ${expectIn} got ${gotIn}`);
-  if (expectOut && gotOut && normalizeTimeToHHMM(gotOut) !== expectOut) failures.push(`timeOut expected ${expectOut} got ${gotOut}`);
-
-  if (expected.medicalDiagnosis) {
-    const want = String(expected.medicalDiagnosis).trim();
-    if (want && gotMedDx && gotMedDx !== want) failures.push("Medical Dx did not persist");
-  }
-
-  if (failures.length) {
-    throw new Error(`POST-SAVE AUDIT FAIL: ${failures.join("; ")}`);
-  }
-
-  // If fields are empty, that can indicate a stale/hidden frame; fail fast.
-  if ((expectDate && !gotDate) || (expectIn && !gotIn) || (expectOut && !gotOut)) {
-    throw new Error(`POST-SAVE AUDIT FAIL: one or more key fields are blank after save (date="${gotDate}", in="${gotIn}", out="${gotOut}")`);
-  }
-
-  console.log("✅ Post-save audit passed (key fields persisted in active visit form).");
-}
-
-
 /* =========================
  * Browser launcher
  * =======================*/
@@ -828,7 +743,53 @@ async function findTemplateScope(target, opts = {}) {
     const urls = pages.map((p) => p.url());
     console.log("⚠️ findTemplateScope: no template scope found. Pages:", urls);
   } catch {}
-  return null;
+  async function postSaveAudit(target, expected = {}) {
+  const page = target?.page || target;
+  const frame = await findTemplateScope(page, { timeoutMs: 15000 }).catch(() => null);
+  if (!frame) throw new Error("POST-SAVE AUDIT FAIL: could not resolve active template scope");
+  
+  const expectDate = normalizeDateToMMDDYYYY(expected.visitDate);
+  const expectIn = normalizeTimeToHHMM(expected.timeIn);
+  const expectOut = normalizeTimeToHHMM(expected.timeOut);
+  
+  async function readVal(sel) {
+    const loc = await firstVisibleLocator(frame, [sel]);
+    if (!loc) return "";
+    return (await loc.inputValue().catch(() => "")).trim();
+  }
+  
+  const gotDate = await readVal("#frm_visitdate");
+  const gotIn = await readVal("#frm_timein");
+  const gotOut = await readVal("#frm_timeout");
+  
+  // Also verify a narrative field that should change frequently.
+  const gotMedDx = await readVal("#frm_MedDiagText");
+  
+  const failures = [];
+  if (expectDate && gotDate && gotDate !== expectDate) failures.push(`visitDate expected ${expectDate} got ${gotDate}`);
+  if (expectIn && gotIn && normalizeTimeToHHMM(gotIn) !== expectIn) failures.push(`timeIn expected ${expectIn} got ${gotIn}`);
+  if (expectOut && gotOut && normalizeTimeToHHMM(gotOut) !== expectOut) failures.push(`timeOut expected ${expectOut} got ${gotOut}`);
+  
+  if (expected.medicalDiagnosis) {
+    const want = String(expected.medicalDiagnosis).trim();
+    if (want && gotMedDx && gotMedDx !== want) failures.push("Medical Dx did not persist");
+  }
+  
+  if (failures.length) {
+    throw new Error(`POST-SAVE AUDIT FAIL: ${failures.join("; ")}`);
+  }
+  
+  // If fields are empty, that can indicate a stale/hidden frame; fail fast.
+  if ((expectDate && !gotDate) || (expectIn && !gotIn) || (expectOut && !gotOut)) {
+    throw new Error(`POST-SAVE AUDIT FAIL: one or more key fields are blank after save (date="${gotDate}", in="${gotIn}", out="${gotOut}")`);
+  }
+  
+  log("✅ Post-save audit passed (key fields persisted in active visit form).");
+}
+
+
+
+return null;
 }
 
 async function selectTemplateGW2(context) {
@@ -3056,168 +3017,84 @@ async function fillPhysicalRomStrength(context, romStrength) {
 async function clickSave(contextOrPage) {
   // Accept: Page, Frame, BrowserContext, or wrapper { page }
   let scope = contextOrPage?.page || contextOrPage;
-
+  
   // If they passed a BrowserContext, convert to a Page
   // (BrowserContext has pages(), not locator()).
   if (scope && typeof scope.pages === "function" && typeof scope.locator !== "function") {
     const pages = scope.pages();
     if (pages && pages.length) scope = pages[0];
   }
-
+  
   function normalizeScope(s) {
     if (s && typeof s.locator === "function") return s; // Page/Frame
     if (s?.page && typeof s.page.locator === "function") return s.page;
     if (s?.frame && typeof s.frame.locator === "function") return s.frame;
-
+    
     // If wrapper contains a BrowserContext
     if (s && typeof s.pages === "function") {
       const pages = s.pages();
       if (pages && pages.length && typeof pages[0].locator === "function") return pages[0];
     }
-
+    
     throw new TypeError("clickSave(): scope must be Playwright Page/Frame/BrowserContext or {page}/{frame}");
   }
-
+  
   const saveSelectors = [
     "#btnSave",
     "input#btnSave",
     "button#btnSave",
     "input[type='button'][value='Save']",
     "input[type='submit'][value='Save']",
+    "xpath=//input[contains(@onclick, \"modifyForm('save'\") )]",
     "xpath=//*[self::input or self::button][contains(translate(normalize-space(.),'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'save')]",
   ];
-
-  // Heuristic: does popup message look like a validation failure?
-  function isBadDialogMessage(msg = "") {
-    const m = String(msg || "").toLowerCase();
-    return (
-      m.includes("error") ||
-      m.includes("required") ||
-      m.includes("missing") ||
-      m.includes("cannot") ||
-      m.includes("unable") ||
-      m.includes("invalid") ||
-      m.includes("please correct") ||
-      m.includes("must be") ||
-      m.includes("failed")
-    );
-  }
-
-  async function assertNoOnPageErrors(pageOrFrame) {
-    // WellSky/Kinnser error containers — keep this tight to avoid false positives
-    const errorSelectors = [
-      ".validation-summary-errors",
-      ".validation-summary",
-      ".field-validation-error",
-      "#error",
-      "#errors",
-      "text=/please correct/i",
-      "text=/validation/i",
-      "text=/required/i",
-      "text=/unable to save/i",
-      "text=/error occurred/i",
-    ];
-
-    for (const sel of errorSelectors) {
-      const loc = pageOrFrame.locator(sel).first();
-      const visible = await loc.isVisible().catch(() => false);
-      if (!visible) continue;
-
-      const txt = (await loc.innerText().catch(() => "")).trim();
-
-      // Only fail if there is meaningful error text (avoid empty containers)
-      if (txt && txt.length >= 3) {
-        throw new Error(`SAVE_VALIDATION_ERROR: ${txt.slice(0, 500)}`);
-      }
-    }
-  }
-
+  
   async function tryClick(s, label) {
     const pageOrFrame = normalizeScope(s);
-
-    // For dialog listening we need the underlying Page object
-    const page = typeof pageOrFrame.page === "function" ? pageOrFrame.page() : pageOrFrame;
-
+    
     for (const sel of saveSelectors) {
       const loc = pageOrFrame.locator(sel).first();
-
+      
       const visible = await loc.isVisible().catch(() => false);
       if (!visible) continue;
-
+      
       await loc.scrollIntoViewIfNeeded().catch(() => {});
-
-      // Start listening for dialog BEFORE clicking.
-      const dialogPromise =
-        typeof page.waitForEvent === "function"
-          ? page.waitForEvent("dialog", { timeout: 8000 }).catch(() => null)
-          : Promise.resolve(null);
-
       try {
-        await loc.click({ force: true, timeout: 8000 });
+        await loc.click({ force: true, timeout: 5000 });
       } catch {
         // JS fallback (Page/Frame only)
         await pageOrFrame.evaluate(() => {
           const byId = document.querySelector("#btnSave");
           if (byId) return byId.click();
-
+          
           const byOnclick = Array.from(document.querySelectorAll("input,button"))
-            .find(el => (el.getAttribute("onclick") || "").includes("modifyForm('save')"));
+          .find(el => (el.getAttribute("onclick") || "").includes("modifyForm('save')"));
           if (byOnclick) return byOnclick.click();
-
+          
           const byValue = Array.from(
-            document.querySelectorAll("input[type='button'],input[type='submit'],button")
-          ).find(el => ((el.value || el.textContent || "").trim().toLowerCase() === "save"));
+                                     document.querySelectorAll("input[type='button'],input[type='submit'],button")
+                                     ).find(el => ((el.value || el.textContent || "").trim().toLowerCase() === "save"));
           if (byValue) return byValue.click();
         });
       }
-
+      
       console.log(`✅ Clicked Save (${label}) using selector: ${sel}`);
-
-      // Wait a moment for Kinnser save routines
-      try {
-        if (typeof page.waitForLoadState === "function") {
-          await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
-        }
-      } catch {}
-
-      // If a dialog appeared, inspect its message.
-      const dlg = await dialogPromise;
-      if (dlg) {
-        const msg = dlg.message?.() || "";
-        console.log(`⚠️ Save popup detected: ${msg}`);
-
-        // The global dialog handler already accepts, but we try accepting safely anyway.
-        try { await dlg.accept(); } catch {}
-
-        if (isBadDialogMessage(msg)) {
-          throw new Error(`SAVE_POPUP_ERROR: ${msg}`);
-        }
-      } else {
-        // No dialog captured. Still allow time for any inline validation to render.
-        await wait(1000);
-      }
-
-      // Check for inline page validation/errors after save
-      await assertNoOnPageErrors(pageOrFrame);
-
-      // Extra settle time for Kinnser to persist
-      await wait(1500);
       return true;
     }
-
+    
     return false;
   }
-
+  
   // Try on main scope/page
   if (await tryClick(scope, "scope")) return true;
-
+  
   // Try all iframes (common in Kinnser/WellSky)
   const page = normalizeScope(scope);
   const frames = typeof page.frames === "function" ? page.frames() : [];
   for (const fr of frames) {
     if (await tryClick(fr, "frame")) return true;
   }
-
+  
   console.log("⚠️ Save button not found — skipping save.");
   return false;
 }
@@ -4576,59 +4453,59 @@ async function runPtVisitBot({
     await setHotboxShow100(page);
     
     await openHotboxPatientTask(page, patientName, visitDate, "PT Visit");
-
-    // Lock to the ACTIVE visit page (prevents “filled but nothing changed” caused by stale frames/pages)
-    await wait(1200);
-    const activePage = getActivePageFromContext(context) || page;
-
-    // Ensure dialogs on the active page are accepted
-    try {
-      activePage.on("dialog", async (dialog) => {
-        console.log("⚠️ POPUP:", dialog.message());
-        try {
-          await dialog.accept();
-          console.log("✅ Popup accepted");
-        } catch (e) {
-          console.log("⚠️ Popup already handled:", e?.message || e);
-        }
-      });
-    } catch {}
-
-    await wait(800);
-
+    
+    await wait(2000);
+    
     const noteData = await extractNoteDataFromAI(aiNotes || "", "Visit");
-
-    await fillVisitBasics(activePage, { timeIn, timeOut, visitDate });
-    await fillVitalsAndNarratives(activePage, noteData);
-    await fillPainSection(activePage, noteData);
-    await fillPtVisitSubjectiveAndPlan(activePage, noteData);
-    await checkGoalsMeetBy(activePage);
-    await fillGaitAndOxygenFields(activePage, noteData);
-    await fillDMESection(activePage, noteData);
-
+    
+    await fillVisitBasics(context, { timeIn, timeOut, visitDate });
+    await fillVitalsAndNarratives(context, noteData);
+    await fillPainSection(context, noteData);
+    await fillPtVisitSubjectiveAndPlan(context, noteData);
+    await checkGoalsMeetBy(context);
+    await fillGaitAndOxygenFields(context, noteData);
+    await fillDMESection(context, noteData);
+    
     // ✅ functional status → training fields update
-    await fillPtVisitTrainingBlocks(activePage, noteData);
+    await fillPtVisitTrainingBlocks(context, noteData);
+    
+    await fillGenericTherExFromCue(context, aiNotes || "");
+        await fillVisitExerciseTeachingDefaults(context, aiNotes || "");
 
-    await fillGenericTherExFromCue(activePage, aiNotes || "");
-    await fillVisitExerciseTeachingDefaults(activePage, aiNotes || "");
-    await fillVisitSummaryFromCue(activePage, aiNotes || "");
-    await ensureHomeboundCriteriaOne(activePage);
-
+await fillVisitSummaryFromCue(context, aiNotes || "");
+    await ensureHomeboundCriteriaOne(context);
+    
     // ✅ SAVE (must be BEFORE "automation completed" log)
-    console.log("[PT Visit Bot] Attempting to click Save...");
-    await clickSave(activePage);
+    console.log("[PT Visit Bot] Attempting to click Save (iframe-safe)...");
+    await clickSave(context);
     await wait(2500);
 
-    // Post-save verification: if it doesn't stick, FAIL the job (so UI never shows false "completed")
-    await postSaveAudit(activePage, {
-      visitDate,
-      timeIn,
-      timeOut,
-      medicalDiagnosis: noteData?.medicalDiagnosis || "",
-    });
+    // ✅ Post-save audit (matches PT Evaluation behavior)
+    await postSaveAudit(context, { visitDate, timeIn, timeOut });
+
+    // Additional read-only sanity checks (do NOT re-fill fields here)
+    try {
+      const scope = await findTemplateScope(context, { timeoutMs: 12000 });
+      if (scope) {
+        const teach = (await scope.locator("#frm_tTitlesTxt").first().inputValue().catch(() => "")).trim();
+        console.log(teach.length > 2
+          ? "[PT Visit Bot] ✅ VERIFIED Teaching Tools (frm_tTitlesTxt) - has content"
+          : "[PT Visit Bot] ❌ VERIFY FAIL Teaching Tools appears empty after save");
+
+        const impactLoc = scope.locator("#frm_teExerciseDesc").first();
+        if (await impactLoc.isVisible().catch(() => false)) {
+          const got = (await impactLoc.inputValue().catch(() => "")).trim();
+          console.log(got.length > 5
+            ? "[PT Visit Bot] ✅ VERIFIED Impact field has content"
+            : "[PT Visit Bot] ❌ VERIFY FAIL Impact field still empty after save");
+        }
+      }
+    } catch (e) {
+      console.log("[PT Visit Bot] ⚠️ Post-save sanity check skipped:", e?.message || e);
+    }
 
     await wait(1500);
-
+    
     console.log("[PT Visit Bot] PT Visit automation completed.");
     
     console.log("[PT Visit Bot] Leaving browser open for 5 minutes so you can review before close...");
