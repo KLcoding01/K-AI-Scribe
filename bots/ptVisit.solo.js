@@ -1,4 +1,6 @@
 
+const log = (...args) => console.log(...args);
+
 function sanitizeAssessmentText(text) {
   if (!text) return "";
 
