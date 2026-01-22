@@ -4598,7 +4598,8 @@ async function runPtVisitBot({
   kinnserUsername,
   kinnserPassword,
 }) {
-  const { browser, context, page } = await launchBrowserContext();
+  const { browser, context, page: basePage } = await launchBrowserContext();
+  let page = basePage;
   
   try {
     console.log("===============================================");
