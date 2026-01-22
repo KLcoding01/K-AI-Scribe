@@ -111,6 +111,29 @@ async function verifySetText(scope, selector, value, label) {
   return ok;
 }
 
+
+// Read value from input/textarea safely (iframe/page safe)
+async function safeGetValue(scope, selector, label = "", opts = {}) {
+  const timeout = opts.timeout ?? 3000;
+  try {
+    const loc = scope.locator(selector).first();
+    const visible = await loc.isVisible().catch(() => false);
+    if (!visible) return "";
+
+    await loc.scrollIntoViewIfNeeded().catch(() => {});
+    // Prefer Playwright inputValue for inputs/textareas
+    const v = await loc.inputValue({ timeout }).catch(async () => {
+      // Fallback: read .value directly
+      return await loc.evaluate((el) => (el && "value" in el ? String(el.value) : "")).catch(() => "");
+    });
+
+    return String(v ?? "").trim();
+  } catch (e) {
+    console.log(`[PT Visit Bot] ⚠️ safeGetValue failed ${label ? `(${label})` : ""}: ${e?.message || e}`);
+    return "";
+  }
+}
+
 async function verifyCheck(scope, selector, label) {
   const loc = scope.locator(selector).first();
   const visible = await loc.isVisible().catch(() => false);
