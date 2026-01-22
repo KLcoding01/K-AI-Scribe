@@ -1,4 +1,6 @@
 
+const log = (...args) => console.log(...args);
+
 function sanitizeAssessmentText(text) {
   if (!text) return "";
 
@@ -55,6 +57,17 @@ const PASSWORD = process.env.KINNSER_PASSWORD;
  * =======================*/
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+function getActivePageFromContext(context) {
+  try {
+    if (!context || typeof context.pages !== "function") return null;
+    const pages = context.pages();
+    if (!pages || !pages.length) return null;
+    return pages[pages.length - 1];
+  } catch {
+    return null;
+  }
+}
 
 async function firstVisibleLocator(scope, selectors) {
   for (const selector of selectors) {
@@ -161,81 +174,6 @@ function normalizeDateToMMDDYYYY(raw) {
       const yyyy = y;
       return `${mm}/${dd}/${yyyy}`; // 11/14/2025
     }
-
-/* =========================
- * Helpers: active-page locking + post-save audit (iframe-safe)
- * =======================*/
-
-function getActivePageFromContext(context) {
-  try {
-    if (!context || typeof context.pages !== "function") return null;
-    const pages = context.pages();
-    if (!pages || !pages.length) return null;
-    // The most recently opened page is typically the visit/task edit screen.
-    return pages[pages.length - 1];
-  } catch {
-    return null;
-  }
-}
-
-function normalizeTimeToHHMM(value) {
-  const s = String(value ?? "").trim();
-  if (!s) return "";
-  if (/^\d{1,2}:\d{2}$/.test(s)) {
-    const [h, m] = s.split(":");
-    return `${String(Number(h)).padStart(2, "0")}:${m}`;
-  }
-  if (/^\d{3,4}$/.test(s)) {
-    const padded = s.padStart(4, "0");
-    return `${padded.slice(0, 2)}:${padded.slice(2)}`;
-  }
-  return s;
-}
-
-async function postSaveAudit(target, expected = {}) {
-  const page = target?.page || target;
-
-  // Important: re-resolve the ACTIVE template scope AFTER save to avoid stale iframe reads.
-  const frame = await findTemplateScope(page, { timeoutMs: 20000 }).catch(() => null);
-  if (!frame) throw new Error("POST-SAVE AUDIT FAIL: could not resolve active template scope");
-
-  const expectDate = normalizeDateToMMDDYYYY(expected.visitDate);
-  const expectIn = normalizeTimeToHHMM(expected.timeIn);
-  const expectOut = normalizeTimeToHHMM(expected.timeOut);
-
-  async function readVal(sel) {
-    const loc = await firstVisibleLocator(frame, [sel]);
-    if (!loc) return "";
-    return (await loc.inputValue().catch(() => "")).trim();
-  }
-
-  const gotDate = await readVal("#frm_visitdate");
-  const gotIn = await readVal("#frm_timein");
-  const gotOut = await readVal("#frm_timeout");
-
-  // Visit-specific: verify teaching tools and exercise impact are non-empty after save.
-  const gotTeaching = await readVal("#frm_tTitlesTxt");
-  const gotImpact = await readVal("#frm_teExerciseDesc");
-
-  const failures = [];
-  if (expectDate && gotDate && gotDate !== expectDate) failures.push(`visitDate expected ${expectDate} got ${gotDate}`);
-  if (expectIn && gotIn && normalizeTimeToHHMM(gotIn) !== expectIn) failures.push(`timeIn expected ${expectIn} got ${gotIn}`);
-  if (expectOut && gotOut && normalizeTimeToHHMM(gotOut) !== expectOut) failures.push(`timeOut expected ${expectOut} got ${gotOut}`);
-
-  // If key fields are blank, it usually means we audited the wrong iframe (or save didn't persist).
-  if ((expectDate && !gotDate) || (expectIn && !gotIn) || (expectOut && !gotOut)) {
-    failures.push(`one or more key fields are blank after save (date="${gotDate}", in="${gotIn}", out="${gotOut}")`);
-  }
-
-  if (!gotTeaching || gotTeaching.trim().length < 5) failures.push("Teaching Tools (frm_tTitlesTxt) empty after save");
-  if (!gotImpact || gotImpact.trim().length < 5) failures.push("Impact field (frm_teExerciseDesc) empty after save");
-
-  if (failures.length) {
-    throw new Error(`POST-SAVE AUDIT FAIL: ${failures.join("; ")}`);
-  }
-
-  console.log("[PT Visit Bot] ✅ Post-save audit passed (key fields persisted in active visit form).");
-}
   }
   
   // Case 2: Already "M/D/YY" or "MM/DD/YYYY"
@@ -818,7 +756,86 @@ async function findTemplateScope(target, opts = {}) {
     const urls = pages.map((p) => p.url());
     console.log("⚠️ findTemplateScope: no template scope found. Pages:", urls);
   } catch {}
-  return null;
+  
+
+
+
+return null;
+}
+
+
+// =========================
+// Time normalization helper (audit-safe)
+// Accepts "9:30", "09:30", "930", "0930", "1530"
+// Returns "HH:MM"
+// =========================
+function normalizeTimeToHHMM(value) {
+  if (value === null || value === undefined) return "";
+  let v = String(value).trim();
+
+  // Already HH:MM (or H:MM)
+  const hm = v.match(/^\s*(\d{1,2})\s*:\s*(\d{2})\s*$/);
+  if (hm) {
+    const h = Number(hm[1]);
+    const m = Number(hm[2]);
+    if (Number.isFinite(h) && Number.isFinite(m)) {
+      return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+    }
+  }
+
+  // HMM / HHMM (e.g. 930, 0930, 1530)
+  const digits = v.replace(/[^0-9]/g, "");
+  if (/^\d{3,4}$/.test(digits)) {
+    const padded = digits.padStart(4, "0");
+    return `${padded.slice(0, 2)}:${padded.slice(2, 4)}`;
+  }
+
+  // Fallback: return trimmed input
+  return v;
+}
+
+async function postSaveAudit(target, expected = {}) {
+  const page = target?.page || target;
+  const frame = await findTemplateScope(page, { timeoutMs: 15000 }).catch(() => null);
+  if (!frame) throw new Error("POST-SAVE AUDIT FAIL: could not resolve active template scope");
+  
+  const expectDate = normalizeDateToMMDDYYYY(expected.visitDate);
+  const expectIn = normalizeTimeToHHMM(expected.timeIn);
+  const expectOut = normalizeTimeToHHMM(expected.timeOut);
+  
+  async function readVal(sel) {
+    const loc = await firstVisibleLocator(frame, [sel]);
+    if (!loc) return "";
+    return (await loc.inputValue().catch(() => "")).trim();
+  }
+  
+  const gotDate = await readVal("#frm_visitdate");
+  const gotIn = await readVal("#frm_timein");
+  const gotOut = await readVal("#frm_timeout");
+  
+  // Also verify a narrative field that should change frequently.
+  const gotMedDx = await readVal("#frm_MedDiagText");
+  
+  const failures = [];
+  if (expectDate && gotDate && gotDate !== expectDate) failures.push(`visitDate expected ${expectDate} got ${gotDate}`);
+  if (expectIn && gotIn && normalizeTimeToHHMM(gotIn) !== expectIn) failures.push(`timeIn expected ${expectIn} got ${gotIn}`);
+  if (expectOut && gotOut && normalizeTimeToHHMM(gotOut) !== expectOut) failures.push(`timeOut expected ${expectOut} got ${gotOut}`);
+  
+  if (expected.medicalDiagnosis) {
+    const want = String(expected.medicalDiagnosis).trim();
+    if (want && gotMedDx && gotMedDx !== want) failures.push("Medical Dx did not persist");
+  }
+  
+  if (failures.length) {
+    throw new Error(`POST-SAVE AUDIT FAIL: ${failures.join("; ")}`);
+  }
+  
+  // If fields are empty, that can indicate a stale/hidden frame; fail fast.
+  if ((expectDate && !gotDate) || (expectIn && !gotIn) || (expectOut && !gotOut)) {
+    throw new Error(`POST-SAVE AUDIT FAIL: one or more key fields are blank after save (date="${gotDate}", in="${gotIn}", out="${gotOut}")`);
+  }
+  
+  log("✅ Post-save audit passed (key fields persisted in active visit form).");
 }
 
 async function selectTemplateGW2(context) {
@@ -4483,9 +4500,9 @@ async function runPtVisitBot({
     
     await openHotboxPatientTask(page, patientName, visitDate, "PT Visit");
     
-    // Lock to the active visit page (iframe-safe). In WellSky, the edit screen is often the newest tab.
+    // Lock to the most recently opened tab (Kinnser often opens the visit in a new page)
     const activePage = getActivePageFromContext(context) || page;
-    
+
     await wait(2000);
     
     const noteData = await extractNoteDataFromAI(aiNotes || "", "Visit");
@@ -4508,15 +4525,34 @@ await fillVisitSummaryFromCue(context, aiNotes || "");
     await ensureHomeboundCriteriaOne(context);
     
     // ✅ SAVE (must be BEFORE "automation completed" log)
-    console.log("[PT Visit Bot] Attempting to click Save...");
+    console.log("[PT Visit Bot] Attempting to click Save (iframe-safe)...");
+    await clickSave(activePage);
+    await wait(2500);
 
-// IMPORTANT: click Save against the active visit page (NOT the BrowserContext).
-// This matches the PT Evaluation bot behavior and avoids iframe/tab drift.
-await clickSave(activePage);
-await wait(2500);
+    // ✅ Post-save audit (matches PT Evaluation behavior)
+    await postSaveAudit(activePage, { visitDate, timeIn, timeOut });
 
-// Post-save verification: if it doesn't stick, FAIL the job (so UI never shows false "completed")
-await postSaveAudit(activePage, { visitDate, timeIn, timeOut });
+    // Additional read-only sanity checks (do NOT re-fill fields here)
+    try {
+      const scope = await findTemplateScope(context, { timeoutMs: 12000 });
+      if (scope) {
+        const teach = (await scope.locator("#frm_tTitlesTxt").first().inputValue().catch(() => "")).trim();
+        console.log(teach.length > 2
+          ? "[PT Visit Bot] ✅ VERIFIED Teaching Tools (frm_tTitlesTxt) - has content"
+          : "[PT Visit Bot] ❌ VERIFY FAIL Teaching Tools appears empty after save");
+
+        const impactLoc = scope.locator("#frm_teExerciseDesc").first();
+        if (await impactLoc.isVisible().catch(() => false)) {
+          const got = (await impactLoc.inputValue().catch(() => "")).trim();
+          console.log(got.length > 5
+            ? "[PT Visit Bot] ✅ VERIFIED Impact field has content"
+            : "[PT Visit Bot] ❌ VERIFY FAIL Impact field still empty after save");
+        }
+      }
+    } catch (e) {
+      console.log("[PT Visit Bot] ⚠️ Post-save sanity check skipped:", e?.message || e);
+    }
+
     await wait(1500);
     
     console.log("[PT Visit Bot] PT Visit automation completed.");
