@@ -3469,7 +3469,7 @@ async function fillVisitSummaryFromCue(context, aiNotes) {
   
   const page = context?.page || context;
   
-  const frame = await findTemplateScope(auditPage);
+  const frame = await findTemplateScope(page);
   if (!frame) {
     console.log("[PT Visit Bot] Could not find PT Visit frame for summary.");
     return;
@@ -4613,10 +4613,10 @@ async function runPtVisitBot({
       password: kinnserPassword,
     });
     
-    await navigateToHotBox(page, context);
+    page = await navigateToHotBox(page, context);
     await setHotboxShow100(page);
     
-    await openHotboxPatientTask(auditPage, patientName, visitDate, "PT Visit");
+    await openHotboxPatientTask(page, patientName, visitDate, "PT Visit");
     
     // Lock to the most recently opened tab (Kinnser often opens the visit in a new page)
     const activePage = getActivePageFromContext(context) || page;
