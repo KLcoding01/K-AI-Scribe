@@ -2359,10 +2359,11 @@ async function fillVitalsAndNarratives(context, data) {
   // NOTE: "Visit" contains the substring "evaluation".
   // Be strict here, or we will incorrectly overwrite Visit/Visit/DC fields.
   const vt = (data?.visitType || "").toLowerCase();
-  const isVisit = vt.includes("Visit") || vt.includes("Visit") || vt.includes("recert");
   const isDischarge = vt.includes("discharge") || vt === "dc" || vt.includes(" dc");
-  const isVisit = vt.includes("visit") && !isVisit && !isDischarge;
-  const isInitialEval = !vt || (vt.includes("evaluation") && !isVisit && !isDischarge && !isVisit);
+  // Visit-type notes (regular visit / recert) are treated as "visit" and should NOT be overwritten by eval-only fields.
+  const isVisit = (vt.includes("visit") || vt.includes("recert")) && !isDischarge && !vt.includes("evaluation");
+  // Initial evaluation only (exclude re-evaluation, visit, discharge)
+  const isInitialEval = !vt || (vt.includes("evaluation") && !vt.includes("re-evaluation") && !vt.includes("reeval") && !isDischarge && !isVisit);
   
   // Only fill PMH if explicitly present (prevents overwrite on Visit)
   if (isInitialEval) {
