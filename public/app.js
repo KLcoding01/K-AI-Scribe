@@ -175,7 +175,6 @@
       // Choose template: dropdown first, else based on task type
       let templateText = "";
       if (templateKey && TEMPLATES[templateKey]) templateText = TEMPLATES[templateKey];
-      else if ((taskType || "").toLowerCase().includes("re-evaluation") && TEMPLATES.pt_reeval_default) templateText = TEMPLATES.pt_reeval_default;
       else if ((taskType || "").toLowerCase().includes("evaluation") && TEMPLATES.pt_eval_default) templateText = TEMPLATES.pt_eval_default;
       else templateText = TEMPLATES.pt_visit_default || "";
 
@@ -224,7 +223,6 @@
 
       let templateText = "";
       if (templateKey && TEMPLATES[templateKey]) templateText = TEMPLATES[templateKey];
-      else if ((taskType || "").toLowerCase().includes("re-evaluation") && TEMPLATES.pt_reeval_default) templateText = TEMPLATES.pt_reeval_default;
       else if ((taskType || "").toLowerCase().includes("evaluation") && TEMPLATES.pt_eval_default) templateText = TEMPLATES.pt_eval_default;
       else templateText = TEMPLATES.pt_visit_default || "";
 
@@ -393,7 +391,7 @@ LTG 4: Pt will improve Tinetti Poma score to 20/28 or more to decrease fall risk
 Plan
 Frequency: 1w1, 2w3
 Effective Date: `
-,
+  ,
 pt_reeval_default: `Subjective: Pt agrees to PT Re-evaluation.
 
 Vital Signs
@@ -412,7 +410,7 @@ Relieved by:
 Interferes with:
 
 Neuro / Physical
-Orientation: AOx3 
+Orientation: AOx2 
 Speech: Unremarkable
 Vision: Blurred vision
 Hearing: B HOH
@@ -423,10 +421,10 @@ Sensation: NT
 Endurance: Poor
 Posture: Forward head lean, slouch posture, rounded shoulders, increased mid T-spine kyphosis
 
-Bed Mobility:
+Bed Mobility: DEP
 Bed Mobility AD:
 
-Transfers: 
+Transfers: DEP
 Transfers AD:
 
 Gait
@@ -456,19 +454,19 @@ Assessment Summary: Patient has been receiving skilled home health PT to address
 
 Goals
 Short-Term Goals (2)
-STG 1: Pt will demonstrate safe bed mobility with Indep within 3 visits.
-STG 2: Pt will demonstrate safe transfers with Indep within 3 visits.
+STG 1: Pt will demonstrate safe bed mobility with Indep within 4 visits.
+STG 2: Pt will demonstrate safe transfers with Indep within 4 visits.
 
 Long-Term Goals (3)
-LTG 1: Pt will ambulate 150 ft using FWW with Indep within 4 visits.
-LTG 2: Pt will demonstrate Indep with HEP, fall/safety precautions, improved safety awareness, and improved activity tolerance with ADLs within 4 visits.
-LTG 3: Pt will improve B LE strength by ≥0.5 MMT grade to enhance functional mobility within 4 visits.
-LTG 4: Pt will improve Tinetti Poma score to 20/28 or more to decrease fall risk within 4 visits.
+LTG 1: Pt will ambulate 150 ft using FWW with Indep within 7 visits.
+LTG 2: Pt will demonstrate Indep with HEP, fall/safety precautions, improved safety awareness, and improved activity tolerance with ADLs within 7 visits.
+LTG 3: Pt will improve B LE strength by ≥0.5 MMT grade to enhance functional mobility within 7 visits.
+LTG 4: Pt will improve Tinetti Poma score to 20/28 or more to decrease fall risk within 7 visits.
 
 Plan
-Frequency: 1w4
+Frequency: 1w1, 2w3
 Effective Date: `
-  };
+};
 
   function initTemplates() {
     const dd = el("templateKey");
@@ -486,38 +484,35 @@ Effective Date: `
       setBadge("Template loaded", "ok");
       setStatus(`Loaded template: ${key}`);
     });
-  }
-
-
-  // Auto-pick default template based on Task type (only when Template dropdown is (None))
-  const taskDD = el("taskType");
-  if (taskDD) {
-    taskDD.addEventListener("change", () => {
-      try {
-        const tk = (dd.value || "").trim();
-        if (tk) return; // user already chose a template
-        const tt = (taskDD.value || "").toLowerCase();
-        if (tt.includes("re-evaluation") && TEMPLATES.pt_reeval_default) {
-          dd.value = "pt_reeval_default";
-          el("aiNotes").value = TEMPLATES.pt_reeval_default;
-          setBadge("Template loaded", "ok");
-          setStatus("Loaded template: pt_reeval_default");
-        } else if (tt.includes("evaluation") && TEMPLATES.pt_eval_default) {
-          dd.value = "pt_eval_default";
-          el("aiNotes").value = TEMPLATES.pt_eval_default;
-          setBadge("Template loaded", "ok");
-          setStatus("Loaded template: pt_eval_default");
-        } else if (TEMPLATES.pt_visit_default) {
-          dd.value = "pt_visit_default";
-          el("aiNotes").value = TEMPLATES.pt_visit_default;
-          setBadge("Template loaded", "ok");
-          setStatus("Loaded template: pt_visit_default");
-        }
-      } catch {}
-    });
-  }
-
-} 
+  
+// Auto-pick default template based on Task type (only when Template dropdown is (None))
+const taskDD = el("taskType");
+if (taskDD) {
+  taskDD.addEventListener("change", () => {
+    try {
+      const tk = (dd.value || "").trim();
+      if (tk) return; // user already chose a template
+      const tt = (taskDD.value || "").toLowerCase();
+      if (tt.includes("re-evaluation") && TEMPLATES.pt_reeval_default) {
+        dd.value = "pt_reeval_default";
+        el("aiNotes").value = TEMPLATES.pt_reeval_default;
+        setBadge("Template loaded", "ok");
+        setStatus("Loaded template: pt_reeval_default");
+      } else if (tt.includes("evaluation") && TEMPLATES.pt_eval_default) {
+        dd.value = "pt_eval_default";
+        el("aiNotes").value = TEMPLATES.pt_eval_default;
+        setBadge("Template loaded", "ok");
+        setStatus("Loaded template: pt_eval_default");
+      } else if (TEMPLATES.pt_visit_default) {
+        dd.value = "pt_visit_default";
+        el("aiNotes").value = TEMPLATES.pt_visit_default;
+        setBadge("Template loaded", "ok");
+        setStatus("Loaded template: pt_visit_default");
+      }
+    } catch {}
+  });
+}
+}
 
   // ------------------------------
   // Remember Kinnser credentials (localStorage)
