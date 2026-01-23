@@ -480,6 +480,79 @@ Post Discharge Goals: Pt will continue with daily HEP to maintain strength, flex
 Information Provided: Pt/family/caregiver reviewed fall and safety precautions for ADLs and functional mobility, and received training and review HEP with emphasis on safety and proper body mechanics.
 
 Treatment Preferences: Pt prefers to continue a home-based exercise routine and safe functional training under PT guidance, focusing on improving mobility and activity tolerance. Patient is agreeable to ongoing HEP and family/caregiver support as needed.`
+,
+pt_reeval_default: `Subjective
+Pt agrees to PT Re-evaluation.
+
+Vital Signs
+Temp:
+Temp Type: Temporal
+BP:  /
+Heart Rate:
+Respirations: 18
+Comments: Pt is currently symptom-free and demonstrates no adverse reactions. Cleared to continue with physical therapy as planned.
+
+Pain:
+
+ROM / Strength:
+
+Neuro / Physical
+Orientation: AOx
+Speech: Unremarkable
+Vision:
+Hearing:
+Skin: Intact
+Muscle Tone:
+Coordination:
+Sensation:
+Endurance:
+Posture:
+
+Functional Assessment
+Bed Mobility:
+Bed Mobility AD:
+
+Transfers:
+Transfers AD:
+
+Gait
+Level Surfaces:
+Distance:
+Gait AD:
+
+Uneven Surfaces:
+Distance:
+Uneven Surfaces AD:
+
+Stairs:
+Distance:
+Stairs AD:
+
+Weight Bearing: FWB
+
+DME:
+
+Edema:
+Type:
+Location:
+Pitting Grade:
+
+Assessment Summary:
+
+Goals
+Short-Term Goals
+STG 1:
+STG 2:
+
+Long-Term Goals
+LTG 1:
+LTG 2:
+LTG 3:
+LTG 4:
+
+Plan
+Frequency:
+Effective Date: `
   };
 
   function initTemplates() {
@@ -489,6 +562,7 @@ Treatment Preferences: Pt prefers to continue a home-based exercise routine and 
       <option value="">(None)</option>
       <option value="pt_eval_default">PT Evaluation (Default)</option>
       <option value="pt_visit_default">PT Visit (Default)</option>
+      <option value="pt_reeval_default">PT Re-Evaluation (Default)</option>
       <option value="pt_discharge_default">PT Discharge (Default)</option>
     `;
     dd.addEventListener("change", () => {
