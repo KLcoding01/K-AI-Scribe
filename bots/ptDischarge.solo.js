@@ -1,538 +1,523 @@
+// =========================
+// SOLO BOT FILE (no ./common.js dependency)
+// PT DISCHARGE (2-page flow, no GW2 selection)
+// - Page 1: fill + Save & Continue
+// - Page 2: fill + Save
+// Rules per Kelvin:
+// - Auto-check Homebound/Residual Weakness/Unable unattended (not needed in template)
+// - Pain: if blank => do nothing; if "No" => check NoPain; if "Yes" => leave alone
+// - Goals Met / Goals not Met: check only when template explicitly says "Yes"; if blank => skip
+// - Auto-check Discharge to HEP + Discharge PT Only (not needed in template)
+// - Page 2: Discharge Date = template Discharge Date, else use visitDate (converted to mm/dd/yyyy)
+// - Auto-check Outcomes + Discharge Information + Continuing needs checkboxes (not needed in template)
+// - No runtime OpenAI; copy-through from aiNotes/template text only
+// =========================
 
-// -------------------------
-// Sanitize AI Notes
-// -------------------------
-function sanitizeNotes(text) {
-  if (!text) return text;
-  return String(text).replace(/\*\*/g, "");
+const { chromium } = require("playwright");
+const path = require("path");
+
+require("dotenv").config({
+  path: path.resolve(__dirname, "../.env")
+});
+
+const BASE_URL = process.env.KINNSER_URL || "https://www.kinnser.net/login.cfm";
+const USERNAME = String(process.env.KINNSER_USERNAME || "");
+const PASSWORD = String(process.env.KINNSER_PASSWORD || "");
+
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+function logStep(job, msg) {
+  if (job && typeof job.log === "function") job.log(msg);
+  else console.log(msg);
 }
 
-(() => {
-  const el = (id) => document.getElementById(id);
-
-  const apiBase = window.location.origin;
-  el("apiBasePill").textContent = `API: ${apiBase}`;
-
-  let pollTimer = null;
-  let activeJobId = null;
-
-  function setBadge(text, kind = "") {
-    const b = el("jobBadge");
-    b.textContent = text;
-    b.className = "badge" + (kind ? " " + kind : "");
-  }
-
-  function setStatus(text) {
-    el("statusBox").textContent = text;
-    el("statusBox").scrollTop = el("statusBox").scrollHeight;
-  }
-
-  async function httpJson(url, options = {}) {
-    const res = await fetch(url, {
-      ...options,
-      headers: { "Content-Type": "application/json", ...(options.headers || {}) },
-    });
-    const txt = await res.text();
-    let body;
-    try { body = txt ? JSON.parse(txt) : {}; } catch { body = { raw: txt }; }
-    if (!res.ok) {
-      const err = new Error(body?.error || body?.message || `HTTP ${res.status}`);
-      err.status = res.status;
-      err.body = body;
-      throw err;
-    }
-    return body;
-  }
-
-  async function testHealth() {
+async function firstVisibleLocator(scope, selectors) {
+  for (const selector of selectors) {
     try {
-      setBadge("Checking…", "warn");
-      const res = await fetch("/health");
-      const txt = await res.text();
-      setBadge("Healthy", "ok");
-      setStatus(`GET /health\n\n${txt}`);
-    } catch (e) {
-      setBadge("Health failed", "bad");
-      setStatus(`Health check failed:\n${e?.message || e}`);
-    }
-  }
-
-  function stopPolling() {
-    if (pollTimer) clearInterval(pollTimer);
-    pollTimer = null;
-  }
-
-  async function pollJob(jobId) {
-    stopPolling();
-    pollTimer = setInterval(async () => {
-      try {
-        const job = await httpJson(`/job-status/${encodeURIComponent(jobId)}`);
-
-        if (job.status === "completed") setBadge("Completed", "ok");
-        else if (job.status === "failed") setBadge("Failed", "bad");
-        else setBadge(job.status || "running", "warn");
-
-        const summaryLines = [
-          `jobId: ${job.jobId}`,
-          `status: ${job.status}`,
-          `message: ${job.message || ""}`,
-          `startedAt: ${job.startedAt ? new Date(job.startedAt).toISOString() : ""}`,
-          `updatedAt: ${job.updatedAt ? new Date(job.updatedAt).toISOString() : ""}`,
-          `finishedAt: ${job.finishedAt ? new Date(job.finishedAt).toISOString() : ""}`,
-        ];
-
-        const logText = Array.isArray(job.logs) ? job.logs.join("\n") : (job.log || "");
-        setStatus(summaryLines.join("\n") + (logText ? `\n\n${logText}` : ""));
-
-        if (job.status === "completed" || job.status === "failed") {
-          stopPolling();
-        }
-      } catch (e) {
-        setBadge("Polling error", "bad");
-        setStatus(`Polling failed:\n${e?.message || e}\n\n${JSON.stringify(e?.body || {}, null, 2)}`);
-        stopPolling();
-      }
-    }, 1200);
-  }
-
-  function clearForm() {
-    el("patientName").value = "";
-    el("visitDate").value = "";
-    el("timeIn").value = "";
-    el("timeOut").value = "";
-    el("aiNotes").value = "";
-    if (el("dictationNotes")) el("dictationNotes").value = "";
-    if (el("imageFile")) el("imageFile").value = "";
-
-    setBadge("Idle");
-    setStatus("No job yet.");
-    activeJobId = null;
-    stopPolling();
-  }
-
-  async function runAutomation() {
-    const kinnserUsername = el("kinnserUsername").value.trim();
-    const kinnserPassword = el("kinnserPassword").value;
-    const patientName = el("patientName").value.trim();
-    const visitDate = el("visitDate").value;
-    const taskType = el("taskType").value;
-    const timeIn = el("timeIn").value.trim();
-    const timeOut = el("timeOut").value.trim();
-    const aiNotes = el("aiNotes").value || "";
-
-    if (!patientName || !visitDate || !taskType) {
-      setBadge("Missing fields", "bad");
-      setStatus("Please fill Patient name, Visit date, and Task type.");
-      return;
-    }
-
-    if (!kinnserUsername || !kinnserPassword) {
-      setBadge("Missing login", "bad");
-      setStatus("Please enter Kinnser username and password.");
-      return;
-    }
-
-    try {
-      el("btnRun").disabled = true;
-      setBadge("Starting…", "warn");
-      setStatus("Submitting job…");
-
-      const body = {
-        kinnserUsername,
-        kinnserPassword,
-        patientName,
-        visitDate,
-        taskType,
-        timeIn,
-        timeOut,
-        aiNotes: aiNotes.replace(/\r\n/g, "\n"),
-      };
-
-      const resp = await httpJson("/run-automation", {
-        method: "POST",
-        body: JSON.stringify(body),
-      });
-
-      activeJobId = resp.jobId;
-      setBadge("Running", "warn");
-      setStatus(`Job started.\njobId: ${activeJobId}`);
-      await pollJob(activeJobId);
-    } catch (e) {
-      setBadge("Start failed", "bad");
-      setStatus(`Start failed:\n${e?.message || e}\n\n${JSON.stringify(e?.body || {}, null, 2)}`);
-    } finally {
-      el("btnRun").disabled = false;
-    }
-  }
-
-          async function convertDictation() {
-    const dictation = (el("dictationNotes")?.value || "").trim();
-    if (!dictation) {
-      setBadge("Convert failed", "bad");
-      setStatus("Convert failed:\nPlease enter dictation first.");
-      return;
-    }
-
-    try {
-      el("btnConvert").disabled = true;
-      setBadge("Converting…", "warn");
-      setStatus("Converting dictation → selected template…");
-
-      const taskType = (el("taskType")?.value || "").trim();
-      const templateKey = (el("templateKey")?.value || "").trim();
-
-      // Choose template: dropdown first, else based on task type
-      let templateText = "";
-      if (templateKey && TEMPLATES[templateKey]) templateText = TEMPLATES[templateKey];
-      else if ((taskType || "").toLowerCase().includes("evaluation") && TEMPLATES.pt_eval_default) templateText = TEMPLATES.pt_eval_default;
-      else templateText = TEMPLATES.pt_visit_default || "";
-
-      const resp = await httpJson("/convert-dictation", {
-        method: "POST",
-        body: JSON.stringify({ dictation, taskType, templateText }),
-      });
-
-      el("aiNotes").value = resp.templateText || "";
-      setBadge("Ready", "ok");
-      setStatus("Conversion completed. Review AI Notes, then click Run Automation.");
-    } catch (e) {
-      setBadge("Convert failed", "bad");
-      setStatus(`Convert failed:\n${e?.message || e}\n\n${JSON.stringify(e?.body || {}, null, 2)}`);
-    } finally {
-      el("btnConvert").disabled = false;
-    }
-  }
-
-  function fileToDataUrl(file) {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(String(reader.result || ""));
-      reader.onerror = () => reject(reader.error || new Error("File read failed"));
-      reader.readAsDataURL(file);
-    });
-  }
-
-          async function convertImage() {
-    const file = el("imageFile")?.files?.[0];
-    if (!file) {
-      setBadge("Image convert failed", "bad");
-      setStatus("Image convert failed:\nPlease choose an image file first.");
-      return;
-    }
-
-    try {
-      el("btnConvertImage").disabled = true;
-      setBadge("Converting…", "warn");
-      setStatus("Converting image → selected template…");
-
-      const imageDataUrl = await fileToDataUrl(file);
-
-      const taskType = (el("taskType")?.value || "").trim();
-      const templateKey = (el("templateKey")?.value || "").trim();
-
-      let templateText = "";
-      if (templateKey && TEMPLATES[templateKey]) templateText = TEMPLATES[templateKey];
-      else if ((taskType || "").toLowerCase().includes("evaluation") && TEMPLATES.pt_eval_default) templateText = TEMPLATES.pt_eval_default;
-      else templateText = TEMPLATES.pt_visit_default || "";
-
-      const resp = await httpJson("/convert-image", {
-        method: "POST",
-        body: JSON.stringify({ imageDataUrl, taskType, templateText }),
-      });
-
-      el("aiNotes").value = resp.templateText || "";
-      setBadge("Ready", "ok");
-      setStatus("Image conversion completed. Review AI Notes, then click Run Automation.");
-    } catch (e) {
-      setBadge("Image convert failed", "bad");
-      setStatus(`Image convert failed:\n${e?.message || e}\n\n${JSON.stringify(e?.body || {}, null, 2)}`);
-    } finally {
-      el("btnConvertImage").disabled = false;
-    }
-  }
-
-  // ------------------------------
-  // Templates (client-side)
-  // ------------------------------
-  const TEMPLATES = {
-    pt_visit_default: `Subjective:
-Pt reports no new complaints and agrees to PT tx today.
-
-Vital Signs
-Temp: ___
-Temp Type: Temporal
-BP: ___ / ___
-Heart Rate: ___
-Respirations: ___
-Comments: Pt currently symptom-free with no adverse reactions noted. Cleared to continue with PT as planned.
-
-Pain Assessment
-Pain: No
-Location Other:
-Intensity (0–10):
-Increased by:
-Relieved by:
-Interferes with:
-
-Functional Status
-Bed Mobility:
-Transfers:
-Gait:
-
-Response to Treatment:
-Pt tolerated tx well with no adverse reactions noted.
-
-Exercises:
-Seated LAQ: 2 x 10 reps
-Seated marching: 2 x 10 reps
-Sit-to-stand: 2 x 10 reps
-Heel raises: 2 x 10 reps
-Clamshells: 2 x 10 reps
-Figure 4 stretch: 3 x 30-sec hold each
-Hamstring stretch: 3 x 30-sec hold each
-
-Impact of Exercise(s) on Functional Performance / Patient Response to Treatment:
-Patient is appropriately challenged by the current therapeutic exercise program without any adverse responses. Rest breaks are needed to manage fatigue. Patient requires reminders and both verbal and tactile cues to maintain proper body mechanics.
-
-Teaching Tools / Education Tools / Teaching Method:
-Verbal, tactile, demonstration, illustration.
-
-Progress to goals indicated by:
-Motivation/willingness to work with PT.
-
-Needs continued skilled PT to address:
-Functional mobility training, strength training, balance/safety training, proper use of AD, HEP education, and fall prevention.
-
-Balance Test:
-NT
-
-Posture Training:
-Education provided to improve postural awareness.
-
-Assessment:
-5 sentences HH PT tx focusing on TherEx, TherAct, functional safety training, HEP review, and gait training. Tx tolerated fairly. Pt continues to demonstrate weakness and impaired balance with high fall risk. Continued skilled HH PT remains indicated to progress toward goals and improve functional independence.
-`,
-    pt_eval_default: `Medical Diagnosis: 
-PT Diagnosis: Muscle weakness, Functional Mobility Deficit, Unsteady Gait/Balance, Impaired Activity Tolerance 
-Precautions: Fall Risk
-Relevant Medical History: 
-Prior Level of Function: Need some assistance with functional mobility, gait, and ADLs.
-Patient Goals: To improve mobility, strength, activity tolerance, decrease fall risk, and return to PLOF.
-
-Vital Signs
-Temp: 97.6
-Temp Type: Temporal
-BP:  / 
-Heart Rate: 
-Respirations: 18
-Comments: Pt is currently symptom-free and demonstrates no adverse reactions. Cleared to continue with physical therapy as planned. 
-
-Subjective: Pt agrees to PT evaluation.
-
-Pain: Yes/No
-Primary Location Other: 
-Intensity (0–10): 
-Increased by: 
-Relieved by: 
-Interferes with:
-
-Living Situation
-Patient Lives: With other in home
-Assistance Available: around the clock
-Current Assistance Types: Family/daughter
-Steps/Stairs Present: No
-Steps Count:
-
-Neuro / Physical
-Orientation: AOx2 
-Speech: Unremarkable
-Vision: Blurred vision
-Hearing: B HOH
-Skin: Intact
-Muscle Tone: Muscle Weakness
-Coordination: Fair-
-Sensation: NT
-Endurance: Poor
-Posture: Forward head lean, slouch posture, rounded shoulders, increased mid T-spine kyphosis
-
-Functional Status
-Bed Mobility: DEP
-Bed Mobility AD:
-Transfers: DEP
-Transfers AD:
-
-Gait
-Level Surfaces
-Gait: Unable
-Gait Distance:
-Gait AD:
-
-Uneven Surfaces: Unable
-Uneven Surfaces Distance:
-Uneven Surfaces AD:
-
-Stairs: Unable
-Stairs Distance:
-Stairs AD:
-
-Weight Bearing: FWB
-
-DME Other: FWW and Transport Chair
-
-Edema: Absent
-Type:
-Location:
-Pitting Grade:
-
-Assessment Summary: Pt presents for HH PT evaluation with chronic low back and knee pain, generalized weakness, and significant functional decline in the setting of multiple comorbidities. Pt is currently bed bound and demonstrates markedly impaired bed mobility, decreased strength, and limited tolerance to positional changes, placing pt at high risk for further deconditioning and skin breakdown. Pain and weakness contribute to difficulty with functional transfers, upright tolerance, and initiation of mobility tasks. Current impairments significantly limit safe participation in ADLs and increase overall fall risk once mobility is attempted. Skilled HH PT is required to address pain management, improve strength, initiate safe bed mobility and transfer training, and provide caregiver education to reduce complications and promote functional recovery. Continued skilled HH PT remains medically necessary to maximize functional potential, improve safety, and support progression toward the highest achievable level of independence within the home setting.
-
-Goals
-Short-Term Goals (2)
-STG 1: Pt will demonstrate safe bed mobility with Indep within 4 visits.
-STG 2: Pt will demonstrate safe transfers with Indep within 4 visits.
-
-Long-Term Goals (3)
-LTG 1: Pt will ambulate 150 ft using FWW with Indep within 7 visits.
-LTG 2: Pt will demonstrate Indep with HEP, fall/safety precautions, improved safety awareness, and improved activity tolerance with ADLs within 7 visits.
-LTG 3: Pt will improve B LE strength by ≥0.5 MMT grade to enhance functional mobility within 7 visits.
-LTG 4: Pt will improve Tinetti Poma score to 20/28 or more to decrease fall risk within 7 visits.
-
-Plan
-Frequency: 1w1, 2w3
-Effective Date: `
-,
-pt_discharge_default: `Vital Signs
-Temp:
-Temp Type: Temporal
-BP:  /
-Heart Rate:
-Respirations: 18
-Comments: Pt is currently symptom-free and demonstrates no adverse reactions. Cleared to continue with physical therapy as planned.
-Pain:
-
-ROM / Strength:
-
-Functional Assessment
-Rolling:
-Sup to Sit:
-Sit to Sup:
-
-Transfers
-Sit to Stand:
-Stand to Sit:
-Toilet/BSC:
-Tub/Shower:
-
-Gait – Level:
-Distance:
-Gait – Unlevel:
-Steps/stairs:
-
-Balance
-Sitting: Movement/mobility within position
-Standing: Movement/mobility within position
-
-Evaluation and Testing Description: PT discharge, home environment assessment, and DME assessment have been completed. Pt was instructed and educated on the importance of adhering to a daily HEP to maintain strength, mobility, and function. Fall prevention strategies and home safety measures were reviewed and reinforced. Pt demonstrated understanding and is safe to continue independently at home.
-Treatment / Skilled Intervention: MMT, ROM, balance assessment, functional independence measure test, gait analysis, fall/safety prevention assessment.
-
-Goals
-Goals Met:
-Goals not Met:
-Goals Summary:
-
-Page 2
-
-Reason For Discharge
-Discharge Date:
-Reason for discharge: PT POC completed and goals partially met.
-
-Condition at Discharge
-Current Status: Independent / Dependent / Needs Assistance / Needs Supervision
-Physical and Psychological Status: Pt presents with a pleasant demeanor and is able to follow simple physical therapy instructions to perform functional tasks when prompted.
-
-Course of Illness and Treatment
-Services Provided: Skilled physical therapy services were provided to address deficits in strength, balance, mobility, and functional independence. Interventions included TherEx, TherAct, gait and balance training, functional mobility training, and patient/caregiver education with VC/TC as needed to promote safety and carryover. Services were directed toward reducing fall risk, improving ADLs, and progressing the pt toward PLOF per established POC.
-Frequency/Duration: See IE.
-Patient Progress/Response: Pt demonstrates good tolerance to HH PT and has successfully met established goals. Pt is now independent with HEP and demonstrates good understanding of proper form and safety techniques. Improved overall mobility, strength, and balance noted during sessions. Education reinforced on continuation of HEP to maintain progress and prevent decline. No adverse reactions observed, and Pt verbalized confidence managing exercises independently. Continued PT not indicated at this time unless functional decline occurs.
-
-Post Discharge Goals: Pt will continue with daily HEP to maintain strength, flexibility, and activity tolerance; continue Indep with transfers and ambulation without assistive device as able; maintain safety during stair use; and seek follow-up with PCP if new symptoms or changes in mobility occur.
-
-Information Provided: Pt/family/caregiver reviewed fall and safety precautions for ADLs and functional mobility, and received training and review HEP with emphasis on safety and proper body mechanics.
-
-Treatment Preferences: Pt prefers to continue a home-based exercise routine and safe functional training under PT guidance, focusing on improving mobility and activity tolerance. Patient is agreeable to ongoing HEP and family/caregiver support as needed.`
-  };
-
-  function initTemplates() {
-    const dd = el("templateKey");
-    if (!dd) return;
-    dd.innerHTML = `
-      <option value="">(None)</option>
-      <option value="pt_eval_default">PT Evaluation (Default)</option>
-      <option value="pt_visit_default">PT Visit (Default)</option>
-      <option value="pt_discharge_default">PT Discharge (Default)</option>
-    `;
-    dd.addEventListener("change", () => {
-      const key = dd.value;
-      if (!key) return;
-      el("aiNotes").value = TEMPLATES[key] || "";
-      setBadge("Template loaded", "ok");
-      setStatus(`Loaded template: ${key}`);
-    });
-  }
-
-  // ------------------------------
-  // Remember Kinnser credentials (localStorage)
-  // ------------------------------
-  function loadSavedCreds() {
-    try {
-      const u = localStorage.getItem("ks_kinnser_user") || "";
-      const p = localStorage.getItem("ks_kinnser_pass") || "";
-      if (u) el("kinnserUsername").value = u;
-      if (p) el("kinnserPassword").value = p;
-      if (el("rememberCreds") && (u || p)) el("rememberCreds").checked = true;
+      const item = scope.locator(selector).first();
+      if (await item.isVisible().catch(() => false)) return item;
     } catch {}
   }
+  return null;
+}
 
-  function saveCreds() {
-    try {
-      if (!el("rememberCreds") || !el("rememberCreds").checked) {
-        setBadge("Not saved", "warn");
-        setStatus("Check 'Remember Kinnser credentials' first.");
-        return;
-      }
-      localStorage.setItem("ks_kinnser_user", el("kinnserUsername").value.trim());
-      localStorage.setItem("ks_kinnser_pass", el("kinnserPassword").value);
-      setBadge("Saved", "ok");
-      setStatus("Saved Kinnser credentials on this computer.");
-    } catch {
-      setBadge("Save failed", "bad");
-      setStatus("Failed to save credentials.");
-    }
-  }
-
-  function clearCreds() {
-    try {
-      localStorage.removeItem("ks_kinnser_user");
-      localStorage.removeItem("ks_kinnser_pass");
-      if (el("rememberCreds")) el("rememberCreds").checked = false;
-      setBadge("Cleared", "ok");
-      setStatus("Cleared saved Kinnser credentials.");
-    } catch {}
-  }
-
-    initTemplates();
-  loadSavedCreds();
-  if (el("btnSaveCreds")) el("btnSaveCreds").addEventListener("click", saveCreds);
-  if (el("btnClearCreds")) el("btnClearCreds").addEventListener("click", clearCreds);
-
-  el("btnHealth").addEventListener("click", testHealth);
-  el("btnRun").addEventListener("click", runAutomation);
-  el("btnClear").addEventListener("click", clearForm);
-
-  if (el("btnConvert")) el("btnConvert").addEventListener("click", convertDictation);
-  if (el("btnConvertImage")) el("btnConvertImage").addEventListener("click", convertImage);
-
-  el("kinnserPassword").addEventListener("keydown", (e) => {
-    if (e.key === "Enter") runAutomation();
+async function safeClick(scope, selectors, opts = {}) {
+  const loc = await firstVisibleLocator(scope, Array.isArray(selectors) ? selectors : [selectors]);
+  if (!loc) throw new Error(`Could not find clickable element for selectors: ${JSON.stringify(selectors)}`);
+  await loc.scrollIntoViewIfNeeded().catch(() => {});
+  await loc.click({ timeout: opts.timeout || 20000 }).catch(async () => {
+    await loc.click({ timeout: opts.timeout || 20000, force: true });
   });
-})();
+  return true;
+}
+
+async function safeFillById(page, id, value) {
+  const v = value == null ? "" : String(value);
+  const loc = page.locator(`#${id}`).first();
+  if (!(await loc.count().catch(() => 0))) return false;
+
+  await loc.scrollIntoViewIfNeeded().catch(() => {});
+  const tag = await loc.evaluate((el) => (el && el.tagName ? el.tagName.toLowerCase() : "")).catch(() => "");
+  if (!tag) return false;
+
+  if (tag === "input" || tag === "textarea") {
+    await loc.fill(v).catch(async () => {
+      await loc.click().catch(() => {});
+      await page.keyboard.press("Control+A").catch(() => {});
+      await page.keyboard.type(v).catch(() => {});
+    });
+    return true;
+  }
+
+  if (tag === "select") {
+    await loc.selectOption({ label: v }).catch(async () => {
+      await loc.selectOption({ value: v }).catch(() => {});
+    });
+    return true;
+  }
+
+  return false;
+}
+
+async function safeCheckById(page, id, shouldCheck) {
+  const loc = page.locator(`#${id}`).first();
+  if (!(await loc.count().catch(() => 0))) return false;
+
+  const type = await loc.getAttribute("type").catch(() => "");
+  if (type !== "checkbox" && type !== "radio") return false;
+
+  const checked = await loc.isChecked().catch(() => false);
+  if (shouldCheck && !checked) {
+    await loc.scrollIntoViewIfNeeded().catch(() => {});
+    await loc.click({ timeout: 15000 }).catch(async () => {
+      await loc.click({ timeout: 15000, force: true }).catch(() => {});
+    });
+  }
+  return true;
+}
+
+async function waitForPage2(page, job) {
+  logStep(job, "➡️ Waiting for Discharge Page 2 to load...");
+  const start = Date.now();
+  while (Date.now() - start < 30000) {
+    const url = page.url() || "";
+    if (/page=2/i.test(url)) break;
+    const hasDate = await page.locator("#frm_DischargeDate").count().catch(() => 0);
+    if (hasDate) break;
+    await wait(300);
+  }
+  await page.waitForLoadState("domcontentloaded").catch(() => {});
+  const hasDate2 = await page.locator("#frm_DischargeDate").count().catch(() => 0);
+  if (!hasDate2) logStep(job, "⚠️ Page 2 marker (#frm_DischargeDate) not found yet; continuing.");
+  else logStep(job, "✅ Page 2 loaded");
+}
+
+/* =========================
+ * Parse template text
+ * =======================*/
+function pickLine(text, labelRegex) {
+  const lines = String(text || "").split(/\r?\n/);
+  for (const line of lines) {
+    if (labelRegex.test(line)) return line;
+  }
+  return "";
+}
+
+function parseAfterColon(line) {
+  const m = String(line || "").match(/:\s*(.*)\s*$/);
+  return m ? m[1].trim() : "";
+}
+
+function parseBP(bpText) {
+  const t = String(bpText || "");
+  const m = t.match(/(\d{2,3})\s*\/\s*(\d{2,3})/);
+  if (!m) return { sys: "", dia: "" };
+  return { sys: m[1], dia: m[2] };
+}
+
+function parseYesNoBlank(raw) {
+  const v = String(raw || "").trim().toLowerCase();
+  if (!v) return "";
+  if (v === "yes" || v === "y") return "yes";
+  if (v === "no" || v === "n") return "no";
+  return v;
+}
+
+function toMMDDYYYY(s) {
+  const t = String(s || "").trim();
+  if (!t) return "";
+  if (/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(t)) return t;
+  const m = t.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if (m) {
+    const y = m[1];
+    const mo = String(m[2]).padStart(2, "0");
+    const d = String(m[3]).padStart(2, "0");
+    return `${mo}/${d}/${y}`;
+  }
+  return t;
+}
+
+function parseDischargeTemplate(aiNotes, visitDate) {
+  const t = String(aiNotes || "");
+  const visitDateMMDD = toMMDDYYYY(visitDate);
+
+  const temp = parseAfterColon(pickLine(t, /^\s*temp\s*:/i));
+  const tempType = parseAfterColon(pickLine(t, /^\s*temp\s*type\s*:/i));
+  const bpRaw = pickLine(t, /^\s*bp\s*:/i);
+  const bp = parseBP(bpRaw);
+  const hr = parseAfterColon(pickLine(t, /^\s*heart\s*rate\s*:/i));
+  const rr = parseAfterColon(pickLine(t, /^\s*resp(irations)?\s*:/i));
+  const vsComments = parseAfterColon(pickLine(t, /^\s*comments\s*:/i));
+
+  const painVal = parseYesNoBlank(parseAfterColon(pickLine(t, /^\s*pain\s*:/i)));
+
+  function p(label) {
+    return parseAfterColon(pickLine(t, new RegExp(`^\\s*${label}\\s*:`, "i")));
+  }
+
+  const rolling = p("Rolling");
+  const supToSit = p("Sup\\s*to\\s*Sit");
+  const sitToSup = p("Sit\\s*to\\s*Sup");
+
+  const sitToStand = p("Sit\\s*to\\s*Stand");
+  const standToSit = p("Stand\\s*to\\s*Sit");
+  const toiletBSC = p("Toilet\\s*\\/\\s*BSC");
+  const tubShower = p("Tub\\s*\\/\\s*Shower");
+
+  const gaitLevel = p("Gait\\s*[-–]?\\s*Level");
+  const distance = p("Distance");
+  const gaitUnlevel = p("Gait\\s*[-–]?\\s*Unlevel");
+  const steps = p("Steps\\/stairs");
+
+  const sittingBal = p("Sitting");
+  const standingBal = p("Standing");
+
+  const evalTestDesc = p("Evaluation and Testing Description");
+  const skilledIntervention = p("Treatment\\s*\\/\\s*Skilled Intervention");
+
+  const goalsMetYN = parseYesNoBlank(p("Goals Met"));
+  const goalsNotMetYN = parseYesNoBlank(p("Goals not Met"));
+  const goalsSummary = p("Goals Summary");
+
+  const dischargeDateLine = p("Discharge Date");
+  const dischargeDate = dischargeDateLine ? toMMDDYYYY(dischargeDateLine) : visitDateMMDD;
+
+  const reasonForDC = p("Reason for discharge");
+  const currentStatus = p("Current Status");
+  const phyPsych = p("Physical and Psychological Status");
+
+  const servicesProvided = p("Services Provided");
+  const frequencyDuration = p("Frequency\/Duration");
+  const progressResponse = p("Patient Progress\/Response");
+
+  const postDischargeGoals = p("Post Discharge Goals");
+  const infoProvided = p("Information Provided");
+  const treatmentPrefs = p("Treatment Preferences");
+
+  return {
+    temp,
+    tempType,
+    bpSys: bp.sys,
+    bpDia: bp.dia,
+    hr,
+    rr,
+    vsComments,
+    painVal,
+
+    rolling,
+    supToSit,
+    sitToSup,
+
+    sitToStand,
+    standToSit,
+    toiletBSC,
+    tubShower,
+
+    gaitLevel,
+    distance,
+    gaitUnlevel,
+    steps,
+
+    sittingBal,
+    standingBal,
+
+    evalTestDesc,
+    skilledIntervention,
+
+    goalsMetCheck: goalsMetYN === "yes",
+    goalsNotMetCheck: goalsNotMetYN === "yes",
+    goalsSummary,
+
+    dischargeDate,
+    reasonForDC,
+    currentStatus,
+    phyPsych,
+
+    servicesProvided,
+    frequencyDuration,
+    progressResponse,
+
+    postDischargeGoals,
+    infoProvided,
+    treatmentPrefs
+  };
+}
+
+/* =========================
+ * Navigation (HotBox)
+ * =======================*/
+async function login(page, job) {
+  logStep(job, `➡️ Navigating to login page: ${BASE_URL}`);
+  await page.goto(BASE_URL, { waitUntil: "domcontentloaded" });
+
+  const popupOk = await firstVisibleLocator(page, ["text=OK", "button:has-text('OK')", "input[value='OK']"]);
+  if (popupOk) {
+    await popupOk.click().catch(() => {});
+    logStep(job, "✅ Popup accepted");
+  }
+
+  const userLoc = await firstVisibleLocator(page, ["#username", "input[name='username']", "input[type='text']"]);
+  const passLoc = await firstVisibleLocator(page, ["#password", "input[name='password']", "input[type='password']"]);
+  if (!userLoc || !passLoc) throw new Error("Login fields not found.");
+
+  await userLoc.fill(USERNAME);
+  await passLoc.fill(PASSWORD);
+
+  await safeClick(page, ["input[type='submit']", "button:has-text('Login')", "text=Login"]);
+  await page.waitForLoadState("domcontentloaded");
+  logStep(job, "✅ Login complete");
+}
+
+async function openHotBox(page, job) {
+  logStep(job, "➡️ Navigating to HotBox...");
+  const hot = await firstVisibleLocator(page, ["text=Hotbox", "text=HotBox", "a:has-text('Hotbox')", "a:has-text('HotBox')"]);
+  if (hot) {
+    await hot.click().catch(() => {});
+    await page.waitForLoadState("domcontentloaded");
+    logStep(job, "✅ HotBox opened");
+    return;
+  }
+
+  const goTo = await firstVisibleLocator(page, ["text=Go To", "a:has-text('Go To')", "button:has-text('Go To')"]);
+  if (goTo) {
+    await goTo.click().catch(() => {});
+    const hot2 = await firstVisibleLocator(page, ["text=Hotbox", "text=HotBox"]);
+    if (hot2) {
+      await hot2.click().catch(() => {});
+      await page.waitForLoadState("domcontentloaded");
+      logStep(job, "✅ HotBox opened via Go To");
+      return;
+    }
+  }
+  logStep(job, "ℹ️ HotBox link not found; proceeding assuming already on task list.");
+}
+
+async function openTaskFromHotBox(page, job, opts) {
+  const patientName = String(opts.patientName || "").trim();
+  const taskType = String(opts.taskType || "PT Discharge").trim();
+  const visitDate = String(opts.visitDate || "").trim();
+
+  logStep(job, `➡️ Opening task from HotBox: patient="${patientName}" date="${visitDate}" task="${taskType}"`);
+
+  const rowSelectors = [
+    patientName ? `tr:has-text("${patientName}"):has-text("${taskType}")` : "",
+    patientName ? `tr:has-text("${patientName}"):has-text("${visitDate}")` : "",
+    `tr:has-text("${taskType}")`
+  ].filter(Boolean);
+
+  let row = null;
+  for (const rs of rowSelectors) {
+    const loc = page.locator(rs).first();
+    if (await loc.count().catch(() => 0)) {
+      row = loc;
+      break;
+    }
+  }
+  if (!row) throw new Error(`Could not find HotBox row for task "${taskType}".`);
+
+  const link = await firstVisibleLocator(row, ["a", "td a"]);
+  if (!link) throw new Error("Task row found but no link to open the form.");
+
+  await link.click().catch(async () => {
+    await link.click({ force: true }).catch(() => {});
+  });
+
+  await page.waitForLoadState("domcontentloaded");
+  logStep(job, "✅ Task opened");
+}
+
+/* =========================
+ * Fill Page 1
+ * =======================*/
+async function fillPage1(page, job, data) {
+  logStep(job, "➡️ Filling PT Discharge Page 1...");
+
+  await safeCheckById(page, "frm_hsHomedYes", true);
+  await safeCheckById(page, "frm_hsResWeak", true);
+  await safeCheckById(page, "frm_hsLeaveUnattd", true);
+
+  if (data.temp) await safeFillById(page, "frm_VSTemperature", data.temp);
+  if (data.tempType) await safeFillById(page, "frm_VSTemperatureType", data.tempType);
+  if (data.bpSys) await safeFillById(page, "frm_VSPriorBPsys", data.bpSys);
+  if (data.bpDia) await safeFillById(page, "frm_VSPriorBPdia", data.bpDia);
+  if (data.hr) await safeFillById(page, "frm_VSPriorHeartRate", data.hr);
+  if (data.rr) await safeFillById(page, "frm_VSPriorResp", data.rr);
+  if (data.vsComments) await safeFillById(page, "frm_VSComments", data.vsComments);
+
+  if (data.painVal === "no") await safeCheckById(page, "frm_PainAsmtNoPain", true);
+
+  if (data.rolling) await safeFillById(page, "frm_BMRollingALDC", data.rolling);
+  if (data.supToSit) await safeFillById(page, "frm_BMSupSitALDC", data.supToSit);
+  if (data.sitToSup) await safeFillById(page, "frm_BMSitSupALDC", data.sitToSup);
+
+  if (data.sitToStand) await safeFillById(page, "frm_TransSitStandALDC", data.sitToStand);
+  if (data.standToSit) await safeFillById(page, "frm_TransStandSitALDC", data.standToSit);
+  if (data.toiletBSC) await safeFillById(page, "frm_TransToiletBSCALDC", data.toiletBSC);
+  if (data.tubShower) await safeFillById(page, "frm_TransTubShowerALDC", data.tubShower);
+
+  if (data.gaitLevel) await safeFillById(page, "frm_GaitLevelALDC", data.gaitLevel);
+  if (data.distance) await safeFillById(page, "frm_GaitLevelAmtDC", data.distance);
+  if (data.gaitUnlevel) await safeFillById(page, "frm_GaitUnLevelALDC", data.gaitUnlevel);
+  if (data.steps) await safeFillById(page, "frm_GaitStepsStairsALDC", data.steps);
+
+  if (data.sittingBal) await safeFillById(page, "frm_BalanceSitALDC", data.sittingBal);
+  if (data.standingBal) await safeFillById(page, "frm_BalanceStandALDC", data.standingBal);
+
+  if (data.evalTestDesc) await safeFillById(page, "frm_BalanceEvalTestDC", data.evalTestDesc);
+  if (data.skilledIntervention) await safeFillById(page, "frm_trtmntSIV", data.skilledIntervention);
+
+  if (data.goalsMetCheck) await safeCheckById(page, "frm_GoalsAllMetDC", true);
+  if (data.goalsNotMetCheck) await safeCheckById(page, "frm_GoalsPartMegDC", true);
+  if (data.goalsSummary) await safeFillById(page, "frm_GoalsSummaryDC", data.goalsSummary);
+
+  await safeCheckById(page, "frm_DCDispositionHomeExer", true);
+  await safeCheckById(page, "frm_DCPTOnly", true);
+
+  logStep(job, "✅ Page 1 filled");
+}
+
+async function clickSaveAndContinue(page, job) {
+  logStep(job, "➡️ Save & Continue...");
+  const btn = await firstVisibleLocator(page, [
+    "input[name='sc'][value*='Save']",
+    "input[value*='Save'][name='sc']",
+    "text=Save & Continue",
+    "button:has-text('Save & Continue')"
+  ]);
+  if (!btn) throw new Error("Save & Continue button not found on Discharge Page 1.");
+  await btn.scrollIntoViewIfNeeded().catch(() => {});
+  await btn.click().catch(async () => {
+    await btn.click({ force: true }).catch(() => {});
+  });
+  await wait(900);
+}
+
+/* =========================
+ * Fill Page 2
+ * =======================*/
+async function fillPage2(page, job, data) {
+  logStep(job, "➡️ Filling PT Discharge Page 2...");
+
+  if (data.dischargeDate) await safeFillById(page, "frm_DischargeDate", data.dischargeDate);
+  if (data.reasonForDC) await safeFillById(page, "frm_OtherDCReason", data.reasonForDC);
+
+  if (data.currentStatus) await safeFillById(page, "frm_CurrentStatus", data.currentStatus);
+  if (data.phyPsych) await safeFillById(page, "frm_PhyPsych", data.phyPsych);
+
+  await safeCheckById(page, "frm_physical_therapy", true);
+  if (data.servicesProvided) await safeFillById(page, "frm_physical_therapy_services", data.servicesProvided);
+  if (data.frequencyDuration) await safeFillById(page, "frm_physical_therapy_frequency", data.frequencyDuration);
+  if (data.progressResponse) await safeFillById(page, "frm_physical_therapy_progress", data.progressResponse);
+
+  await safeCheckById(page, "frm_ImprovedCond", true);
+  await safeCheckById(page, "frm_ImprovedKnow", true);
+  await safeCheckById(page, "frm_ImprovedInd", true);
+  await safeCheckById(page, "frm_ImprovedFunc", true);
+
+  if (data.postDischargeGoals) await safeFillById(page, "frm_PostDischargeGoals", data.postDischargeGoals);
+
+  const mustCheck = [
+    "frm_DischargeInsY",
+    "frm_MedFollowupY",
+    "frm_MedFollowupVerbalY",
+    "frm_MedicationRevN",
+    "frm_ComprehendInstructionsY",
+    "frm_CallAgencyY",
+    "frm_InformedPriorY",
+    "frm_DischargeInsPatient",
+    "frm_MedFollowupPatient",
+    "frm_MedFollowupVerbalPatient",
+    "frm_ComprehendInstructionsPatient",
+    "frm_CallAgencyPatient",
+    "frm_InformedPriorPatient"
+  ];
+  for (const id of mustCheck) await safeCheckById(page, id, true);
+
+  const contChecks = [
+    "frm_ToPatient",
+    "frm_LiveArrangeDCHome",
+    "frm_CareCoordDCPhysNotifiedPrDCDate",
+    "frm_CareCoordDCPhysNotifiedDCSumm",
+    "frm_CareCoordDCOrderSummComplete",
+    "frm_CareCoordDCSchedNotified"
+  ];
+  for (const id of contChecks) await safeCheckById(page, id, true);
+
+  if (data.infoProvided) await safeFillById(page, "frm_InfoProvided", data.infoProvided);
+  if (data.treatmentPrefs) await safeFillById(page, "frm_TreatmentPreferences", data.treatmentPrefs);
+
+  logStep(job, "✅ Page 2 filled");
+}
+
+async function clickSave(page, job) {
+  logStep(job, "➡️ Saving (final)...");
+  const btn = await firstVisibleLocator(page, [
+    "input[value='Save']",
+    "button:has-text('Save')",
+    "text=Save",
+    "input[name='btnSave']",
+    "#btnSave"
+  ]);
+  if (!btn) throw new Error("Save button not found on Discharge Page 2.");
+  await btn.scrollIntoViewIfNeeded().catch(() => {});
+  await btn.click().catch(async () => {
+    await btn.click({ force: true }).catch(() => {});
+  });
+  await wait(1200);
+  logStep(job, "✅ Save clicked");
+}
+
+async function runPtDischargeBot({ patientName, visitDate, aiNotes, taskType }, job) {
+  const browser = await chromium.launch({ headless: true });
+  const context = await browser.newContext();
+  const page = await context.newPage();
+
+  try {
+    await login(page, job);
+    await openHotBox(page, job);
+    await openTaskFromHotBox(page, job, {
+      patientName,
+      visitDate,
+      taskType: taskType || "PT Discharge"
+    });
+
+    const data = parseDischargeTemplate(aiNotes, visitDate);
+
+    await fillPage1(page, job, data);
+    await clickSaveAndContinue(page, job);
+
+    await waitForPage2(page, job);
+    await fillPage2(page, job, data);
+    await clickSave(page, job);
+
+    logStep(job, "✅ PT Discharge bot finished successfully");
+  } catch (err) {
+    logStep(job, `❌ PT Discharge bot failed: ${err && err.message ? err.message : String(err)}`);
+    throw err;
+  } finally {
+    await context.close().catch(() => {});
+    await browser.close().catch(() => {});
+  }
+}
+
+module.exports = { runPtDischargeBot };
