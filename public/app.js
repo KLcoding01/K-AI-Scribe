@@ -121,7 +121,7 @@ function sanitizeNotes(text) {
     el("visitDate").value = "";
     el("timeIn").value = "";
     el("timeOut").value = "";
-    el("aiNotes").value = "";
+    el("aiNotes").value = sanitizeNotes("");
     if (el("dictationNotes")) el("dictationNotes").value = "";
     if (el("imageFile")) el("imageFile").value = "";
 
@@ -213,7 +213,7 @@ function sanitizeNotes(text) {
         body: JSON.stringify({ dictation, taskType, templateText }),
       });
 
-      el("aiNotes").value = resp.templateText || "";
+      el("aiNotes").value = sanitizeNotes(resp.templateText || "");
       setBadge("Ready", "ok");
       setStatus("Conversion completed. Review AI Notes, then click Run Automation.");
     } catch (e) {
@@ -261,7 +261,7 @@ function sanitizeNotes(text) {
         body: JSON.stringify({ imageDataUrl, taskType, templateText }),
       });
 
-      el("aiNotes").value = resp.templateText || "";
+      el("aiNotes").value = sanitizeNotes(resp.templateText || "");
       setBadge("Ready", "ok");
       setStatus("Image conversion completed. Review AI Notes, then click Run Automation.");
     } catch (e) {
@@ -568,7 +568,7 @@ Effective Date: `
     dd.addEventListener("change", () => {
       const key = dd.value;
       if (!key) return;
-      el("aiNotes").value = TEMPLATES[key] || "";
+      el("aiNotes").value = sanitizeNotes(TEMPLATES[key] || "");
       setBadge("Template loaded", "ok");
       setStatus(`Loaded template: ${key}`);
     });
