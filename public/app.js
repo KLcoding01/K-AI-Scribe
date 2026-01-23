@@ -1,3 +1,25 @@
+
+// -------------------------
+// Sanitize AI Notes
+// -------------------------
+function sanitizeNotes(text) {
+  if (!text) return text;
+  let t = String(text);
+
+  // Remove Markdown bold/italic markers
+  t = t.replace(/\*\*/g, "");
+  t = t.replace(/__/g, "");
+
+  // Remove placeholder underscores (___ or more)
+  t = t.replace(/_{3,}/g, "");
+
+  // Normalize whitespace
+  t = t.replace(/[ \t]+/g, " ");
+  t = t.replace(/\n\s+/g, "\n");
+
+  return t.trim();
+}
+
 (() => {
   const el = (id) => document.getElementById(id);
 
