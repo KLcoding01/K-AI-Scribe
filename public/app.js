@@ -392,11 +392,7 @@ Plan
 Frequency: 1w1, 2w3
 Effective Date: `
 ,
-pt_discharge_default: `PT DC
-
-Page 1
-
-Vital Signs
+pt_discharge_default: `Vital Signs
 Temp:
 Temp Type: Temporal
 BP:  /
@@ -446,7 +442,7 @@ Current Status: Independent / Dependent / Needs Assistance / Needs Supervision
 Physical and Psychological Status: Pt presents with a pleasant demeanor and is able to follow simple physical therapy instructions to perform functional tasks when prompted.
 
 Course of Illness and Treatment
-Services Provided:
+Services Provided: Skilled physical therapy services were provided to address deficits in strength, balance, mobility, and functional independence. Interventions included TherEx, TherAct, gait and balance training, functional mobility training, and patient/caregiver education with VC/TC as needed to promote safety and carryover. Services were directed toward reducing fall risk, improving ADLs, and progressing the pt toward PLOF per established POC.
 Frequency/Duration: See IE.
 Patient Progress/Response: Pt demonstrates good tolerance to HH PT and has successfully met established goals. Pt is now independent with HEP and demonstrates good understanding of proper form and safety techniques. Improved overall mobility, strength, and balance noted during sessions. Education reinforced on continuation of HEP to maintain progress and prevent decline. No adverse reactions observed, and Pt verbalized confidence managing exercises independently. Continued PT not indicated at this time unless functional decline occurs.
 
