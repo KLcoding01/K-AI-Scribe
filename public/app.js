@@ -12,12 +12,18 @@ function sanitizeNotes(text) {
   // Remove placeholder underscores (___ or more)
   t = t.replace(/_{3,}/g, "");
 
+  // Remove any Discharge Date line entirely (date is set from Visit Date in the bot)
+  t = t.replace(/^\s*Discharge\s+Date\s*:.*$/gmi, "");
+
   // Normalize common terms
   t = t.replace(/\bIndependent\b/gi, "Indep");
 
   // Normalize whitespace
   t = t.replace(/[ \t]+/g, " ");
   t = t.replace(/\n\s+/g, "\n");
+
+  // Collapse repeated blank lines
+  t = t.replace(/\n{3,}/g, "\n\n");
 
   return t.trim();
 }
@@ -458,7 +464,6 @@ Goals Summary:
 Page 2
 
 Reason For Discharge
-Discharge Date:
 Reason for discharge: PT POC completed and goals partially met.
 
 Condition at Discharge
