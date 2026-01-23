@@ -654,7 +654,8 @@ function parseDischargeTemplate(aiNotes, visitDate) {
   const goalsSummary = p("Goals Summary");
 
   const dischargeDateLine = p("Discharge Date");
-  const dischargeDate = dischargeDateLine ? toMMDDYYYY(dischargeDateLine) : visitDateMMDD;
+  // Discharge Date is always the same as Visit Date (per workflow)
+  const dischargeDate = visitDateMMDD;
 
   const reasonForDC = p("Reason for discharge");
   const currentStatus = p("Current Status");
