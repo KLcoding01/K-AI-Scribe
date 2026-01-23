@@ -718,6 +718,84 @@ function parseDischargeTemplate(aiNotes, visitDate) {
 }
 
 /* =========================
+ * ROM / Strength (copied from PT Evaluation bot)
+ * - Parses "gross ROM/strength for UE/LE: ..."
+ * - Fills frm_ROM1..frm_ROM40 (UE) and frm_ROM69..frm_ROM116 (LE)
+ * =======================*/
+function parseRomAndStrength(text) {
+  if (!text) return {};
+  const cleanup = (val) => {
+    if (!val) return null;
+    return val.split(/for\s+left\s+and\s+right/i)[0].trim();
+  };
+
+  const ueRomMatch = text.match(/gross\s+rom\s+for\s+ue[^:\-\n]*[:\-]\s*([^\n]+)/i);
+  const leRomMatch = text.match(/gross\s+rom\s+for\s+le[^:\-\n]*[:\-]\s*([^\n]+)/i);
+  const ueStrMatch = text.match(/gross\s+strength\s+for\s+ue[^:\-\n]*[:\-]\s*([^\n]+)/i);
+  const leStrMatch = text.match(/gross\s+strength\s+for\s+le[^:\-\n]*[:\-]\s*([^\n]+)/i);
+
+  const ueRom = cleanup(ueRomMatch && ueRomMatch[1]);
+  const leRom = cleanup(leRomMatch && leRomMatch[1]);
+  const ueStrength = cleanup(ueStrMatch && ueStrMatch[1]);
+  const leStrength = cleanup(leStrMatch && leStrMatch[1]);
+
+  const result = {};
+  if (ueRom || ueStrength) result.ue = { rom: ueRom || null, strength: ueStrength || null };
+  if (leRom || leStrength) result.le = { rom: leRom || null, strength: leStrength || null };
+  return result;
+}
+
+async function fillRomRange(frame, firstId, lastId, romValue, strengthValue) {
+  for (let id = firstId; id <= lastId; id += 4) {
+    const rRomSel = `#frm_ROM${id}`;
+    const lRomSel = `#frm_ROM${id + 1}`;
+    const rStrSel = `#frm_ROM${id + 2}`;
+    const lStrSel = `#frm_ROM${id + 3}`;
+
+    if (romValue) {
+      const rRom = frame.locator(rRomSel).first();
+      const lRom = frame.locator(lRomSel).first();
+      if (await rRom.isVisible().catch(() => false)) {
+        await rRom.fill("").catch(() => {});
+        await rRom.type(romValue, { delay: 10 }).catch(() => {});
+      }
+      if (await lRom.isVisible().catch(() => false)) {
+        await lRom.fill("").catch(() => {});
+        await lRom.type(romValue, { delay: 10 }).catch(() => {});
+      }
+    }
+
+    if (strengthValue) {
+      const rStr = frame.locator(rStrSel).first();
+      const lStr = frame.locator(lStrSel).first();
+      if (await rStr.isVisible().catch(() => false)) {
+        await rStr.fill("").catch(() => {});
+        await rStr.type(strengthValue, { delay: 10 }).catch(() => {});
+      }
+      if (await lStr.isVisible().catch(() => false)) {
+        await lStr.fill("").catch(() => {});
+        await lStr.type(strengthValue, { delay: 10 }).catch(() => {});
+      }
+    }
+  }
+}
+
+async function fillPhysicalRomStrength(context, romStrength) {
+  if (!romStrength) return;
+  const frame = await findTemplateScope(context, { timeoutMs: 20000 }).catch(() => null);
+  if (!frame) return;
+
+  const { ue, le } = romStrength || {};
+  if ((ue && ue.rom) || (ue && ue.strength)) {
+    await fillRomRange(frame, 1, 40, ue.rom || null, ue.strength || null);
+  }
+  if ((le && le.rom) || (le && le.strength)) {
+    await fillRomRange(frame, 69, 116, le.rom || null, le.strength || null);
+  }
+}
+
+
+/* =========================
  * Field fillers (2 pages)
  * =======================*/
 async function safeFillById(scope, id, value) {
@@ -781,12 +859,24 @@ async function fillDischargePage1(activePageOrContext, data) {
   await safeFillById(frame, "frm_VSPriorBPdia", data.bpDia);
   await safeFillById(frame, "frm_VSPriorHeartRate", data.hr);
   await safeFillById(frame, "frm_VSPriorResp", data.rr);
+  // Always set BP position = Sitting and side = Left
+  try {
+    const pos = frame.locator("#frm_VSPriorPosition").first();
+    if (await pos.isVisible().catch(() => false)) await pos.selectOption("2").catch(() => {});
+  } catch {}
+  try {
+    const side = frame.locator("#frm_VSPriorSide").first();
+    if (await side.isVisible().catch(() => false)) await side.selectOption("1").catch(() => {});
+  } catch {}
+
   await safeFillById(frame, "frm_VSComments", data.vsComments);
 
   // Pain: blank => do nothing; No => check; Yes => leave alone
   if (data.painVal === "no") await safeCheckById(frame, "frm_PainAsmtNoPain", true);
 
   // Functional
+  await safeCheckById(frame, "frm_BMRollingL", true).catch(() => {});
+  await safeCheckById(frame, "frm_BMRollingR", true).catch(() => {});
   await safeFillById(frame, "frm_BMRollingALDC", data.rolling);
   await safeFillById(frame, "frm_BMSupSitALDC", data.supToSit);
   await safeFillById(frame, "frm_BMSitSupALDC", data.sitToSup);
@@ -942,6 +1032,33 @@ async function clickSave(activePage) {
   console.log("✅ Save clicked");
 }
 
+
+async function postSaveAuditDischarge(targetOrWrapper, expected = {}) {
+  const page = targetOrWrapper?.page || targetOrWrapper;
+  const frame = await findTemplateScope(page, { timeoutMs: 20000 }).catch(() => null);
+  if (!frame) throw new Error("POST-SAVE AUDIT FAIL: could not resolve active template scope (Discharge)");
+
+  async function readVal(sel) {
+    const loc = await firstVisibleLocator(frame, [sel]);
+    if (!loc) return "";
+    return (await loc.inputValue().catch(() => "")).trim();
+  }
+
+  const gotDischargeDate = await readVal("#frm_DischargeDate");
+  const gotInfo = await readVal("#frm_InfoProvided");
+
+  const failures = [];
+  if (expected.dischargeDate && gotDischargeDate && gotDischargeDate !== String(expected.dischargeDate).trim()) {
+    failures.push(`DischargeDate expected ${expected.dischargeDate} got ${gotDischargeDate}`);
+  }
+  if (expected.dischargeDate && !gotDischargeDate) failures.push("DischargeDate is blank after save");
+  if (expected.infoProvided && !gotInfo) failures.push("InfoProvided is blank after save");
+
+  if (failures.length) throw new Error(`POST-SAVE AUDIT FAIL: ${failures.join("; ")}`);
+
+  console.log("✅ Post-save audit passed (Discharge Page 2 fields persisted).");
+}
+
 /* =========================
  * MAIN ENTRY
  * =======================*/
@@ -987,12 +1104,18 @@ async function runPtDischargeBot({
     // 2) Parse + fill discharge fields
     const data = parseDischargeTemplate(aiNotes || "", visitDate);
 
+    // ROM/Strength: parse from aiNotes using Evaluation logic
+    const romStrength = parseRomAndStrength(String(aiNotes || ""));
+    await fillPhysicalRomStrength(activePage, romStrength).catch(() => {});
+
     await fillDischargePage1(activePage, data);
     await clickSaveAndContinue(activePage);
 
     await waitForPage2(activePage);
     await fillDischargePage2(activePage, data);
     await clickSave(activePage);
+    await wait(2500);
+    await postSaveAuditDischarge(activePage, { dischargeDate: data.dischargeDate, infoProvided: data.infoProvided });
 
     console.log("✅ PT Discharge bot finished successfully");
   } finally {
