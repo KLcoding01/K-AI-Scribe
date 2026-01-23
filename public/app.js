@@ -391,82 +391,71 @@ LTG 4: Pt will improve Tinetti Poma score to 20/28 or more to decrease fall risk
 Plan
 Frequency: 1w1, 2w3
 Effective Date: `
-  ,
-pt_reeval_default: `Subjective: Pt agrees to PT Re-evaluation.
+,
+pt_discharge_default: `PT DC
+
+Page 1
 
 Vital Signs
-Temp: 97.6
+Temp:
 Temp Type: Temporal
-BP:  / 
-Heart Rate: 
+BP:  /
+Heart Rate:
 Respirations: 18
-Comments: Pt is currently symptom-free and demonstrates no adverse reactions. Cleared to continue with physical therapy as planned. 
+Comments: Pt is currently symptom-free and demonstrates no adverse reactions. Cleared to continue with physical therapy as planned.
+Pain:
 
-Pain: Yes/No
-Primary Location Other: 
-Intensity (0–10): 
-Increased by: 
-Relieved by: 
-Interferes with:
+ROM / Strength:
 
-Neuro / Physical
-Orientation: AOx2 
-Speech: Unremarkable
-Vision: Blurred vision
-Hearing: B HOH
-Skin: Intact
-Muscle Tone: Muscle Weakness
-Coordination: Fair-
-Sensation: NT
-Endurance: Poor
-Posture: Forward head lean, slouch posture, rounded shoulders, increased mid T-spine kyphosis
+Functional Assessment
+Rolling:
+Sup to Sit:
+Sit to Sup:
 
-Bed Mobility: DEP
-Bed Mobility AD:
+Transfers
+Sit to Stand:
+Stand to Sit:
+Toilet/BSC:
+Tub/Shower:
 
-Transfers: DEP
-Transfers AD:
+Gait – Level:
+Distance:
+Gait – Unlevel:
+Steps/stairs:
 
-Gait
-Level Surfaces
-Gait: Unable
-Gait Distance:
-Gait AD:
+Balance
+Sitting: Movement/mobility within position
+Standing: Movement/mobility within position
 
-Uneven Surfaces: Unable
-Uneven Surfaces Distance:
-Uneven Surfaces AD:
-
-Stairs: Unable
-Stairs Distance:
-Stairs AD:
-
-Weight Bearing: FWB
-
-DME Other: 
-
-Edema: Absent
-Type:
-Location:
-Pitting Grade:
-
-Assessment Summary: Patient has been receiving skilled home health PT to address functional mobility deficits secondary to muscle weakness, impaired balance, and unsteady gait. Currently, patient is progressing slowly and still has difficulty with functional bed mobility, transfer, decreased gait tolerance, unsteady gait, and poor balance leading to high fall risk. Patient/CG will need further training with HEP, fall prevention, and safety with functional mobility to decrease fall risk and meet goals. Patient still has potential and will continue to benefit from further skilled HH PT to work toward personal goals, as well as, improve overall ADLs. 
+Evaluation and Testing Description: PT discharge, home environment assessment, and DME assessment have been completed. Pt was instructed and educated on the importance of adhering to a daily HEP to maintain strength, mobility, and function. Fall prevention strategies and home safety measures were reviewed and reinforced. Pt demonstrated understanding and is safe to continue independently at home.
+Treatment / Skilled Intervention: MMT, ROM, balance assessment, functional independence measure test, gait analysis, fall/safety prevention assessment.
 
 Goals
-Short-Term Goals (2)
-STG 1: Pt will demonstrate safe bed mobility with Indep within 4 visits.
-STG 2: Pt will demonstrate safe transfers with Indep within 4 visits.
+Goals Met:
+Goals not Met:
+Goals Summary:
 
-Long-Term Goals (3)
-LTG 1: Pt will ambulate 150 ft using FWW with Indep within 7 visits.
-LTG 2: Pt will demonstrate Indep with HEP, fall/safety precautions, improved safety awareness, and improved activity tolerance with ADLs within 7 visits.
-LTG 3: Pt will improve B LE strength by ≥0.5 MMT grade to enhance functional mobility within 7 visits.
-LTG 4: Pt will improve Tinetti Poma score to 20/28 or more to decrease fall risk within 7 visits.
+Page 2
 
-Plan
-Frequency: 1w1, 2w3
-Effective Date: `
-};
+Reason For Discharge
+Discharge Date:
+Reason for discharge: PT POC completed and goals partially met.
+
+Condition at Discharge
+Current Status: Independent / Dependent / Needs Assistance / Needs Supervision
+Physical and Psychological Status: Pt presents with a pleasant demeanor and is able to follow simple physical therapy instructions to perform functional tasks when prompted.
+
+Course of Illness and Treatment
+Services Provided:
+Frequency/Duration: See IE.
+Patient Progress/Response: Pt demonstrates good tolerance to HH PT and has successfully met established goals. Pt is now independent with HEP and demonstrates good understanding of proper form and safety techniques. Improved overall mobility, strength, and balance noted during sessions. Education reinforced on continuation of HEP to maintain progress and prevent decline. No adverse reactions observed, and Pt verbalized confidence managing exercises independently. Continued PT not indicated at this time unless functional decline occurs.
+
+Post Discharge Goals: Pt will continue with daily HEP to maintain strength, flexibility, and activity tolerance; continue Indep with transfers and ambulation without assistive device as able; maintain safety during stair use; and seek follow-up with PCP if new symptoms or changes in mobility occur.
+
+Information Provided: Pt/family/caregiver reviewed fall and safety precautions for ADLs and functional mobility, and received training and review HEP with emphasis on safety and proper body mechanics.
+
+Treatment Preferences: Pt prefers to continue a home-based exercise routine and safe functional training under PT guidance, focusing on improving mobility and activity tolerance. Patient is agreeable to ongoing HEP and family/caregiver support as needed.`
+  };
 
   function initTemplates() {
     const dd = el("templateKey");
@@ -475,7 +464,7 @@ Effective Date: `
       <option value="">(None)</option>
       <option value="pt_eval_default">PT Evaluation (Default)</option>
       <option value="pt_visit_default">PT Visit (Default)</option>
-      <option value="pt_reeval_default">PT Re-Evaluation (Default)</option>
+      <option value="pt_discharge_default">PT Discharge (Default)</option>
     `;
     dd.addEventListener("change", () => {
       const key = dd.value;
@@ -484,35 +473,7 @@ Effective Date: `
       setBadge("Template loaded", "ok");
       setStatus(`Loaded template: ${key}`);
     });
-  
-// Auto-pick default template based on Task type (only when Template dropdown is (None))
-const taskDD = el("taskType");
-if (taskDD) {
-  taskDD.addEventListener("change", () => {
-    try {
-      const tk = (dd.value || "").trim();
-      if (tk) return; // user already chose a template
-      const tt = (taskDD.value || "").toLowerCase();
-      if (tt.includes("re-evaluation") && TEMPLATES.pt_reeval_default) {
-        dd.value = "pt_reeval_default";
-        el("aiNotes").value = TEMPLATES.pt_reeval_default;
-        setBadge("Template loaded", "ok");
-        setStatus("Loaded template: pt_reeval_default");
-      } else if (tt.includes("evaluation") && TEMPLATES.pt_eval_default) {
-        dd.value = "pt_eval_default";
-        el("aiNotes").value = TEMPLATES.pt_eval_default;
-        setBadge("Template loaded", "ok");
-        setStatus("Loaded template: pt_eval_default");
-      } else if (TEMPLATES.pt_visit_default) {
-        dd.value = "pt_visit_default";
-        el("aiNotes").value = TEMPLATES.pt_visit_default;
-        setBadge("Template loaded", "ok");
-        setStatus("Loaded template: pt_visit_default");
-      }
-    } catch {}
-  });
-}
-}
+  }
 
   // ------------------------------
   // Remember Kinnser credentials (localStorage)
