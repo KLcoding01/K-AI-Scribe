@@ -6,12 +6,14 @@ function sanitizeNotes(text) {
   if (!text) return text;
   let t = String(text);
 
-  // Remove Markdown bold/italic markers
+  // Remove Markdown markers
   t = t.replace(/\*\*/g, "");
-  t = t.replace(/__/g, "");
 
   // Remove placeholder underscores (___ or more)
   t = t.replace(/_{3,}/g, "");
+
+  // Normalize common terms
+  t = t.replace(/\bIndependent\b/gi, "Indep");
 
   // Normalize whitespace
   t = t.replace(/[ \t]+/g, " ");
