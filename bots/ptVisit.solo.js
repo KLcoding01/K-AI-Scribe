@@ -2213,7 +2213,7 @@ async function extractNoteDataFromAI(aiNotes, visitType = "Evaluation") {
     clinicalStatement: (structured.clinicalStatement || "").trim(),
   };
   
-  
+
   return base;
 }
 
@@ -3067,94 +3067,6 @@ async function fillLivingSituation(context, data) {
  * Treatment Goals + Pain Plan
  * =======================*/
 
-
-
-/* =========================
- * Homebound + Visit Summary + POC helper fields
- * =======================*/
-
-async function ensureHomeboundCritAlways(context) {
-  log("➡️ Ensuring Homebound criteria (crit1Part1) is checked...");
-  const frame = await findTemplateScope(context);
-  if (!frame) {
-    log("⚠️ Template frame not found for Homebound criteria.");
-    return;
-  }
-
-  const box = frame.locator("#cHo_homebound_crit1Part1").first();
-  const visible = await box.isVisible().catch(() => false);
-
-  if (!visible) {
-    log("⚠️ Homebound checkbox not visible: #cHo_homebound_crit1Part1");
-    return;
-  }
-
-  try {
-    await box.check().catch(() => {});
-    const ok = await box.isChecked().catch(() => false);
-    log(`🏠 Homebound crit1Part1: ${ok ? "checked" : "not confirmed"}`);
-  } catch (e) {
-    log("⚠️ Homebound checkbox check error:", e?.message || String(e));
-  }
-}
-
-async function fillVisitSummaryAndGoalsMeetBy(context, data) {
-  log("➡️ Filling Visit Summary (AI Assessment) + Goals Meet By...");
-
-  const frame = await findTemplateScope(context);
-  if (!frame) {
-    log("⚠️ Template frame not found for Visit Summary / Goals Meet By.");
-    return;
-  }
-
-  // 1) Visit Summary should be driven by AI Assessment Summary (clinicalStatement)
-  const visitSummaryText = String(data?.clinicalStatement || "").trim();
-
-  const visitSummary = await firstVisibleLocator(frame, [
-    "#frm_visitSummary",
-    "textarea#frm_visitSummary",
-    "input#frm_visitSummary",
-  ]);
-
-  if (visitSummary && visitSummaryText) {
-    try {
-      await safeSetValue(visitSummary, visitSummaryText, "Visit Summary (frm_visitSummary)");
-      log("🧾 Visit Summary filled from AI Assessment Summary.");
-    } catch (e) {
-      log("⚠️ Visit Summary fill error:", e?.message || String(e));
-    }
-  } else if (!visitSummary) {
-    log("⚠️ Visit Summary field not found: #frm_visitSummary");
-  } else {
-    log("ℹ️ No AI Assessment Summary text found to fill Visit Summary.");
-  }
-
-  // 2) Goals Meet By should always include your standard POC continuation line
-  const pocLine = "Continue with PT POC focusing on functional mobility, fall/safety, and gait training.";
-  const goalsMeetBy = await firstVisibleLocator(frame, [
-    "#frm_goalsMeetByTxt",
-    "textarea#frm_goalsMeetByTxt",
-    "input#frm_goalsMeetByTxt",
-  ]);
-
-  if (goalsMeetBy) {
-    try {
-      const existing = String((await goalsMeetBy.inputValue().catch(() => "")) || "").trim();
-      const needsLine = !existing.toLowerCase().includes(pocLine.toLowerCase());
-
-      const next = existing
-        ? (needsLine ? `${existing}\n${pocLine}` : existing)
-        : pocLine;
-
-      await safeSetValue(goalsMeetBy, next, "Goals Meet By (frm_goalsMeetByTxt)");
-      log("🧩 Goals Meet By filled/normalized.");
-    } catch (e) {
-      log("⚠️ Goals Meet By fill error:", e?.message || String(e));
-    }
-  } else {
-    log("⚠️ Goals Meet By field not found: #frm_goalsMeetByTxt");
-  }
-}
 
 async function fillTreatmentGoalsAndPainPlan(context, data) {
   log("➡️ Filling Treatment Goals + Pain Plan...");
@@ -4107,23 +4019,7 @@ async function runPtVisitBot({
     } catch {}
     
     // 4) Select Template
-    // 4) Template selection
-    // PT Visit + PT Discharge should NOT attempt GW2 selection.
-    // Only attempt GW2 for eval-ish tasks (keeps backward compatibility if this bot is reused).
-    const tt = String(taskType || "").toLowerCase();
-    const isEvalish =
-      tt.includes("evaluation") ||
-      tt.includes(" eval") ||
-      tt.includes("eval") ||
-      tt.includes("re-eval") ||
-      tt.includes("reeval") ||
-      tt.includes("re evaluation");
-
-    if (isEvalish) {
-      await selectTemplateGW2(activePage);
-    } else {
-      log("⏭ Skipping GW2 template selection for taskType:", taskType);
-    }
+    await selectTemplateGW2(activePage);
     
     // 5) Visit basics
     await fillVisitBasics(activePage, { timeIn, timeOut, visitDate });
@@ -4147,9 +4043,7 @@ async function runPtVisitBot({
     // 11) Living situation / safety hazards
     await fillHomeSafetySection(activePage, aiData);
     
-    
-    await ensureHomeboundCritAlways(activePage);
-// 12) Pain section
+    // 12) Pain section
     await fillPainSection(activePage, aiData);
     
     // 13) Neuro / Physical assessment text fields
@@ -4173,10 +4067,7 @@ async function runPtVisitBot({
     // 19) Frequency + effective date
     await fillFrequencyAndDate(activePage, aiData, visitDate);
     
-    
-    // Visit summary (AI Assessment) + Goals Meet By (POC line)
-    await fillVisitSummaryAndGoalsMeetBy(activePage, aiData);
-await clickSave(activePage);
+    await clickSave(activePage);
     await wait(2500);
 
     // Post-save verification: if it doesn't stick, FAIL the job (so UI never shows false "completed")
