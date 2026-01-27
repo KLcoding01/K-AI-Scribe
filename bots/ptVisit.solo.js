@@ -3,28 +3,28 @@ const log = (...args) => console.log(...args);
 
 function sanitizeAssessmentText(text) {
   if (!text) return "";
-
+  
   let out = text;
-
+  
   // ❌ Remove subjective phrases
   out = out.replace(/\b(Pt reports|Pt report|reports no new|agrees to PT|cleared to continue).*?[.]/gi, "");
-
+  
   // Split sentences
   let sentences = out
-    .replace(/\s+/g, " ")
-    .trim()
-    .split(/(?<=[.!?])\s+/)
-    .filter(Boolean);
-
+  .replace(/\s+/g, " ")
+  .trim()
+  .split(/(?<=[.!?])\s+/)
+  .filter(Boolean);
+  
   // Keep only 5
   sentences = sentences.slice(0, 5);
-
+  
   // Force each sentence to start with "Pt"
   sentences = sentences.map(s => {
     s = s.replace(/^Pt\s+/i, "");
     return "Pt " + s.replace(/^[^a-zA-Z]*/, "");
   });
-
+  
   return sentences.join(" ");
 }
 
@@ -84,18 +84,18 @@ async function firstVisibleLocator(scope, selectors) {
 async function verifySetText(scope, selector, value, label) {
   const v = String(value ?? "").trim();
   if (!v) return true;
-
+  
   const loc = scope.locator(selector).first();
   const visible = await loc.isVisible().catch(() => false);
   if (!visible) return false;
-
+  
   await loc.scrollIntoViewIfNeeded().catch(() => {});
   await loc.click({ timeout: 1500 }).catch(() => {});
   await loc.fill("").catch(() => {});
   await loc.type(v, { delay: 8 }).catch(async () => {
     await loc.fill(v).catch(() => {});
   });
-
+  
   // Force-set + events
   await loc.evaluate((el, val) => {
     el.value = val;
@@ -103,10 +103,10 @@ async function verifySetText(scope, selector, value, label) {
     el.dispatchEvent(new Event("change", { bubbles: true }));
     el.dispatchEvent(new Event("blur", { bubbles: true }));
   }, v).catch(() => {});
-
+  
   const got = await loc.inputValue().catch(() => "");
   const ok = (got || "").trim() === v;
-
+  
   console.log(ok ? `[PT Visit Bot] ✅ VERIFIED ${label}` : `[PT Visit Bot] ❌ VERIFY FAIL ${label} (got="${got}")`);
   return ok;
 }
@@ -119,14 +119,14 @@ async function safeGetValue(scope, selector, label = "", opts = {}) {
     const loc = scope.locator(selector).first();
     const visible = await loc.isVisible().catch(() => false);
     if (!visible) return "";
-
+    
     await loc.scrollIntoViewIfNeeded().catch(() => {});
     // Prefer Playwright inputValue for inputs/textareas
     const v = await loc.inputValue({ timeout }).catch(async () => {
       // Fallback: read .value directly
       return await loc.evaluate((el) => (el && "value" in el ? String(el.value) : "")).catch(() => "");
     });
-
+    
     return String(v ?? "").trim();
   } catch (e) {
     console.log(`[PT Visit Bot] ⚠️ safeGetValue failed ${label ? `(${label})` : ""}: ${e?.message || e}`);
@@ -138,16 +138,16 @@ async function verifyCheck(scope, selector, label) {
   const loc = scope.locator(selector).first();
   const visible = await loc.isVisible().catch(() => false);
   if (!visible) return false;
-
+  
   await loc.scrollIntoViewIfNeeded().catch(() => {});
   const checked = await loc.isChecked().catch(() => false);
-
+  
   if (!checked) {
     await loc.check({ force: true }).catch(async () => {
       await loc.click({ force: true }).catch(() => {});
     });
   }
-
+  
   const ok = await loc.isChecked().catch(() => false);
   console.log(ok ? `[PT Visit Bot] ✅ VERIFIED ${label} checked` : `[PT Visit Bot] ❌ VERIFY FAIL ${label} not checked`);
   return ok;
@@ -157,23 +157,23 @@ async function verifyCheck(scope, selector, label) {
 function shortenPlanText(text) {
   // Plan for next visit must be short: 4–7 words
   const DEFAULT_PLAN = "Continue PT per POC";
-
+  
   let s = String(text || "").trim();
   if (!s) return DEFAULT_PLAN;
-
+  
   // Normalize whitespace + strip trailing punctuation
   s = s.replace(/\s+/g, " ").replace(/[.;:,\-]+$/g, "").trim();
   if (!s) return DEFAULT_PLAN;
-
+  
   // If it already looks like a short acceptable plan, keep it
   const words = s.split(" ").filter(Boolean);
-
+  
   // If fewer than 4 words, pad with default (use default rather than awkward padding)
   if (words.length < 4) return DEFAULT_PLAN;
-
+  
   // Keep first 7 words max
   const out = words.slice(0, 7).join(" ");
-
+  
   // Ensure no trailing punctuation
   return out.replace(/[.;:,\-]+$/g, "").trim() || DEFAULT_PLAN;
 }
@@ -373,17 +373,17 @@ async function isAlreadyOnHotbox(page) {
 
 async function navigateToHotBox(page) {
   console.log("➡️ Checking if we are already on the HotBox screen...");
-
+  
   // 1) If we already see HotBox rows, just skip navigation
   if (await isAlreadyOnHotbox(page)) {
     console.log("🔥 Already on HotBox; skipping navigation.");
     return;
   }
-
+  
   console.log("➡️ Navigating to HotBox (robust mode)...");
-
+  
   await wait(1000);
-
+  
   // 2) Try direct "HotBox" link in main page
   try {
     const hotboxLink = page.locator("a", { hasText: /hotbox/i }).first();
@@ -398,36 +398,36 @@ async function navigateToHotBox(page) {
   } catch {
     // ignore
   }
-
+  
   // 3) Try "Go To" → "HotBox" (main page or frames)
   let goToLocator = null;
-
+  
   const goToSelectors = [
     'text=/^go to$/i',
     'a:has-text("Go To")',
     'text=/go to/i',
   ];
-
+  
   goToLocator = await firstVisibleLocator(page, goToSelectors);
-
+  
   if (!goToLocator) {
     for (const frame of page.frames()) {
       goToLocator = await firstVisibleLocator(frame, goToSelectors);
       if (goToLocator) break;
     }
   }
-
+  
   if (goToLocator) {
     try {
       await goToLocator.click({ force: true });
       console.log("✅ Clicked 'Go To' menu.");
       await wait(800);
-
+      
       let hotboxMenu = await firstVisibleLocator(page, [
         'text=/hotbox/i',
         'a:has-text("HotBox")',
       ]);
-
+      
       if (!hotboxMenu) {
         for (const frame of page.frames()) {
           hotboxMenu = await firstVisibleLocator(frame, [
@@ -437,11 +437,11 @@ async function navigateToHotBox(page) {
           if (hotboxMenu) break;
         }
       }
-
+      
       if (hotboxMenu) {
         await hotboxMenu.click({ force: true }).catch(() => {});
         await wait(1200);
-
+        
         if (await isAlreadyOnHotbox(page)) {
           console.log("✅ HotBox opened via Go To menu.");
           return;
@@ -453,14 +453,14 @@ async function navigateToHotBox(page) {
   } else {
     console.log("⚠️ Could not find a 'Go To' menu. Trying fallbacks...");
   }
-
+  
   // 4) Last resort: direct navigation attempts
   const candidates = [
     "https://www.kinnser.net/hotbox.cfm",
     "https://www.kinnser.net/hotbox",
     "https://www.kinnser.net/secure/hotbox.cfm",
   ];
-
+  
   for (const url of candidates) {
     try {
       await page.goto(url, { waitUntil: "domcontentloaded" });
@@ -473,7 +473,7 @@ async function navigateToHotBox(page) {
       // ignore and try next
     }
   }
-
+  
   throw new Error("Unable to navigate to HotBox (layout differs or access blocked).");
 }
 
@@ -533,18 +533,18 @@ async function setHotboxShow100(page) {
 
 async function openHotboxPatientTask(page, patientName, visitDate, taskType) {
   console.log(
-    `➡️ Searching Hotbox for patient "${patientName}" on "${visitDate}" with task "${taskType}"...`
-  );
-
+              `➡️ Searching Hotbox for patient "${patientName}" on "${visitDate}" with task "${taskType}"...`
+              );
+  
   if (!patientName || !visitDate || !taskType) {
     throw new Error("❌ openHotboxPatientTask requires patientName, visitDate, and taskType.");
   }
-
+  
   // Normalize / expand date formats for Hotbox search
   function buildDateVariants(raw) {
     const s = String(raw ?? "").trim();
     if (!s) return [];
-
+    
     // If ISO "YYYY-MM-DD"
     if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
       const [y, m, d] = s.split("-");
@@ -560,7 +560,7 @@ async function openHotboxPatientTask(page, patientName, visitDate, taskType) {
         `${Number(m)}/${Number(d)}/${yy}`,
       ];
     }
-
+    
     // If already contains "/"
     if (s.includes("/")) {
       const parts = s.split("/");
@@ -568,7 +568,7 @@ async function openHotboxPatientTask(page, patientName, visitDate, taskType) {
         let [m, d, y] = parts.map((p) => p.trim());
         const mm = String(Number(m)).padStart(2, "0");
         const dd = String(Number(d)).padStart(2, "0");
-
+        
         if (y.length === 2) {
           const yy = y.padStart(2, "0");
           const yyyy = `20${yy}`;
@@ -590,59 +590,59 @@ async function openHotboxPatientTask(page, patientName, visitDate, taskType) {
         }
       }
     }
-
+    
     // Fallback – just try the raw string
     return [s];
   }
-
+  
   function norm(s) {
     return String(s || "")
-      .toLowerCase()
-      .replace(/\s+/g, " ")
-      .replace(/[.,]/g, "")
-      .trim();
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .replace(/[.,]/g, "")
+    .trim();
   }
-
+  
   function normalizeTask(t = "") {
     return norm(t)
-      .replace(/re-evaluation/g, "reeval")
-      .replace(/re evaluation/g, "reeval")
-      .replace(/re-eval/g, "reeval")
-      .replace(/evaluation/g, "eval")
-      .replace(/visit/g, "visit");
+    .replace(/re-evaluation/g, "reeval")
+    .replace(/re evaluation/g, "reeval")
+    .replace(/re-eval/g, "reeval")
+    .replace(/evaluation/g, "eval")
+    .replace(/visit/g, "visit");
   }
-
+  
   function taskMatches(rowText, desiredTask) {
     const a = normalizeTask(rowText);
     const b = normalizeTask(desiredTask);
-
+    
     // Strongest signal: direct containment either way
     if (a.includes(b) || b.includes(a)) return true;
-
+    
     // Allow "PT Evaluation" vs "PT Eval"
     if (b.includes("eval") && a.includes("eval")) return true;
-
+    
     // Allow "PT Visit" variants
     if (b.includes("visit") && a.includes("visit")) return true;
-
+    
     return false;
   }
-
+  
   const dateVariants = buildDateVariants(visitDate);
   console.log("🔎 Date variants for Hotbox search:", dateVariants);
-
+  
   let row = null;
-
+  
   // Strategy:
   // 1) Filter rows by patient + date variant, then validate task via fuzzy match.
   // 2) If not found, broaden to patient-only rows and check date+task.
-
+  
   for (const dateStr of dateVariants) {
     const candidates = page
-      .locator("tr")
-      .filter({ hasText: patientName })
-      .filter({ hasText: dateStr });
-
+    .locator("tr")
+    .filter({ hasText: patientName })
+    .filter({ hasText: dateStr });
+    
     const n = await candidates.count().catch(() => 0);
     for (let i = 0; i < n; i++) {
       const r = candidates.nth(i);
@@ -655,20 +655,20 @@ async function openHotboxPatientTask(page, patientName, visitDate, taskType) {
     }
     if (row) break;
   }
-
+  
   // Broad fallback: patient-only rows (helps when date text is formatted differently in UI)
   if (!row) {
     const patientRows = page.locator("tr").filter({ hasText: patientName });
     const n = await patientRows.count().catch(() => 0);
-
+    
     for (let i = 0; i < n; i++) {
       const r = patientRows.nth(i);
       const text = await r.innerText().catch(() => "");
       const tnorm = norm(text);
-
+      
       const dateOk = dateVariants.some((dv) => tnorm.includes(norm(dv)));
       const taskOk = taskMatches(text, taskType);
-
+      
       if (dateOk && taskOk) {
         row = r;
         console.log("✅ Hotbox row found using patient-only fallback (date + task fuzzy match).");
@@ -676,35 +676,35 @@ async function openHotboxPatientTask(page, patientName, visitDate, taskType) {
       }
     }
   }
-
+  
   if (!row) {
     console.log(
       `❌ No Hotbox row found for any date variant ${JSON.stringify(
         dateVariants
       )}, task "${taskType}", and name "${patientName}".`
-    );
+                );
     throw new Error("Hotbox row not found for date + task + name (fuzzy match).");
   }
-
+  
   console.log("✅ Matching row found. Clicking patient link ...");
-
+  
   // Prefer clicking patient link, but fall back to first link in row if patient text differs.
   let link = row.locator(`a:has-text("${patientName}")`).first();
   let linkVisible = await link.isVisible().catch(() => false);
-
+  
   if (!linkVisible) {
     link = row.locator("a").first();
     linkVisible = await link.isVisible().catch(() => false);
   }
-
+  
   if (!linkVisible) {
     console.log(`❌ Could not find any clickable link in the matching row.`);
     throw new Error("Patient link not found in matching row.");
   }
-
+  
   await link.click();
   await wait(1000);
-
+  
   console.log("👤 Patient visit page opened (date + task + name matched).");
 }
 
@@ -785,10 +785,10 @@ async function findTemplateScope(target, opts = {}) {
     console.log("⚠️ findTemplateScope: no template scope found. Pages:", urls);
   } catch {}
   
-
-
-
-return null;
+  
+  
+  
+  return null;
 }
 
 
@@ -800,7 +800,7 @@ return null;
 function normalizeTimeToHHMM(value) {
   if (value === null || value === undefined) return "";
   let v = String(value).trim();
-
+  
   // Already HH:MM (or H:MM)
   const hm = v.match(/^\s*(\d{1,2})\s*:\s*(\d{2})\s*$/);
   if (hm) {
@@ -810,14 +810,14 @@ function normalizeTimeToHHMM(value) {
       return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
     }
   }
-
+  
   // HMM / HHMM (e.g. 930, 0930, 1530)
   const digits = v.replace(/[^0-9]/g, "");
   if (/^\d{3,4}$/.test(digits)) {
     const padded = digits.padStart(4, "0");
     return `${padded.slice(0, 2)}:${padded.slice(2, 4)}`;
   }
-
+  
   // Fallback: return trimmed input
   return v;
 }
@@ -826,52 +826,52 @@ async function postSaveAudit(targetOrWrapper, expected = {}) {
   // Accept: Page/Frame or wrapper { page, context }
   const page = targetOrWrapper?.page || targetOrWrapper;
   const context =
-    targetOrWrapper?.context ||
-    (page && typeof page.context === "function" ? page.context() : null);
-
+  targetOrWrapper?.context ||
+  (page && typeof page.context === "function" ? page.context() : null);
+  
   const issues = [];
-
+  
   async function snapshotOnce(tag) {
     const scope = await findTemplateScope(page, { timeoutMs: 15000 }).catch(() => null);
     if (!scope) {
       issues.push(`${tag}: Could not resolve active template iframe/scope`);
       return null;
     }
-
+    
     const snap = {};
     snap.visitDate = await safeGetValue(scope, "#frm_visitdate");
     snap.timeIn = await safeGetValue(scope, "#frm_timein");
     snap.timeOut = await safeGetValue(scope, "#frm_timeout");
     // optional but useful
     snap.medDx = await safeGetValue(scope, "#frm_MedDiagText");
-
+    
     return snap;
   }
-
+  
   function validateSnap(tag, snap) {
     if (!snap) return;
-
+    
     if (expected.visitDate) {
       const want = normalizeDateToMMDDYYYY(expected.visitDate);
       const got = normalizeDateToMMDDYYYY(snap.visitDate);
       if (!got) issues.push(`${tag}: Visit date is blank after save`);
       else if (want && got !== want) issues.push(`${tag}: Visit date mismatch (want ${want}, got ${got})`);
     }
-
+    
     if (expected.timeIn) {
       const want = normalizeTimeToHHMM(expected.timeIn);
       const got = normalizeTimeToHHMM(snap.timeIn);
       if (!got) issues.push(`${tag}: Time In is blank after save`);
       else if (want && got !== want) issues.push(`${tag}: Time In mismatch (want ${want}, got ${got})`);
     }
-
+    
     if (expected.timeOut) {
       const want = normalizeTimeToHHMM(expected.timeOut);
       const got = normalizeTimeToHHMM(snap.timeOut);
       if (!got) issues.push(`${tag}: Time Out is blank after save`);
       else if (want && got !== want) issues.push(`${tag}: Time Out mismatch (want ${want}, got ${got})`);
     }
-
+    
     if (expected.medDx) {
       const want = String(expected.medDx || "").trim();
       const got = String(snap.medDx || "").trim();
@@ -879,26 +879,26 @@ async function postSaveAudit(targetOrWrapper, expected = {}) {
       else if (want && got && got !== want) issues.push(`${tag}: Med Dx mismatch`);
     }
   }
-
+  
   // Phase 1: immediate DOM snapshot (can still be false-positive, but gives diagnostics)
   const snap1 = await snapshotOnce("Immediate");
   validateSnap("Immediate", snap1);
-
+  
   // Phase 2: hard persistence check by REOPENING the same note from Hotbox.
   // Reason: Kinnser can keep in-memory DOM values even when Save did not persist.
   if (context && expected.patientName && expected.visitDate) {
     try {
       const taskType = expected.taskType || "PT Visit";
-
+      
       // Go back to HotBox, then re-open the same row again.
       // This forces us to read server-persisted values, not the current DOM state.
       await navigateToHotBoxRobust(page);
       await setHotboxShow100(page);
-
+      
       await openHotboxPatientTask(page, expected.patientName, expected.visitDate, taskType);
-
+      
       const reopenedPage = getActivePageFromContext(context) || page;
-
+      
       // Ensure we are on the reopened visit edit form (scope resolves)
       const scope2 = await findTemplateScope(reopenedPage, { timeoutMs: 20000 }).catch(() => null);
       if (!scope2) {
@@ -919,11 +919,11 @@ async function postSaveAudit(targetOrWrapper, expected = {}) {
     // If we don't have enough info to reopen, keep the immediate checks only.
     log("[PT Visit Bot] ℹ️ Post-save persistence check (reopen) skipped: missing context/patientName/visitDate");
   }
-
+  
   if (issues.length) {
     throw new Error(`POST-SAVE AUDIT FAIL: ${issues.join("; ")}`);
   }
-
+  
   log("✅ Post-save audit passed (key fields persisted after reopening the note).");
 }
 
@@ -1658,6 +1658,13 @@ async function extractNoteDataFromAI(aiNotes, visitType = "Evaluation") {
       planText: structured.plan?.planText || "", //
     },
   };
+
+  // If the AI note box already includes an Assessment Summary / Clinical Statement block,
+  // use it verbatim (no rewriting).
+  if ((structured.clinicalStatement || "").trim()) {
+    defaults.clinicalStatement = String(structured.clinicalStatement).trim();
+  }
+
   
   // Override default vitals if notes contain them
   try {
@@ -1702,26 +1709,10 @@ Extract keys:
 - "relevantHistory": ONE concise PMH/comorbidities line ONLY.
 - "medicalDiagnosis": ONLY the primary MD diagnosis (short). If not explicitly stated, return "".
 - "subjective": ONLY if explicitly stated what Pt reports. If not explicitly stated, return "".
-- "clinicalStatement": see rules below
 - "vitals": { "temperature","temperatureTypeValue","bpSys","bpDia","positionValue","sideValue","heartRate","respirations","vsComments" }
 - "living": { "patientLivesValue","assistanceAvailableValue","evaluationText","stepsPresent","stepsCount","currentAssistanceTypes","hasPets" }
 - "pain": { "hasPain","primaryLocationText","intensityValue","increasedBy","relievedBy","interferesWith" }
 - "plan": { "frequency","shortTermVisits","longTermVisits","goalTexts","planText" }
-
-If VISIT_TYPE is "PT INITIAL PT EVALUATION":
-Write EXACTLY 6 sentences, ONE paragraph, and EVERY sentence must start with "Pt".
-Sentence #1 MUST begin exactly like:
-"${demoLine} who presents with PMH consists of <PMH> and is referred for HH PT to address <primary deficits>."
-Rules:
-- Use the PMH from the note for the “PMH consists of …” phrase (keep concise).
-- Do not use pronouns (they/he/she).
-- No bullets, no headings, no arrows.
-- Sentences #2-#6 must follow:
-2) Objective functional limitations + fall risk.
-3) Home environment / CG support / hazards (if present).
-4) Skilled HH PT necessity (education/HEP/DME/CG training).
-5) POC focus (TherEx/TherAct/gait/balance/fall prevention).
-6) Closing: continued skilled HH PT per POC to improve safety, mobility, ADL performance.
 
 Free-text note:
 ---
@@ -1744,29 +1735,15 @@ ${text}
     if (typeof sanitizeRelevantHistory === "function") {
       parsed.relevantHistory = sanitizeRelevantHistory(parsed.relevantHistory);
     }
-    
-    if (visitLabel === "PT INITIAL PT EVALUATION") {
-      const fallback =
-      typeof buildEvalClinicalStatementFallback === "function"
-      ? buildEvalClinicalStatementFallback(structured)
-      : defaults.clinicalStatement;
-      
-      const ok =
-      typeof isValidSixSentencePtParagraph === "function"
-      ? isValidSixSentencePtParagraph(parsed.clinicalStatement)
-      : true;
-      
-      if (!ok) parsed.clinicalStatement = fallback;
-    }
   } catch (e) {
     console.log("⚠️ sanitize/enforce skipped:", e.message);
   }
-  
+
   return {
     visitType,
     hasExplicitPMH: structured.hasExplicitPMH,
     relevantHistory: (parsed.relevantHistory || defaults.relevantHistory || "").trim(),
-    clinicalStatement: (parsed.clinicalStatement || defaults.clinicalStatement || "").trim(),
+    clinicalStatement: ((structured.clinicalStatement || "").trim() || (parsed.clinicalStatement || defaults.clinicalStatement || "").trim()),
     vitals: {
       temperature: parsed.vitals?.temperature || defaults.vitals.temperature,
       temperatureTypeValue: parsed.vitals?.temperatureTypeValue || defaults.vitals.temperatureTypeValue,
@@ -2651,9 +2628,9 @@ async function fillTreatmentGoalsAndPainPlan(context, data) {
     ]);
     
     
-  const planText = (noteData?.plan?.planText || "").trim();
-  const planShort = shortenPlanText(planText, 110);
-if (!box) {
+    const planText = (noteData?.plan?.planText || "").trim();
+    const planShort = shortenPlanText(planText, 110);
+    if (!box) {
       console.log("⚠️ Plan for next visit checkbox not found");
       return;
     }
@@ -3318,22 +3295,22 @@ function pickVariant(arr) {
 
 function strictVisitSummaryVariant() {
   const variants = [
-  "Pt tolerated HH PT tx fairly with good participation and no adverse reactions noted. Tx emphasized TherEx and TherAct to address generalized weakness, impaired balance, and decreased functional mobility with VC/TC provided PRN for safety and mechanics. Functional safety training and gait training were completed to improve gait quality, increase household mobility tolerance, and reduce high fall risk. HEP was reviewed and reinforced for compliance, pacing, and safety awareness to promote carryover between visits. Continued skilled HH PT remains medically necessary to progress toward established goals, improve functional independence, and reduce high fall risk.",
-  "Pt demonstrated fair tolerance to skilled HH PT tx with good participation and no adverse reactions noted. Skilled TherEx/TherAct were performed to improve strength, balance strategies, and functional mobility with VC/TC PRN for proper form and sequencing. Functional safety training and gait training were provided to improve stability, reduce fall risk, and promote safer household ambulation. HEP was reviewed with emphasis on consistency, pacing, and safety awareness to support carryover between visits. Continued skilled HH PT is indicated to address ongoing weakness and balance deficits and to progress toward goals.",
-  "Pt tolerated HH PT tx fairly with good participation and remained symptom-free throughout the session. Tx focused on TherEx and TherAct to address generalized weakness and impaired balance contributing to high fall risk, with VC/TC provided PRN to ensure safe technique and mechanics. Functional safety training and gait training were completed to improve transfers, household mobility tolerance, and gait mechanics for safer ambulation. HEP was reviewed and reinforced for compliance and safe performance with education on pacing and fall prevention. Continued skilled HH PT is medically necessary to progress functional independence and reduce fall risk.",
-  "Pt displayed fair tolerance to HH PT tx today with good participation and no adverse reactions noted. TherEx and TherAct were completed to improve strength, balance control, and functional mobility with VC/TC PRN for posture, sequencing, and safety. Functional safety training and gait training were provided to address instability and reduce high fall risk during household mobility. HEP was reviewed and reinforced for carryover with education on pacing and safety awareness to reduce injury risk. Continued skilled HH PT remains necessary to address residual weakness and balance impairments and to progress toward goals.",
-  "Pt tolerated HH PT tx fairly with good participation and no adverse reactions observed. Skilled TherEx and TherAct were utilized to address generalized weakness and impaired balance impacting functional mobility, with VC/TC provided PRN for safety, sequencing, and form. Gait training and functional safety training were completed to improve gait mechanics, increase household ambulation tolerance, and reduce fall risk. HEP was reviewed and reinforced for compliance and safe performance to support carryover between visits. Continued skilled HH PT is indicated to progress mobility goals and reduce high fall risk.",
-  "Pt demonstrated fair tolerance to skilled HH PT tx with good participation and no adverse reactions noted. Tx emphasized TherEx/TherAct to improve strength, balance, and functional mobility deficits with VC/TC PRN for safe mechanics and proper sequencing. Functional safety training and gait training were completed to enhance stability, improve gait quality, and reduce fall risk with household ambulation. HEP was reviewed and reinforced with education on pacing, consistency, and safety awareness to support carryover. Continued skilled HH PT is medically necessary to progress toward established goals and reduce fall risk.",
-  "Pt tolerated HH PT tx fairly with good participation and no adverse reactions reported. TherEx/TherAct interventions were completed to address generalized weakness, impaired balance, and decreased functional mobility with VC/TC PRN to ensure safe technique. Gait training and functional safety training were performed to improve gait mechanics, increase household mobility tolerance, and reduce fall risk. HEP was reviewed and reinforced with education on consistency, pacing, and fall prevention strategies to improve carryover. Pt requires continued skilled HH PT remains indicated to progress toward goals and improve functional independence.",
-  "Pt displayed fair tolerance to skilled HH PT tx with good participation and no adverse reactions noted. Tx focused on TherEx and TherAct to improve strength and balance strategies affecting functional mobility with VC/TC PRN for safe mechanics. Functional safety training and gait training were completed to address instability and reduce high fall risk during household ambulation. HEP was reviewed and reinforced for compliance and safe execution with education on pacing and safety awareness. Continued skilled HH PT is medically necessary to progress functional mobility and reduce fall risk."
-];
+    "Pt tolerated HH PT tx fairly with good participation and no adverse reactions noted. Tx emphasized TherEx and TherAct to address generalized weakness, impaired balance, and decreased functional mobility with VC/TC provided PRN for safety and mechanics. Functional safety training and gait training were completed to improve gait quality, increase household mobility tolerance, and reduce high fall risk. HEP was reviewed and reinforced for compliance, pacing, and safety awareness to promote carryover between visits. Continued skilled HH PT remains medically necessary to progress toward established goals, improve functional independence, and reduce high fall risk.",
+    "Pt demonstrated fair tolerance to skilled HH PT tx with good participation and no adverse reactions noted. Skilled TherEx/TherAct were performed to improve strength, balance strategies, and functional mobility with VC/TC PRN for proper form and sequencing. Functional safety training and gait training were provided to improve stability, reduce fall risk, and promote safer household ambulation. HEP was reviewed with emphasis on consistency, pacing, and safety awareness to support carryover between visits. Continued skilled HH PT is indicated to address ongoing weakness and balance deficits and to progress toward goals.",
+    "Pt tolerated HH PT tx fairly with good participation and remained symptom-free throughout the session. Tx focused on TherEx and TherAct to address generalized weakness and impaired balance contributing to high fall risk, with VC/TC provided PRN to ensure safe technique and mechanics. Functional safety training and gait training were completed to improve transfers, household mobility tolerance, and gait mechanics for safer ambulation. HEP was reviewed and reinforced for compliance and safe performance with education on pacing and fall prevention. Continued skilled HH PT is medically necessary to progress functional independence and reduce fall risk.",
+    "Pt displayed fair tolerance to HH PT tx today with good participation and no adverse reactions noted. TherEx and TherAct were completed to improve strength, balance control, and functional mobility with VC/TC PRN for posture, sequencing, and safety. Functional safety training and gait training were provided to address instability and reduce high fall risk during household mobility. HEP was reviewed and reinforced for carryover with education on pacing and safety awareness to reduce injury risk. Continued skilled HH PT remains necessary to address residual weakness and balance impairments and to progress toward goals.",
+    "Pt tolerated HH PT tx fairly with good participation and no adverse reactions observed. Skilled TherEx and TherAct were utilized to address generalized weakness and impaired balance impacting functional mobility, with VC/TC provided PRN for safety, sequencing, and form. Gait training and functional safety training were completed to improve gait mechanics, increase household ambulation tolerance, and reduce fall risk. HEP was reviewed and reinforced for compliance and safe performance to support carryover between visits. Continued skilled HH PT is indicated to progress mobility goals and reduce high fall risk.",
+    "Pt demonstrated fair tolerance to skilled HH PT tx with good participation and no adverse reactions noted. Tx emphasized TherEx/TherAct to improve strength, balance, and functional mobility deficits with VC/TC PRN for safe mechanics and proper sequencing. Functional safety training and gait training were completed to enhance stability, improve gait quality, and reduce fall risk with household ambulation. HEP was reviewed and reinforced with education on pacing, consistency, and safety awareness to support carryover. Continued skilled HH PT is medically necessary to progress toward established goals and reduce fall risk.",
+    "Pt tolerated HH PT tx fairly with good participation and no adverse reactions reported. TherEx/TherAct interventions were completed to address generalized weakness, impaired balance, and decreased functional mobility with VC/TC PRN to ensure safe technique. Gait training and functional safety training were performed to improve gait mechanics, increase household mobility tolerance, and reduce fall risk. HEP was reviewed and reinforced with education on consistency, pacing, and fall prevention strategies to improve carryover. Pt requires continued skilled HH PT remains indicated to progress toward goals and improve functional independence.",
+    "Pt displayed fair tolerance to skilled HH PT tx with good participation and no adverse reactions noted. Tx focused on TherEx and TherAct to improve strength and balance strategies affecting functional mobility with VC/TC PRN for safe mechanics. Functional safety training and gait training were completed to address instability and reduce high fall risk during household ambulation. HEP was reviewed and reinforced for compliance and safe execution with education on pacing and safety awareness. Continued skilled HH PT is medically necessary to progress functional mobility and reduce fall risk."
+  ];
   return pickVariant(variants);
 }
 
 async function generateVisitSummaryText(aiNotes) {
   const raw = String(aiNotes || "").trim();
   if (!raw) return strictVisitSummaryVariant();
-
+  
   // NON-PHI gate (keeps your existing safety)
   let safe;
   try {
@@ -3342,27 +3319,27 @@ async function generateVisitSummaryText(aiNotes) {
     console.log("[PT Visit Bot] PHI risk detected; using deterministic visit summary fallback.");
     return strictVisitSummaryVariant();
   }
-
+  
   function splitIntoSentences(paragraph) {
     const t = String(paragraph || "").trim();
     if (!t) return [];
     return t
-      .replace(/\s+/g, " ")
-      .split(/(?<=[.!?])\s+/)
-      .map(s => s.trim())
-      .filter(Boolean);
+    .replace(/\s+/g, " ")
+    .split(/(?<=[.!?])\s+/)
+    .map(s => s.trim())
+    .filter(Boolean);
   }
-
+  
   function isValidFiveSentencePtParagraph(text) {
     const s = String(text || "").trim();
     const sentences = splitIntoSentences(s);
     return (
-      sentences.length === 5 &&
-      sentences.every(x => /^Pt\b/.test(x)) &&
-      !/\b(he|she|they|his|her|their)\b/i.test(s)
-    );
+            sentences.length === 5 &&
+            sentences.every(x => /^Pt\b/.test(x)) &&
+            !/\b(he|she|they|his|her|their)\b/i.test(s)
+            );
   }
-
+  
   // IMPORTANT:
   // Do NOT use callOpenAI_NON_PHI here (it triggered 400 Missing required parameter: text.format.name).
   // Instead, we use callOpenAIJSON (same OpenAI client you already use elsewhere) and request JSON.
@@ -3391,34 +3368,34 @@ Note:
 ---
 ${safe}
 ---`.trim();
-
+  
   try {
     console.log("[PT Visit Bot] Generating OpenAI visit summary (JSON)...");
     const parsed = await callOpenAIJSON(prompt, 12000);
     const text = String(parsed?.summary || "").trim();
     // Hard rule: never let subjective leak into the Summary/Assessment field
     let cleaned = text
-      .replace(/\b(Pt reports|Pt report|Pt agreeable|agrees to PT|cleared to continue)[^.!?]*[.!?]\s*/gi, "")
-      .trim();
-
+    .replace(/\b(Pt reports|Pt report|Pt agreeable|agrees to PT|cleared to continue)[^.!?]*[.!?]\s*/gi, "")
+    .trim();
+    
     if (!cleaned || /^\s*Pt\s+(reports|report|agreeable|agrees|cleared)\b/i.test(cleaned)) {
       cleaned =
-        "Pt tolerated HH PT tx fairly with good participation and no adverse reactions reported. " +
-        cleaned.replace(/^\s*Pt\s+/i, "");
+      "Pt tolerated HH PT tx fairly with good participation and no adverse reactions reported. " +
+      cleaned.replace(/^\s*Pt\s+/i, "");
     }
-
+    
     const parts = cleaned
-      .replace(/\s+/g, " ")
-      .trim()
-      .split(/(?<=[.!?])\s+/)
-      .filter(Boolean)
-      .map(s => (s.startsWith("Pt ") ? s : ("Pt " + s.replace(/^Pt\s+/i, ""))));
-
+    .replace(/\s+/g, " ")
+    .trim()
+    .split(/(?<=[.!?])\s+/)
+    .filter(Boolean)
+    .map(s => (s.startsWith("Pt ") ? s : ("Pt " + s.replace(/^Pt\s+/i, ""))));
+    
     cleaned = parts.join(" ").trim();
-
-
+    
+    
     if (isValidFiveSentencePtParagraph(cleaned)) return cleaned;
-
+    
     console.log("[PT Visit Bot] AI summary failed formatting checks; using deterministic fallback.");
     return strictVisitSummaryVariant();
   } catch (e) {
@@ -3431,11 +3408,6 @@ ${safe}
 async function fillVisitSummaryFromCue(context, aiNotes) {
   if (!aiNotes || !String(aiNotes).trim()) {
     console.log("[PT Visit Bot] No AI notes provided; skipping visit summary.");
-    return;
-  }
-  
-  if (!process.env.OPENAI_API_KEY) {
-    console.log("[PT Visit Bot] OPENAI_API_KEY missing; cannot generate visit summary.");
     return;
   }
   
@@ -3466,7 +3438,23 @@ async function fillVisitSummaryFromCue(context, aiNotes) {
     return;
   }
   
-  const hasCue = needsVisitSummary(aiNotes);
+  
+  // Prefer verbatim Assessment Summary / Clinical Statement from the AI note box when present.
+  const _structuredForSummary = parseStructuredFromFreeText(aiNotes || "");
+  const rawAssessment = String(_structuredForSummary?.clinicalStatement || "").trim();
+  if (rawAssessment) {
+    await summaryBox.fill("");
+    await summaryBox.type(rawAssessment, { delay: 10 });
+    console.log("[PT Visit Bot] Filled visit summary from AI note box (verbatim). ");
+    return;
+  }
+  if (!process.env.OPENAI_API_KEY) {
+    console.log("[PT Visit Bot] OPENAI_API_KEY missing; cannot generate visit summary.");
+    return;
+  }
+
+
+const hasCue = needsVisitSummary(aiNotes);
   console.log(
               hasCue
               ? "[PT Visit Bot] Assessment/summary cue detected in AI notes; generating visit summary."
@@ -3493,26 +3481,26 @@ async function fillVisitSummaryFromCue(context, aiNotes) {
 function extractNarrativeByKeywords(aiNotes = "", keywords = []) {
   const text = String(aiNotes || "");
   if (!text.trim()) return "";
-
+  
   const lines = text.split(/\r?\n/);
   const lowers = lines.map((l) => l.toLowerCase());
-
+  
   const kw = (keywords || [])
-    .map((k) => String(k || "").toLowerCase())
-    .filter(Boolean);
-
+  .map((k) => String(k || "").toLowerCase())
+  .filter(Boolean);
+  
   if (kw.length === 0) return "";
-
+  
   for (let i = 0; i < lines.length; i++) {
     const low = lowers[i];
     if (!low.includes(":")) continue;
-
+    
     for (const k of kw) {
       if (low.includes(k)) {
         const parts = lines[i].split(":");
         const after = parts.slice(1).join(":").trim();
         if (after) return after;
-
+        
         const buf = [];
         for (let j = i + 1; j < lines.length; j++) {
           const t = lines[j].trim();
@@ -3523,7 +3511,7 @@ function extractNarrativeByKeywords(aiNotes = "", keywords = []) {
       }
     }
   }
-
+  
   for (let i = 0; i < lines.length; i++) {
     const low = lowers[i];
     for (const k of kw) {
@@ -3533,21 +3521,21 @@ function extractNarrativeByKeywords(aiNotes = "", keywords = []) {
       }
     }
   }
-
+  
   return "";
 }
 
 function parseVisitExerciseTeachingFields(aiNotes = "") {
   const DEFAULT_TE_EXERCISE_DESC =
-    "Patient is appropriately challenged by the current therapeutic exercise program without any adverse responses. Rest breaks are needed to manage fatigue. Patient requires reminders and both verbal and tactile cues to maintain proper body mechanics.";
-
+  "Patient is appropriately challenged by the current therapeutic exercise program without any adverse responses. Rest breaks are needed to manage fatigue. Patient requires reminders and both verbal and tactile cues to maintain proper body mechanics.";
+  
   const DEFAULT_TEACHING_TITLES = "Verbal, tactile, demonstration, illustration.";
   const DEFAULT_GOALS_INDICATOR_TXT = "Motivation/willingness to work with PT.";
   const DEFAULT_ADDRESS_PT_ISSUES_TXT =
-    "Functional mobility training, strength training, balance/safety training, proper use of AD, HEP education, and fall prevention.";
+  "Functional mobility training, strength training, balance/safety training, proper use of AD, HEP education, and fall prevention.";
   const DEFAULT_FR_BALANCE_DC = "NT";
   const DEFAULT_GT_POSTURE_TXT = "Education provided to improve postural awareness.";
-
+  
   const teExerciseDesc = extractNarrativeByKeywords(aiNotes, [
     "impact of exercises",
     "impact of exercise",
@@ -3564,7 +3552,7 @@ function parseVisitExerciseTeachingFields(aiNotes = "") {
     "patient response to treatment",
     "response to treatment",
   ]);
-
+  
   const tTitlesTxt = extractNarrativeByKeywords(aiNotes, [
     "teaching method",
     "teaching methods",
@@ -3573,7 +3561,7 @@ function parseVisitExerciseTeachingFields(aiNotes = "") {
     "teaching tool",
     "education provided",
   ]);
-
+  
   return {
     teExerciseDesc: (teExerciseDesc || "").trim() || DEFAULT_TE_EXERCISE_DESC,
     tTitlesTxt: (tTitlesTxt || "").trim() || DEFAULT_TEACHING_TITLES,
@@ -3586,17 +3574,17 @@ function parseVisitExerciseTeachingFields(aiNotes = "") {
 
 async function fillVisitExerciseTeachingDefaults(context, aiNotes) {
   const note = String(aiNotes || "");
-
+  
   const DEFAULT_TE_EXERCISE_DESC =
-    "Patient is appropriately challenged by the current therapeutic exercise program without any adverse responses. Rest breaks are needed to manage fatigue. Patient requires reminders and both verbal and tactile cues to maintain proper body mechanics.";
-
+  "Patient is appropriately challenged by the current therapeutic exercise program without any adverse responses. Rest breaks are needed to manage fatigue. Patient requires reminders and both verbal and tactile cues to maintain proper body mechanics.";
+  
   const DEFAULT_TEACHING_TITLES = "Verbal, tactile, demonstration, illustration.";
   const DEFAULT_GOALS_INDICATOR_TXT = "Motivation/willingness to work with PT.";
   const DEFAULT_ADDRESS_PT_ISSUES_TXT =
-    "Functional mobility training, strength training, balance/safety training, proper use of AD, HEP education, and fall prevention.";
+  "Functional mobility training, strength training, balance/safety training, proper use of AD, HEP education, and fall prevention.";
   const DEFAULT_FR_BALANCE_DC = "NT";
   const DEFAULT_GT_POSTURE_TXT = "Education provided to improve postural awareness.";
-
+  
   async function findVisitScope(ctx) {
     const pages = (ctx && typeof ctx.pages === "function") ? ctx.pages() : [];
     const probes = [
@@ -3606,7 +3594,7 @@ async function fillVisitExerciseTeachingDefaults(context, aiNotes) {
       "#frm_addressPTIssuesTxt",
       "#frm_FRBalanceDischarge",
     ];
-
+    
     for (const page of pages) {
       const scopes = [page, ...page.frames()];
       for (const sc of scopes) {
@@ -3620,32 +3608,32 @@ async function fillVisitExerciseTeachingDefaults(context, aiNotes) {
     }
     return await findTemplateScope(ctx);
   }
-
+  
   const frame = await findVisitScope(context);
   if (!frame) {
     console.log("[PT Visit Bot] Visit frame not found for Exercise/Teaching defaults.");
     return;
   }
-
+  
   function escapeRegExp(s) {
     return String(s || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   }
-
+  
   function getSection(text, headings) {
     const lines = String(text || "").split(/\r?\n/);
     const heads = (headings || []).map(h => String(h || "").trim()).filter(Boolean);
-
+    
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
-
+      
       for (const h of heads) {
         const re = new RegExp("^\\s*" + escapeRegExp(h) + "\\s*:\\s*(.*)$", "i");
         const m = line.match(re);
         if (!m) continue;
-
+        
         const after = String(m[1] || "").trim();
         if (after) return { found: true, text: after };
-
+        
         // capture following paragraph until blank line or next heading
         const buf = [];
         for (let j = i + 1; j < lines.length; j++) {
@@ -3658,14 +3646,14 @@ async function fillVisitExerciseTeachingDefaults(context, aiNotes) {
         return { found: true, text: buf.join(" ").trim() };
       }
     }
-
+    
     return { found: false, text: "" };
   }
-
+  
   async function forceSetText(locatorOrNull, value, label) {
     const v = String(value ?? "").trim();
     if (!locatorOrNull || !v) return;
-
+    
     try {
       await locatorOrNull.waitFor({ state: "visible", timeout: 4000 }).catch(() => {});
       await locatorOrNull.scrollIntoViewIfNeeded().catch(() => {});
@@ -3674,7 +3662,7 @@ async function fillVisitExerciseTeachingDefaults(context, aiNotes) {
       await locatorOrNull.type(v, { delay: 8 }).catch(async () => {
         await locatorOrNull.fill(v).catch(() => {});
       });
-
+      
       let got = "";
       try { got = await locatorOrNull.inputValue(); } catch {}
       if (!got || got.trim().length < 2) {
@@ -3685,13 +3673,13 @@ async function fillVisitExerciseTeachingDefaults(context, aiNotes) {
           el.dispatchEvent(new Event("blur", { bubbles: true }));
         }, v).catch(() => {});
       }
-
+      
       console.log("[PT Visit Bot] ✅ " + label);
     } catch (e) {
       console.log("[PT Visit Bot] ⚠️ " + label + " skipped:", e?.message || e);
     }
   }
-
+  
   async function forceCheck(locatorOrNull, label) {
     if (!locatorOrNull) return;
     try {
@@ -3708,7 +3696,7 @@ async function fillVisitExerciseTeachingDefaults(context, aiNotes) {
       console.log("[PT Visit Bot] ⚠️ " + label + " check skipped:", e?.message || e);
     }
   }
-
+  
   // 1) Impact of Exercise(s) — ONLY fill if that section exists; if blank then use default.
   // Prevent accidental fill from "Response to Treatment" by NOT looking at that heading here.
   const impact = getSection(note, [
@@ -3717,7 +3705,7 @@ async function fillVisitExerciseTeachingDefaults(context, aiNotes) {
     "Impact of Exercise(s)",
     "Patient Response to Treatment (Exercise)",
   ]);
-
+  
   if (impact.found) {
     const val = (impact.text || "").trim() || DEFAULT_TE_EXERCISE_DESC;
     const teExerciseDesc = await firstVisibleLocator(frame, [
@@ -3731,7 +3719,7 @@ async function fillVisitExerciseTeachingDefaults(context, aiNotes) {
   } else {
     console.log("[PT Visit Bot] Impact of Exercise section missing; skipping frm_teExerciseDesc.");
   }
-
+  
   // 2) Teaching checkboxes — keep as default behavior (independent of note text)
   const teachBoxes = [
     ["#frm_tHEP", "frm_tHEP"],
@@ -3746,7 +3734,7 @@ async function fillVisitExerciseTeachingDefaults(context, aiNotes) {
     const box = await firstVisibleLocator(frame, [sel, `input${sel}`, `input[name='${sel.replace("#","")}']`]);
     await forceCheck(box, label);
   }
-
+  
   // 3) Teaching tools titles — ONLY fill if section exists; if blank then default.
   const teachTools = getSection(note, [
     "Teaching Tools / Education Tools / Teaching Method",
@@ -3755,7 +3743,7 @@ async function fillVisitExerciseTeachingDefaults(context, aiNotes) {
     "Education Tools",
     "Teaching Method",
   ]);
-
+  
   if (teachTools.found) {
     const val = (teachTools.text || "").trim() || DEFAULT_TEACHING_TITLES;
     const titles = await firstVisibleLocator(frame, [
@@ -3768,7 +3756,7 @@ async function fillVisitExerciseTeachingDefaults(context, aiNotes) {
   } else {
     console.log("[PT Visit Bot] Teaching Tools section missing; skipping frm_tTitlesTxt.");
   }
-
+  
   // 4) Progress to goals indicated by — ONLY fill if section exists; if blank then default.
   const prog = getSection(note, ["Progress to goals indicated by"]);
   if (prog.found) {
@@ -3779,7 +3767,7 @@ async function fillVisitExerciseTeachingDefaults(context, aiNotes) {
       "xpath=//*[contains(normalize-space(.),'Progress to goals indicated by')]/preceding::input[@type='checkbox'][1]",
     ]);
     await forceCheck(goalsIndicator, "frm_goalsIndicator");
-
+    
     const goalsIndicatorTxt = await firstVisibleLocator(frame, [
       "#frm_goalsIndicatorTxt",
       "textarea#frm_goalsIndicatorTxt",
@@ -3790,7 +3778,7 @@ async function fillVisitExerciseTeachingDefaults(context, aiNotes) {
   } else {
     console.log("[PT Visit Bot] Progress-to-goals section missing; skipping goals indicator text.");
   }
-
+  
   // 5) Needs continued skilled PT to address — ONLY fill if section exists; if blank then default.
   const addr = getSection(note, ["Needs continued skilled PT to address"]);
   if (addr.found) {
@@ -3801,7 +3789,7 @@ async function fillVisitExerciseTeachingDefaults(context, aiNotes) {
       "xpath=//*[contains(normalize-space(.),'Needs continued skilled PT to address')]/preceding::input[@type='checkbox'][1]",
     ]);
     await forceCheck(addressPTIssues, "frm_addressPTIssues");
-
+    
     const addressPTIssuesTxt = await firstVisibleLocator(frame, [
       "#frm_addressPTIssuesTxt",
       "textarea#frm_addressPTIssuesTxt",
@@ -3812,7 +3800,7 @@ async function fillVisitExerciseTeachingDefaults(context, aiNotes) {
   } else {
     console.log("[PT Visit Bot] Address-issues section missing; skipping address PT issues text.");
   }
-
+  
   // 6) Always-default fields (safe; independent of note presence)
   const frBalDc = await firstVisibleLocator(frame, [
     "#frm_FRBalanceDischarge",
@@ -3822,14 +3810,14 @@ async function fillVisitExerciseTeachingDefaults(context, aiNotes) {
     "textarea[name='frm_FRBalanceDischarge']",
   ]);
   await forceSetText(frBalDc, DEFAULT_FR_BALANCE_DC, "frm_FRBalanceDischarge");
-
+  
   const gtPosture = await firstVisibleLocator(frame, [
     "#frm_GTPostureTrTxt",
     "textarea#frm_GTPostureTrTxt",
     "textarea[name='frm_GTPostureTrTxt']",
   ]);
   await forceSetText(gtPosture, DEFAULT_GT_POSTURE_TXT, "frm_GTPostureTrTxt");
-
+  
   console.log("[PT Visit Bot] ✅ Exercise/Teaching/Assessment section completed.");
 }
 
@@ -4335,9 +4323,9 @@ async function fillGenericTherExFromCue(context, aiNotes) {
     console.log("[PT Visit Bot] Visit frame not found for Training Exercises grid.");
     return;
   }
-
+  
   const note = String(aiNotes || "");
-
+  
   // DEBUG: prove what we received
   try {
     const lower = note.toLowerCase();
@@ -4352,18 +4340,18 @@ async function fillGenericTherExFromCue(context, aiNotes) {
       console.log("[PT Visit Bot] DEBUG around Exercises marker:", snippet);
     }
   } catch (_) {}
-
+  
   const norm = note.replace(/\r\n/g, "\n").replace(/\r/g, "\n").replace(/：/g, ":");
-
+  
   const marker = norm.match(/Exercises\s*:/i);
   if (!marker || marker.index == null) {
     console.log("[PT Visit Bot] No Exercises list found; skipping Training Exercises grid.");
     return;
   }
-
+  
   const after = norm.slice(marker.index + marker[0].length).replace(/^\s+/, "");
   const lines = after.split("\n").map(s => String(s || "").trim());
-
+  
   const STOP_HEADINGS = [
     /^Impact of Exercise/i,
     /^Impact of Exercise\(s\)/i,
@@ -4377,19 +4365,19 @@ async function fillGenericTherExFromCue(context, aiNotes) {
     /^Posture Training/i,
     /^Assessment/i
   ];
-
+  
   const rawLines = [];
   let started = false;
-
+  
   for (let i = 0; i < lines.length; i++) {
     const t = lines[i];
-
+    
     if (!t && !started) continue;      // skip leading blanks
     if (!t && started) break;          // blank line ends block once started
-
+    
     // Known heading ends the Exercises block
     if (STOP_HEADINGS.some(rx => rx.test(t))) break;
-
+    
     // Accept bullet or plain lines
     const cleaned = t.replace(/^[\-•]\s*/, "").trim();
     if (cleaned) {
@@ -4397,7 +4385,7 @@ async function fillGenericTherExFromCue(context, aiNotes) {
       started = true;
     }
   }
-
+  
   // Run-on splitter (if needed)
   function splitRunOn(line) {
     const s = String(line || "").trim();
@@ -4412,17 +4400,17 @@ async function fillGenericTherExFromCue(context, aiNotes) {
     }
     return out.length ? out : [s];
   }
-
+  
   let exLines = rawLines.slice();
   if (exLines.length === 1 && (exLines[0].match(/:/g) || []).length >= 2) {
     exLines = splitRunOn(exLines[0]);
   }
-
+  
   if (exLines.length === 0) {
     console.log("[PT Visit Bot] No Exercises list found; skipping Training Exercises grid.");
     return;
   }
-
+  
   function parseLine(s) {
     const txt = String(s || "").trim();
     if (!txt) return null;
@@ -4430,7 +4418,7 @@ async function fillGenericTherExFromCue(context, aiNotes) {
     if (idx === -1) return { name: txt, reps: "" };
     return { name: txt.slice(0, idx).trim(), reps: txt.slice(idx + 1).trim() };
   }
-
+  
   function normName(name) {
     const n = String(name || "").trim();
     if (!n) return n;
@@ -4443,7 +4431,7 @@ async function fillGenericTherExFromCue(context, aiNotes) {
     if (/^hamstring\s*stretch$/i.test(n)) return "Hamstring Stretch";
     return n;
   }
-
+  
   function defaultsFor(name) {
     const low = String(name || "").toLowerCase();
     const intervention = "Instruction given for proper body mechanics, sequencing, and safety.";
@@ -4453,7 +4441,7 @@ async function fillGenericTherExFromCue(context, aiNotes) {
     }
     return { participation: "Active", position: "Sitting", intervention };
   }
-
+  
   async function overwriteText(loc, val, label) {
     const v = String(val ?? "");
     if (!loc) return;
@@ -4478,7 +4466,7 @@ async function fillGenericTherExFromCue(context, aiNotes) {
       console.log(`[PT Visit Bot] ⚠️ Training Exercise ${label} skipped:`, e?.message || e);
     }
   }
-
+  
   async function overwriteSelect(sel, labelValue, label) {
     if (!sel) return;
     const lv = String(labelValue || "").trim();
@@ -4495,32 +4483,32 @@ async function fillGenericTherExFromCue(context, aiNotes) {
       console.log(`[PT Visit Bot] ⚠️ Training Exercise ${label} skipped:`, e?.message || e);
     }
   }
-
+  
   const parsed = exLines.map(parseLine).filter(Boolean).slice(0, 8);
-
+  
   for (let i = 0; i < parsed.length; i++) {
     const idx = i + 1;
     const item = parsed[i];
-
+    
     const name = normName(item.name);
     const reps = String(item.reps || "")
-      .replace(/×/g, "x")
-      .replace(/–/g, "-")
-      .replace(/second/gi, "sec")
-      .trim();
-
+    .replace(/×/g, "x")
+    .replace(/–/g, "-")
+    .replace(/second/gi, "sec")
+    .trim();
+    
     const d = defaultsFor(name);
-
+    
     const nameLocAll = frame.locator(`#frm_te${idx}_Name`);
     const exists = await nameLocAll.count().catch(() => 0);
     if (!exists) break;
-
+    
     const nameInput  = nameLocAll.first();
     const partSelect = frame.locator(`#frm_te${idx}_Participation`).first();
     const posSelect  = frame.locator(`#frm_te${idx}_Position`).first();
     const repsInput  = frame.locator(`#frm_te${idx}_Reps`).first();
     const intArea    = frame.locator(`#frm_te${idx}_Intervention`).first();
-
+    
     await nameInput.scrollIntoViewIfNeeded().catch(() => {});
     const vis = await nameInput.isVisible().catch(() => false);
     if (!vis) {
@@ -4528,7 +4516,7 @@ async function fillGenericTherExFromCue(context, aiNotes) {
       await wait(250);
       await nameInput.scrollIntoViewIfNeeded().catch(() => {});
     }
-
+    
     await overwriteText(nameInput, name, `#${idx} Name`);
     await overwriteSelect(partSelect, d.participation, `#${idx} Participation`);
     await overwriteSelect(posSelect, d.position, `#${idx} Position`);
@@ -4536,22 +4524,22 @@ async function fillGenericTherExFromCue(context, aiNotes) {
     await overwriteText(intArea, d.intervention, `#${idx} Intervention`);
     // Resistance untouched (default None)
   }
-
+  
   // Clear remaining rows (prevents stale exercises)
   for (let idx = parsed.length + 1; idx <= 8; idx++) {
     const nameLocAll = frame.locator(`#frm_te${idx}_Name`);
     const exists = await nameLocAll.count().catch(() => 0);
     if (!exists) break;
-
+    
     const nameInput  = nameLocAll.first();
     const repsInput  = frame.locator(`#frm_te${idx}_Reps`).first();
     const intArea    = frame.locator(`#frm_te${idx}_Intervention`).first();
-
+    
     await overwriteText(nameInput, "", `#${idx} Name (clear)`);
     await overwriteText(repsInput, "", `#${idx} Reps (clear)`);
     await overwriteText(intArea, "", `#${idx} Intervention (clear)`);
   }
-
+  
   console.log("[PT Visit Bot] ✅ Training Exercises grid overwritten from Exercises: list.");
 }
 
@@ -4592,7 +4580,7 @@ async function runPtVisitBot({
     
     // Lock to the most recently opened tab (Kinnser often opens the visit in a new page)
     const activePage = getActivePageFromContext(context) || page;
-
+    
     await wait(2000);
     
     const noteData = await extractNoteDataFromAI(aiNotes || "", "Visit");
@@ -4609,40 +4597,40 @@ async function runPtVisitBot({
     await fillPtVisitTrainingBlocks(context, noteData);
     
     await fillGenericTherExFromCue(context, aiNotes || "");
-        await fillVisitExerciseTeachingDefaults(context, aiNotes || "");
-
-await fillVisitSummaryFromCue(context, aiNotes || "");
+    await fillVisitExerciseTeachingDefaults(context, aiNotes || "");
+    
+    await fillVisitSummaryFromCue(context, aiNotes || "");
     await ensureHomeboundCriteriaOne(context);
     
     // ✅ SAVE (must be BEFORE "automation completed" log)
     console.log("[PT Visit Bot] Attempting to click Save (iframe-safe)...");
     await clickSave(activePage);
     await wait(2500);
-
+    
     // ✅ Post-save audit (matches PT Evaluation behavior)
     await postSaveAudit({ page: activePage, context }, { visitDate, timeIn, timeOut, patientName, taskType: "PT Visit" });
-
+    
     // Additional read-only sanity checks (do NOT re-fill fields here)
     try {
       const scope = await findTemplateScope(context, { timeoutMs: 12000 });
       if (scope) {
         const teach = (await scope.locator("#frm_tTitlesTxt").first().inputValue().catch(() => "")).trim();
         console.log(teach.length > 2
-          ? "[PT Visit Bot] ✅ VERIFIED Teaching Tools (frm_tTitlesTxt) - has content"
-          : "[PT Visit Bot] ❌ VERIFY FAIL Teaching Tools appears empty after save");
-
+                    ? "[PT Visit Bot] ✅ VERIFIED Teaching Tools (frm_tTitlesTxt) - has content"
+                    : "[PT Visit Bot] ❌ VERIFY FAIL Teaching Tools appears empty after save");
+        
         const impactLoc = scope.locator("#frm_teExerciseDesc").first();
         if (await impactLoc.isVisible().catch(() => false)) {
           const got = (await impactLoc.inputValue().catch(() => "")).trim();
           console.log(got.length > 5
-            ? "[PT Visit Bot] ✅ VERIFIED Impact field has content"
-            : "[PT Visit Bot] ❌ VERIFY FAIL Impact field still empty after save");
+                      ? "[PT Visit Bot] ✅ VERIFIED Impact field has content"
+                      : "[PT Visit Bot] ❌ VERIFY FAIL Impact field still empty after save");
         }
       }
     } catch (e) {
       console.log("[PT Visit Bot] ⚠️ Post-save sanity check skipped:", e?.message || e);
     }
-
+    
     await wait(1500);
     
     console.log("[PT Visit Bot] PT Visit automation completed.");
