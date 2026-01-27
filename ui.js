@@ -325,6 +325,40 @@ function simpleFillTemplate(dictationText, templateText) {
                                 
                                 return outLines.join("\n").trimEnd() + "\n";
 }
+
+function normalizeNewlines(s) {
+  return String(s || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+}
+
+// Enforce that the model output kept the user's template headings/structure.
+// If it looks like the model rewrote headings (e.g., "Pain Assessment" instead of "Pain:"),
+// fall back to deterministic template filling.
+function templateLooksPreserved(outText, templateText) {
+  const out = normalizeNewlines(outText);
+  const tpl = normalizeNewlines(templateText);
+
+  // Anchor: first non-empty template line should appear in output
+  const firstTplLine = tpl.split("\n").map(l => l.trimEnd()).find(l => l.trim() !== "");
+  if (firstTplLine && !out.includes(firstTplLine)) return false;
+
+  // Headings: lines ending with ":" in template should mostly appear verbatim in output
+  const tplHeadings = tpl
+    .split("\n")
+    .map(l => l.trimEnd())
+    .filter(l => l.trim() && l.trim().endsWith(":") && l.trim().length <= 80);
+
+  if (tplHeadings.length === 0) return true;
+
+  let hit = 0;
+  for (const h of tplHeadings) {
+    if (out.includes(h)) hit++;
+  }
+  const ratio = hit / tplHeadings.length;
+
+  // Require >= 0.7 heading preservation (tolerates a couple missing)
+  return ratio >= 0.7;
+}
+
 // ------------------------------------------------------------
 // OpenAI-only: generate 6-sentence Medicare-justifiable HH PT Eval Assessment Summary
 // Triggered ONLY when the user explicitly prompts via "Assessment Summary:" containing "Generate 6 sentences"
@@ -581,6 +615,7 @@ RULES:
 - Output MUST be the template text filled in.
 - Preserve ALL headings and section order exactly as shown.
 - Preserve ALL whitespace and blank lines exactly as shown in the TEMPLATE. Do NOT remove spacing or indentation.
+- Do NOT rename, reword, or add headings/labels. Use the TEMPLATE text verbatim and only fill in blanks.
 - Fill in values using ONLY the dictation. If unknown, leave the placeholder blank (keep ___ or empty after colon).
 - Do NOT add new headings. Do NOT add extra commentary outside the template.
 - Keep Exercises lines as one exercise per line if present.
@@ -597,7 +632,14 @@ ${dictation}
     
     const out = await callOpenAIText(prompt, 60000).catch(() => "");
     // IMPORTANT: do not trim; preserve template spacing/blank lines
-    const finalText = String(out || "") || simpleFillTemplate(dictation, templateText) || templateText;// ------------------------------------------------------------
+    const candidate = String(out || "");
+    let finalText = candidate || simpleFillTemplate(dictation, templateText) || templateText;
+
+    // If the model rewrote the template structure, fall back to deterministic fill
+    if (candidate && templateText && !templateLooksPreserved(candidate, templateText)) {
+      appendLog("⚠️ Model output did not preserve template headings; using deterministic template fill.");
+      finalText = simpleFillTemplate(dictation, templateText) || templateText;
+    }// ------------------------------------------------------------
     // Optional: OpenAI generation for HH PT Eval Assessment Summary (6 sentences)
     // Only runs when user explicitly prompts in dictation:
     //   "Assessment Summary: Generate 6 sentences ..."
