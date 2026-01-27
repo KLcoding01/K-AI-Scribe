@@ -2213,7 +2213,7 @@ async function extractNoteDataFromAI(aiNotes, visitType = "Evaluation") {
     clinicalStatement: (structured.clinicalStatement || "").trim(),
   };
   
-
+  
   return base;
 }
 
@@ -4019,7 +4019,23 @@ async function runPtVisitBot({
     } catch {}
     
     // 4) Select Template
-    await selectTemplateGW2(activePage);
+    // 4) Template selection
+    // PT Visit + PT Discharge should NOT attempt GW2 selection.
+    // Only attempt GW2 for eval-ish tasks (keeps backward compatibility if this bot is reused).
+    const tt = String(taskType || "").toLowerCase();
+    const isEvalish =
+      tt.includes("evaluation") ||
+      tt.includes(" eval") ||
+      tt.includes("eval") ||
+      tt.includes("re-eval") ||
+      tt.includes("reeval") ||
+      tt.includes("re evaluation");
+
+    if (isEvalish) {
+      await selectTemplateGW2(activePage);
+    } else {
+      log("⏭ Skipping GW2 template selection for taskType:", taskType);
+    }
     
     // 5) Visit basics
     await fillVisitBasics(activePage, { timeIn, timeOut, visitDate });
