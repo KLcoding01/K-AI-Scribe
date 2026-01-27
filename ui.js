@@ -205,8 +205,8 @@ app.post("/run-automation", async (req, res) => {
       
       appendJobLog(jobId, "➡️ Starting automation...");
       appendJobLog(jobId, `taskType: ${merged.taskType}`);
-
-
+      
+      
       // Live UI logs for bots that use the callback-based logger (ptVisit.solo.js)
       // ptVisit.solo.js emits to globalThis.__KINNSER_LOG_CB
       try {
@@ -323,7 +323,9 @@ function simpleFillTemplate(dictationText, templateText) {
     if (replLines.length > 1) outLines.splice(i + 1, 0, ...replLines.slice(1));
   }
                                 
-                                return outLines.join("\n").replace(/\n{3,}/g, "\n\n").trimEnd() + "\n";
+                                return outLines.join("
+").trimEnd() + "
+";
 }
 // ------------------------------------------------------------
 // OpenAI-only: generate 6-sentence Medicare-justifiable HH PT Eval Assessment Summary
@@ -580,6 +582,7 @@ You are converting messy PT dictation into the provided WellSky/Kinnser note tem
 RULES:
 - Output MUST be the template text filled in.
 - Preserve ALL headings and section order exactly as shown.
+- Preserve ALL whitespace and blank lines exactly as shown in the TEMPLATE. Do NOT remove spacing or indentation.
 - Fill in values using ONLY the dictation. If unknown, leave the placeholder blank (keep ___ or empty after colon).
 - Do NOT add new headings. Do NOT add extra commentary outside the template.
 - Keep Exercises lines as one exercise per line if present.
@@ -595,7 +598,8 @@ ${dictation}
 `.trim();
     
     const out = await callOpenAIText(prompt, 60000).catch(() => "");
-    const finalText = String(out || "").trim() || simpleFillTemplate(dictation, templateText) || templateText;// ------------------------------------------------------------
+    // IMPORTANT: do not trim; preserve template spacing/blank lines
+    const finalText = String(out || "") || simpleFillTemplate(dictation, templateText) || templateText;// ------------------------------------------------------------
     // Optional: OpenAI generation for HH PT Eval Assessment Summary (6 sentences)
     // Only runs when user explicitly prompts in dictation:
     //   "Assessment Summary: Generate 6 sentences ..."
@@ -731,7 +735,8 @@ ${templateText}
 `.trim();
     
     const obj = await callOpenAIImageJSON(prompt, imageDataUrl, 90000).catch(() => ({}));
-    const finalText = String(obj?.templateText || "").trim();
+    const finalText = String(obj?.templateText || "");
+    // IMPORTANT: do not trim; preserve template spacing/blank lines
     // ------------------------------------------------------------
     // Optional: OpenAI generation for HH PT Eval Assessment Summary (6–8 sentences)
     // Runs ONLY when an explicit trigger phrase is present in either:
