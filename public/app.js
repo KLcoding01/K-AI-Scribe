@@ -3,51 +3,42 @@
 // Sanitize AI Notes
 // -------------------------
 function sanitizeNotes(text) {
-  if (!text) return text;
-  let t = String(text);
+  // Preserve template spacing EXACTLY (indentation, multiple spaces, and blank lines).
+  // Only normalize line endings and a couple of common invisible characters.
+  let t = String(text ?? "");
 
-  // Remove Markdown markers
-  t = t.replace(/\*\*/g, "");
+  // Normalize CRLF -> LF (keeps all spacing/indentation intact)
+  t = t.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
 
-  // Remove placeholder underscores (___ or more)
-  t = t.replace(/_{3,}/g, "");
+  // Replace non‑breaking spaces with regular spaces (optional but helps consistency)
+  t = t.replace(/\u00A0/g, " ");
 
-  // Remove any Discharge Date line entirely (date is set from Visit Date in the bot)
-  t = t.replace(/^\s*Discharge\s+Date\s*:.*$/gmi, "");
+  // Do NOT collapse spaces/tabs, and do NOT strip indentation after newlines.
+  // Do NOT collapse multiple blank lines (your templates may intentionally include them).
 
-  // Normalize common terms
-  t = t.replace(/\bIndependent\b/gi, "Indep");
-
-  // Normalize whitespace
-  t = t.replace(/[ \t]+/g, " ");
-  t = t.replace(/\n\s+/g, "\n");
-
-  // Collapse repeated blank lines
-  t = t.replace(/\n{3,}/g, "\n\n");
-
-  return t.trim();
+  return t;
 }
 
 (() => {
   const el = (id) => document.getElementById(id);
-
+  
   const apiBase = window.location.origin;
   el("apiBasePill").textContent = `API: ${apiBase}`;
-
+  
   let pollTimer = null;
   let activeJobId = null;
-
+  
   function setBadge(text, kind = "") {
     const b = el("jobBadge");
     b.textContent = text;
     b.className = "badge" + (kind ? " " + kind : "");
   }
-
+  
   function setStatus(text) {
     el("statusBox").textContent = text;
     el("statusBox").scrollTop = el("statusBox").scrollHeight;
   }
-
+  
   async function httpJson(url, options = {}) {
     const res = await fetch(url, {
       ...options,
@@ -64,7 +55,7 @@ function sanitizeNotes(text) {
     }
     return body;
   }
-
+  
   async function testHealth() {
     try {
       setBadge("Checking…", "warn");
@@ -77,22 +68,22 @@ function sanitizeNotes(text) {
       setStatus(`Health check failed:\n${e?.message || e}`);
     }
   }
-
+  
   function stopPolling() {
     if (pollTimer) clearInterval(pollTimer);
     pollTimer = null;
   }
-
+  
   async function pollJob(jobId) {
     stopPolling();
     pollTimer = setInterval(async () => {
       try {
         const job = await httpJson(`/job-status/${encodeURIComponent(jobId)}`);
-
+        
         if (job.status === "completed") setBadge("Completed", "ok");
         else if (job.status === "failed") setBadge("Failed", "bad");
         else setBadge(job.status || "running", "warn");
-
+        
         const summaryLines = [
           `jobId: ${job.jobId}`,
           `status: ${job.status}`,
@@ -101,10 +92,10 @@ function sanitizeNotes(text) {
           `updatedAt: ${job.updatedAt ? new Date(job.updatedAt).toISOString() : ""}`,
           `finishedAt: ${job.finishedAt ? new Date(job.finishedAt).toISOString() : ""}`,
         ];
-
+        
         const logText = Array.isArray(job.logs) ? job.logs.join("\n") : (job.log || "");
         setStatus(summaryLines.join("\n") + (logText ? `\n\n${logText}` : ""));
-
+        
         if (job.status === "completed" || job.status === "failed") {
           stopPolling();
         }
@@ -115,7 +106,7 @@ function sanitizeNotes(text) {
       }
     }, 1200);
   }
-
+  
   function clearForm() {
     el("patientName").value = "";
     el("visitDate").value = "";
@@ -124,13 +115,13 @@ function sanitizeNotes(text) {
     el("aiNotes").value = sanitizeNotes("");
     if (el("dictationNotes")) el("dictationNotes").value = "";
     if (el("imageFile")) el("imageFile").value = "";
-
+    
     setBadge("Idle");
     setStatus("No job yet.");
     activeJobId = null;
     stopPolling();
   }
-
+  
   async function runAutomation() {
     const kinnserUsername = el("kinnserUsername").value.trim();
     const kinnserPassword = el("kinnserPassword").value;
@@ -140,24 +131,24 @@ function sanitizeNotes(text) {
     const timeIn = el("timeIn").value.trim();
     const timeOut = el("timeOut").value.trim();
     const aiNotes = el("aiNotes").value || "";
-
+    
     if (!patientName || !visitDate || !taskType) {
       setBadge("Missing fields", "bad");
       setStatus("Please fill Patient name, Visit date, and Task type.");
       return;
     }
-
+    
     if (!kinnserUsername || !kinnserPassword) {
       setBadge("Missing login", "bad");
       setStatus("Please enter Kinnser username and password.");
       return;
     }
-
+    
     try {
       el("btnRun").disabled = true;
       setBadge("Starting…", "warn");
       setStatus("Submitting job…");
-
+      
       const body = {
         kinnserUsername,
         kinnserPassword,
@@ -168,12 +159,12 @@ function sanitizeNotes(text) {
         timeOut,
         aiNotes: aiNotes.replace(/\r\n/g, "\n"),
       };
-
+      
       const resp = await httpJson("/run-automation", {
         method: "POST",
         body: JSON.stringify(body),
       });
-
+      
       activeJobId = resp.jobId;
       setBadge("Running", "warn");
       setStatus(`Job started.\njobId: ${activeJobId}`);
@@ -185,34 +176,34 @@ function sanitizeNotes(text) {
       el("btnRun").disabled = false;
     }
   }
-
-          async function convertDictation() {
+  
+  async function convertDictation() {
     const dictation = (el("dictationNotes")?.value || "").trim();
     if (!dictation) {
       setBadge("Convert failed", "bad");
       setStatus("Convert failed:\nPlease enter dictation first.");
       return;
     }
-
+    
     try {
       el("btnConvert").disabled = true;
       setBadge("Converting…", "warn");
       setStatus("Converting dictation → selected template…");
-
+      
       const taskType = (el("taskType")?.value || "").trim();
       const templateKey = (el("templateKey")?.value || "").trim();
-
+      
       // Choose template: dropdown first, else based on task type
       let templateText = "";
       if (templateKey && TEMPLATES[templateKey]) templateText = TEMPLATES[templateKey];
       else if ((taskType || "").toLowerCase().includes("evaluation") && TEMPLATES.pt_eval_default) templateText = TEMPLATES.pt_eval_default;
       else templateText = TEMPLATES.pt_visit_default || "";
-
+      
       const resp = await httpJson("/convert-dictation", {
         method: "POST",
         body: JSON.stringify({ dictation, taskType, templateText }),
       });
-
+      
       el("aiNotes").value = sanitizeNotes(resp.templateText || "");
       setBadge("Ready", "ok");
       setStatus("Conversion completed. Review AI Notes, then click Run Automation.");
@@ -223,7 +214,7 @@ function sanitizeNotes(text) {
       el("btnConvert").disabled = false;
     }
   }
-
+  
   function fileToDataUrl(file) {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
@@ -232,35 +223,35 @@ function sanitizeNotes(text) {
       reader.readAsDataURL(file);
     });
   }
-
-          async function convertImage() {
+  
+  async function convertImage() {
     const file = el("imageFile")?.files?.[0];
     if (!file) {
       setBadge("Image convert failed", "bad");
       setStatus("Image convert failed:\nPlease choose an image file first.");
       return;
     }
-
+    
     try {
       el("btnConvertImage").disabled = true;
       setBadge("Converting…", "warn");
       setStatus("Converting image → selected template…");
-
+      
       const imageDataUrl = await fileToDataUrl(file);
-
+      
       const taskType = (el("taskType")?.value || "").trim();
       const templateKey = (el("templateKey")?.value || "").trim();
-
+      
       let templateText = "";
       if (templateKey && TEMPLATES[templateKey]) templateText = TEMPLATES[templateKey];
       else if ((taskType || "").toLowerCase().includes("evaluation") && TEMPLATES.pt_eval_default) templateText = TEMPLATES.pt_eval_default;
       else templateText = TEMPLATES.pt_visit_default || "";
-
+      
       const resp = await httpJson("/convert-image", {
         method: "POST",
         body: JSON.stringify({ imageDataUrl, taskType, templateText }),
       });
-
+      
       el("aiNotes").value = sanitizeNotes(resp.templateText || "");
       setBadge("Ready", "ok");
       setStatus("Image conversion completed. Review AI Notes, then click Run Automation.");
@@ -271,7 +262,7 @@ function sanitizeNotes(text) {
       el("btnConvertImage").disabled = false;
     }
   }
-
+  
   // ------------------------------
   // Templates (client-side)
   // ------------------------------
@@ -421,8 +412,8 @@ LTG 4: Pt will improve Tinetti Poma score to 20/28 or more to decrease fall risk
 Plan
 Frequency: 1w1, 2w3
 Effective Date: `
-,
-pt_discharge_default: `Vital Signs
+    ,
+    pt_discharge_default: `Vital Signs
 Temp:
 Temp Type: Temporal
 BP:  /
@@ -480,8 +471,8 @@ Post Discharge Goals: Pt will continue with daily HEP to maintain strength, flex
 Information Provided: Pt/family/caregiver reviewed fall and safety precautions for ADLs and functional mobility, and received training and review HEP with emphasis on safety and proper body mechanics.
 
 Treatment Preferences: Pt prefers to continue a home-based exercise routine and safe functional training under PT guidance, focusing on improving mobility and activity tolerance. Patient is agreeable to ongoing HEP and family/caregiver support as needed.`
-,
-pt_reeval_default: `Subjective
+    ,
+    pt_reeval_default: `Subjective
 Pt agrees to PT Re-evaluation.
 
 Vital Signs
@@ -554,7 +545,7 @@ Plan
 Frequency:
 Effective Date: `
   };
-
+  
   function initTemplates() {
     const dd = el("templateKey");
     if (!dd) return;
@@ -573,7 +564,7 @@ Effective Date: `
       setStatus(`Loaded template: ${key}`);
     });
   }
-
+  
   // ------------------------------
   // Remember Kinnser credentials (localStorage)
   // ------------------------------
@@ -586,7 +577,7 @@ Effective Date: `
       if (el("rememberCreds") && (u || p)) el("rememberCreds").checked = true;
     } catch {}
   }
-
+  
   function saveCreds() {
     try {
       if (!el("rememberCreds") || !el("rememberCreds").checked) {
@@ -603,7 +594,7 @@ Effective Date: `
       setStatus("Failed to save credentials.");
     }
   }
-
+  
   function clearCreds() {
     try {
       localStorage.removeItem("ks_kinnser_user");
@@ -613,19 +604,19 @@ Effective Date: `
       setStatus("Cleared saved Kinnser credentials.");
     } catch {}
   }
-
-    initTemplates();
+  
+  initTemplates();
   loadSavedCreds();
   if (el("btnSaveCreds")) el("btnSaveCreds").addEventListener("click", saveCreds);
   if (el("btnClearCreds")) el("btnClearCreds").addEventListener("click", clearCreds);
-
+  
   el("btnHealth").addEventListener("click", testHealth);
   el("btnRun").addEventListener("click", runAutomation);
   el("btnClear").addEventListener("click", clearForm);
-
+  
   if (el("btnConvert")) el("btnConvert").addEventListener("click", convertDictation);
   if (el("btnConvertImage")) el("btnConvertImage").addEventListener("click", convertImage);
-
+  
   el("kinnserPassword").addEventListener("keydown", (e) => {
     if (e.key === "Enter") runAutomation();
   });
