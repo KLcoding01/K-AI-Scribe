@@ -4019,9 +4019,8 @@ async function runPtVisitBot({
     } catch {}
     
     // 4) Select Template
-    await selectTemplateGW2(activePage);
-    
-    // 5) Visit basics
+    log("⏭ Skipping GW2 template selection for PT Visit.");
+// 5) Visit basics
     await fillVisitBasics(activePage, { timeIn, timeOut, visitDate });
     
     // 6) Parse AI notes (Eval)
