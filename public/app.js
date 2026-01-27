@@ -279,7 +279,7 @@ Respirations: ___
 Comments: Pt currently symptom-free with no adverse reactions noted. Cleared to continue with PT as planned.
 
 Pain Assessment
-Pain: No
+Pain: No/Yes/Skip
 Location Other:
 Intensity (0–10):
 Increased by:
