@@ -1240,6 +1240,7 @@ function parseStructuredFromFreeText(aiNotes = "") {
     relevantHistory: "",
     hasExplicitPMH: false,
     clinicalStatement: "",
+    painDirective: "",
     subjective: "",
     priorLevel: "",
     patientGoals: "",
@@ -1315,6 +1316,22 @@ function parseStructuredFromFreeText(aiNotes = "") {
   
   if (!aiNotes) return result;
   const text = String(aiNotes ?? "");
+
+  // --------------------------------------------------
+  // Pain directive (tri-state): Yes / No / Skip
+  // Accepts a standalone line like:
+  //   Pain: Yes
+  //   Pain: No
+  //   Pain: Skip
+  // --------------------------------------------------
+  {
+    const m = text.match(/^\s*Pain\s*:\s*(Yes|No|Skip)\s*$/im);
+    if (m) {
+      const v = String(m[1] || "").toLowerCase();
+      result.painDirective = v === "skip" ? "skip" : v === "yes" ? "yes" : "no";
+    }
+  }
+
   
   // MEDICAL DX
   const medDxMatch =
@@ -2128,6 +2145,14 @@ async function fillEdemaSection(context, data) {
 
 async function fillPainSection(context, data) {
   console.log("➡️ Filling Pain Assessment (if present)...");
+
+  // Note-driven tri-state control from AI note box:
+  //   Pain: Yes / No / Skip
+  const painDirective = (data?.painDirective || data?.pain?.directive || "").toString().trim().toLowerCase();
+  if (painDirective === "skip") {
+    console.log("⏭️ Pain: Skip detected; leaving Pain section untouched.");
+    return;
+  }
   
   const frame = await findTemplateScope(context);
   if (!frame) {
@@ -2136,6 +2161,7 @@ async function fillPainSection(context, data) {
   }
   
   const pain = data?.pain || {};
+  if (painDirective === "no") pain.hasPain = false;
   
   // If NO pain in note → tick "No Pain Reported" and exit
   if (!pain.hasPain) {
