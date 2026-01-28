@@ -1497,13 +1497,7 @@ function parseStructuredFromFreeText(aiNotes = "") {
   
   // ROM / Strength
   result.romStrength = parseRomAndStrength(text);
-  
-  // CLINICAL STATEMENT fallback
-  const topPara = text.trim().split(/\n{2,}/)[0];
-  if (topPara && topPara.length > 40) {
-    result.clinicalStatement = topPara.trim();
-  }
-  
+
   // ✅ Physical Assessment: pull values from narrative lines if present
   const parsedNeuro = parseNeuroFromText(text);
   result.neuro = { ...result.neuro, ...parsedNeuro };
@@ -1595,15 +1589,9 @@ async function extractNoteDataFromAI(aiNotes, visitType = "Evaluation") {
   
   const defaults = {
     relevantHistory: structured.relevantHistory || "PMH as documented in medical record.",
-    
-    clinicalStatement: isReeval
-    ? "Pt has been receiving skilled HH PT to address functional mobility deficits secondary to muscle weakness, impaired balance, and unsteady gait. Progress has been slow, and pt continues to demonstrate difficulty with bed mobility, transfers, decreased gait tolerance, unsteady gait, and poor balance contributing to high fall risk. Pt requires continued HEP training, fall-prevention education, and safety instruction with functional mobility to reduce fall risk. Pt still has potential and continues to benefit from skilled HH PT to work toward goals and improve ADL performance. Ongoing skilled HH PT remains medically necessary to address these deficits and promote safe functional independence."
-    : isDischarge
-    ? "Pt has completed a course of skilled HH PT to address pain, weakness, impaired mobility, and fall risk. Pt now demonstrates improved strength, transfer ability, and gait tolerance with safer functional mobility using the recommended assistive device. Residual deficits may remain but are manageable with independent HEP and caregiver support. Pt demonstrates adequate safety awareness and is appropriate for discharge from skilled HH PT at this time. Pt will continue with HEP and follow up with MD as needed."
-    : isVisit
-    ? "Pt continues with skilled HH PT to address ongoing deficits in strength, balance, gait, and activity tolerance. Pt demonstrates variable progress with functional mobility, requiring cues for safety, proper sequencing, and efficient gait mechanics. Current session focused on TherEx, TherAct, and gait training to improve mobility, decrease fall risk, and support ADL performance. Pt continues to benefit from skilled HH PT to address these impairments and reinforce HEP and safety strategies."
-    : `${demoLine} who presents with PMH consists of ${structured.relevantHistory || "multiple comorbidities"} and is referred for HH PT to address severe generalized weakness, dependence with bed mobility and transfers, impaired functional mobility, and high caregiver burden. Pt demonstrates objective functional limitations including Dep bed mobility, Dep transfers via Hoyer lift, non-ambulatory status, and wheelchair dependence, contributing to high risk for skin breakdown, deconditioning, and caregiver injury. Pt resides in an assisted living memory care unit with 24/7 caregiver support, and the home environment and safety factors were assessed with no significant hazards identified at this time. Pt requires skilled HH PT to provide caregiver training for safe Hoyer lift transfers, positioning, pressure relief strategies, therapeutic exercise instruction, and development of an appropriate HEP. Pt POC will emphasize TherEx, TherAct, caregiver education, positioning, ROM, and pressure sore prevention to maximize comfort, safety, and quality of care. Pt requires continued skilled HH PT per POC to improve caregiver competence, prevent secondary complications, and support safe long-term management.`,
-    
+
+    clinicalStatement: (structured.clinicalStatement || ""),
+
     vitals: {
       temperature: "",
       temperatureTypeValue: "4", // Temporal – DO NOT OVERRIDE
@@ -1744,20 +1732,6 @@ ${text}
     if (typeof sanitizeRelevantHistory === "function") {
       parsed.relevantHistory = sanitizeRelevantHistory(parsed.relevantHistory);
     }
-    
-    if (visitLabel === "PT INITIAL PT EVALUATION") {
-      const fallback =
-      typeof buildEvalClinicalStatementFallback === "function"
-      ? buildEvalClinicalStatementFallback(structured)
-      : defaults.clinicalStatement;
-      
-      const ok =
-      typeof isValidSixSentencePtParagraph === "function"
-      ? isValidSixSentencePtParagraph(parsed.clinicalStatement)
-      : true;
-      
-      if (!ok) parsed.clinicalStatement = fallback;
-    }
   } catch (e) {
     console.log("⚠️ sanitize/enforce skipped:", e.message);
   }
@@ -1766,7 +1740,7 @@ ${text}
     visitType,
     hasExplicitPMH: structured.hasExplicitPMH,
     relevantHistory: (parsed.relevantHistory || defaults.relevantHistory || "").trim(),
-    clinicalStatement: (parsed.clinicalStatement || defaults.clinicalStatement || "").trim(),
+    clinicalStatement: ((structured.clinicalStatement || "").trim() || (parsed.clinicalStatement || defaults.clinicalStatement || "").trim()),
     vitals: {
       temperature: parsed.vitals?.temperature || defaults.vitals.temperature,
       temperatureTypeValue: parsed.vitals?.temperatureTypeValue || defaults.vitals.temperatureTypeValue,
@@ -3151,39 +3125,27 @@ async function fillPhysicalRomStrength(context, romStrength) {
 // Save button helper (shared)
 // =========================
 async function clickSave(contextOrPage) {
-  // Robust Save:
-  // - Click Save in the active scope (page or template frame)
-  // - Auto-acknowledge any blocking dialog/modal and surface its message as an ERROR
-  // - Wait for common "Saving..." indicators to appear/disappear (best-effort)
-  //
-  // Returns true if a Save click was executed. Throws if an error dialog/modal appears.
-
   // Accept: Page, Frame, BrowserContext, or wrapper { page }
   let scope = contextOrPage?.page || contextOrPage;
 
   // If they passed a BrowserContext, convert to a Page
+  // (BrowserContext has pages(), not locator()).
   if (scope && typeof scope.pages === "function" && typeof scope.locator !== "function") {
     const pages = scope.pages();
     if (pages && pages.length) scope = pages[0];
   }
 
-  const getPageFromScope = (s) => {
-    try {
-      if (s && typeof s.locator === "function" && typeof s.url === "function") return s; // Page
-      if (s && typeof s.locator === "function" && typeof s.page === "function") return s.page(); // Frame
-      if (s?.page && typeof s.page.locator === "function") return s.page;
-    } catch {}
-    return null;
-  };
-
   function normalizeScope(s) {
     if (s && typeof s.locator === "function") return s; // Page/Frame
     if (s?.page && typeof s.page.locator === "function") return s.page;
     if (s?.frame && typeof s.frame.locator === "function") return s.frame;
+
+    // If wrapper contains a BrowserContext
     if (s && typeof s.pages === "function") {
       const pages = s.pages();
       if (pages && pages.length && typeof pages[0].locator === "function") return pages[0];
     }
+
     throw new TypeError("clickSave(): scope must be Playwright Page/Frame/BrowserContext or {page}/{frame}");
   }
 
@@ -3197,214 +3159,187 @@ async function clickSave(contextOrPage) {
     "xpath=//*[self::input or self::button][contains(translate(normalize-space(string(.)),'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'save')]",
   ];
 
-  const pageForDialogs = getPageFromScope(normalizeScope(scope));
+  // --- Save popup handling ----------------------------------------------------
+  function isNonFatalSavePopup(msg = "") {
+    const s = String(msg || "").trim();
+    return /(page is saving|please wait|processing|saving\.\.\.|saving)/i.test(s);
+  }
 
-  const dialogMessages = [];
-  let dialogListener = null;
+  function looksFatalSavePopup(msg = "") {
+    const s = String(msg || "").trim();
+    if (!s) return false;
+    if (isNonFatalSavePopup(s)) return false;
+    // Common Kinnser/WellSky validation/lock/error copy
+    return /(required|missing|must\s+be|cannot|unable|invalid|error|locked|already|session|permission|access|not\s+allowed)/i.test(s);
+  }
 
-  // Capture native JS dialogs (alert/confirm/prompt)
-  if (pageForDialogs && typeof pageForDialogs.on === "function") {
-    dialogListener = async (dialog) => {
+  async function waitForSaveToComplete(page) {
+    const start = Date.now();
+    const maxMs = 20000;
+
+    // Best-effort: wait until the "saving/please wait" text disappears
+    while (Date.now() - start < maxMs) {
+      let bodyText = "";
       try {
-        const msg = String(dialog.message() || "").trim();
-        if (msg) dialogMessages.push(msg);
-        // default: accept (OK)
-        await dialog.accept().catch(() => {});
-      } catch {}
-    };
-    pageForDialogs.on("dialog", dialogListener);
-  }
-
-  async function cleanupDialogListener() {
-    try {
-      if (pageForDialogs && dialogListener) {
-        pageForDialogs.off("dialog", dialogListener);
-      }
-    } catch {}
-  }
-
-  async function detectAndAckDomModal() {
-    // Best-effort: look for common modal containers and an OK/Close button.
-    // If found, we click OK/Close and return the extracted modal text.
-    if (!pageForDialogs) return null;
-
-    const modalRoots = [
-      "div.ui-dialog:visible",
-      "div[role='dialog']:visible",
-      "div.modal:visible",
-      "div.modal-dialog:visible",
-      "div.k-window:visible",
-      "div.k-dialog:visible",
-      "div.swal2-popup:visible",
-      "div.bootbox.modal:visible",
-    ];
-
-    for (const rootSel of modalRoots) {
-      const root = pageForDialogs.locator(rootSel).first();
-      const visible = await root.isVisible().catch(() => false);
-      if (!visible) continue;
-
-      let text = "";
-      try {
-        text = (await root.innerText().catch(() => "")) || "";
-        text = String(text).replace(/\s+/g, " ").trim();
-      } catch {}
-
-      // Try click OK/Close
-      const btnCandidates = [
-        "button:has-text('OK')",
-        "button:has-text('Okay')",
-        "button:has-text('Close')",
-        "button:has-text('Dismiss')",
-        "input[type='button'][value='OK']",
-        "input[type='button'][value='Okay']",
-        "input[type='button'][value='Close']",
-        "a:has-text('OK')",
-        "a:has-text('Close')",
-      ];
-
-      for (const bSel of btnCandidates) {
-        const btn = root.locator(bSel).first();
-        if (await btn.isVisible().catch(() => false)) {
-          await btn.click({ timeout: 3000 }).catch(() => {});
-          await wait(500).catch(() => {});
-          return text || "Save dialog/modal acknowledged (no text captured).";
-        }
-      }
-
-      // If no button found, still return text so caller can fail loudly.
-      return text || "Save dialog/modal detected but could not find OK/Close button.";
-    }
-
-    return null;
-  }
-
-  async function waitForSavingIndicator() {
-    if (!pageForDialogs) return;
-    const savingLocs = [
-      pageForDialogs.locator("text=/saving/i").first(),
-      pageForDialogs.locator("text=/please wait/i").first(),
-      pageForDialogs.locator("text=/processing/i").first(),
-      pageForDialogs.locator("img[alt*='Loading'], .loading, .spinner, .ui-widget-overlay").first(),
-    ];
-
-    // If any appears quickly, wait for it to disappear.
-    let appeared = false;
-    const t0 = Date.now();
-    while (Date.now() - t0 < 2500) {
-      for (const loc of savingLocs) {
-        if (await loc.isVisible().catch(() => false)) {
-          appeared = true;
-          break;
-        }
-      }
-      if (appeared) break;
-      await wait(150).catch(() => {});
-    }
-
-    if (!appeared) return;
-
-    const t1 = Date.now();
-    while (Date.now() - t1 < 20000) {
-      let anyVis = false;
-      for (const loc of savingLocs) {
-        if (await loc.isVisible().catch(() => false)) {
-          anyVis = true;
-          break;
-        }
-      }
-      if (!anyVis) return;
-      await wait(250).catch(() => {});
-    }
-    // If still visible, do not throw; audit will catch persistence issues.
-    console.log("⚠️ Save indicator still visible after timeout (continuing to audit).");
-  }
-
-  async function tryClick(s, label) {
-    const pageOrFrame = normalizeScope(s);
-
-    for (const sel of saveSelectors) {
-      const loc = pageOrFrame.locator(sel).first();
-      const visible = await loc.isVisible().catch(() => false);
-      if (!visible) continue;
-
-      await loc.scrollIntoViewIfNeeded().catch(() => {});
-      try {
-        await loc.click({ force: true, timeout: 5000 });
+        bodyText = await page.evaluate(() => (document.body && (document.body.innerText || "")) || "");
       } catch {
-        // JS fallback (Page/Frame only)
-        await pageOrFrame.evaluate(() => {
-          const byId = document.querySelector("#btnSave");
-          if (byId) return byId.click();
-
-          const byOnclick = Array.from(document.querySelectorAll("input,button"))
-            .find(el => (el.getAttribute("onclick") || "").includes("modifyForm('save')"));
-          if (byOnclick) return byOnclick.click();
-
-          const byValue = Array.from(
-            document.querySelectorAll("input[type='button'],input[type='submit'],button")
-          ).find(el => ((el.value || el.textContent || "").trim().toLowerCase() === "save"));
-          if (byValue) return byValue.click();
-        });
+        // If navigation happened, just continue polling
       }
-
-      console.log(`✅ Clicked Save (${label}) using selector: ${sel}`);
-
-      // Immediately check for modal/dialog errors caused by Save validation
-      // 1) native JS dialogs
-      await wait(250).catch(() => {});
-      // 2) DOM-based modal
-      const modalText = await detectAndAckDomModal();
-
-      // Wait for any "Saving..." toast/spinner to finish
-      await waitForSavingIndicator();
-
-      // Give a short settle time, then re-check for modals that appear after save attempt
-      await wait(400).catch(() => {});
-      const modalText2 = await detectAndAckDomModal();
-
-      const allModalText = [modalText, modalText2].filter(Boolean).join(" | ").trim();
-      const allDialogs = dialogMessages.filter(Boolean).join(" | ").trim();
-
-      await cleanupDialogListener();
-
-      if (allModalText || allDialogs) {
-        const msg = `SAVE ERROR POPUP: ${[allModalText, allDialogs].filter(Boolean).join(" | ")}`.trim();
-        throw new Error(msg);
-      }
-
-      return true;
+      if (!/(page is saving|please wait|processing|saving)/i.test(bodyText)) return true;
+      await page.waitForTimeout(400);
     }
-
+    console.log("[PT Visit Bot] ⚠️ Save wait timeout reached; proceeding cautiously.");
     return false;
   }
 
-  try {
-    // Try directly on page first
-    if (await tryClick(scope, "page")) return true;
-
-    // Then, if we can resolve template scope (iframe), try there too
+  async function handleDomSaveModal(page) {
+    // Returns array of messages observed (may be empty).
+    const messages = [];
     try {
-      const fr = await findTemplateScope(scope, { timeoutMs: 8000 }).catch(() => null);
-      if (fr) {
-        if (await tryClick(fr, "frame")) return true;
+      // Grab visible dialog-ish elements and attempt to close them.
+      const candidates = page.locator(
+        "xpath=//*[(@role='dialog' or contains(@class,'modal') or contains(@class,'ui-dialog') or contains(@class,'k-window') or contains(@class,'dialog')) and not(contains(@style,'display: none'))]"
+      );
+      const count = await candidates.count().catch(() => 0);
+      if (!count) return messages;
+
+      for (let i = 0; i < Math.min(count, 3); i++) {
+        const dlg = candidates.nth(i);
+        const visible = await dlg.isVisible().catch(() => false);
+        if (!visible) continue;
+
+        const text = (await dlg.innerText().catch(() => "")) || "";
+        const trimmed = text.replace(/\s+/g, " ").trim();
+        if (trimmed) messages.push(trimmed);
+
+        // Try common buttons
+        const btns = [
+          dlg.locator("button:has-text('OK')").first(),
+          dlg.locator("button:has-text('Ok')").first(),
+          dlg.locator("button:has-text('Close')").first(),
+          dlg.locator("button:has-text('Yes')").first(),
+          dlg.locator("input[type='button'][value='OK']").first(),
+          dlg.locator("input[type='button'][value='Close']").first(),
+          dlg.locator("xpath=.//*[self::a or self::button][contains(translate(normalize-space(string(.)),'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'close')]").first(),
+        ];
+        for (const b of btns) {
+          const bv = await b.isVisible().catch(() => false);
+          if (bv) {
+            await b.click({ force: true, timeout: 2000 }).catch(() => {});
+            break;
+          }
+        }
+      }
+    } catch {
+      // ignore
+    }
+    return messages;
+  }
+
+  async function clickAndHandle(pageOrFrame, label) {
+    const pageLike = normalizeScope(pageOrFrame);
+    const page = typeof pageLike.page === "function" ? pageLike.page() : pageLike;
+
+    const dialogMessages = [];
+    const dialogHandler = async (d) => {
+      const msg = String(d.message() || "").trim();
+      if (msg) dialogMessages.push(msg);
+      try { await d.accept(); } catch {}
+    };
+
+    // Attach listener temporarily (only if this is a Page)
+    let attached = false;
+    try {
+      if (page && typeof page.on === "function") {
+        page.on("dialog", dialogHandler);
+        attached = true;
       }
     } catch {}
 
-    // As a last resort, try all frames on the page
-    if (pageForDialogs && typeof pageForDialogs.frames === "function") {
-      const frames = pageForDialogs.frames();
-      for (const fr of frames) {
-        if (await tryClick(fr, "frame")) return true;
+    try {
+      // Click Save via robust selector set
+      for (const sel of saveSelectors) {
+        const loc = pageLike.locator(sel).first();
+        const visible = await loc.isVisible().catch(() => false);
+        if (!visible) continue;
+
+        await loc.scrollIntoViewIfNeeded().catch(() => {});
+        try {
+          await loc.click({ force: true, timeout: 7000 });
+        } catch {
+          // JS fallback (Page/Frame only)
+          await pageLike.evaluate(() => {
+            const byId = document.querySelector("#btnSave");
+            if (byId) return byId.click();
+
+            const byOnclick = Array.from(document.querySelectorAll("input,button"))
+              .find(el => (el.getAttribute("onclick") || "").includes("modifyForm('save')"));
+            if (byOnclick) return byOnclick.click();
+
+            const byText = Array.from(document.querySelectorAll("input,button,a"))
+              .find(el => /save/i.test((el.value || el.innerText || "").trim()));
+            if (byText) return byText.click();
+          }).catch(() => {});
+        }
+
+        console.log(`✅ Clicked Save (${label}) using selector: ${sel}`);
+
+        // DOM modal handling (non-blocking)
+        const domMsgs = await handleDomSaveModal(page).catch(() => []);
+        for (const m of domMsgs) dialogMessages.push(m);
+
+        // If we saw a "Page is saving..." modal, wait it out.
+        await waitForSaveToComplete(page).catch(() => {});
+
+        // If any popup messages exist, decide fatal vs non-fatal
+        if (dialogMessages.length) {
+          const combined = dialogMessages.join(" | ").replace(/\s+/g, " ").trim();
+
+          // If there is any message that looks fatal, fail with that.
+          const fatalMsg = dialogMessages.find(looksFatalSavePopup);
+          if (fatalMsg) {
+            throw new Error(`SAVE ERROR POPUP: ${fatalMsg}`);
+          }
+
+          // If only non-fatal messages (e.g., Page is saving...), log + continue.
+          if (combined) {
+            console.log(`[PT Visit Bot] ⚠️ Save popup (non-fatal): ${combined}`);
+          }
+        }
+
+        return true;
+      }
+
+      console.log("⚠️ Save button not found — skipping save.");
+      return false;
+    } finally {
+      // Remove listener
+      if (attached) {
+        try { page.off("dialog", dialogHandler); } catch {}
       }
     }
-
-    console.log("❌ clickSave(): Could not find a visible Save button.");
-    return false;
-  } finally {
-    await cleanupDialogListener();
   }
+
+  // Try save click on the passed scope (Page/Frame)
+  const primary = await clickAndHandle(scope, "page");
+  if (primary) return true;
+
+  // If we have a template scope / iframe, try it too
+  try {
+    const frame = (typeof findTemplateScope === "function")
+      ? await findTemplateScope(scope?.page || scope)
+      : null;
+    if (frame) {
+      const inFrame = await clickAndHandle(frame, "iframe");
+      if (inFrame) return true;
+    }
+  } catch {
+    // ignore
+  }
+
+  return false;
 }
+
 
 /* =========================
  * Misc helpers & exports
@@ -3603,20 +3538,15 @@ async function fillVisitSummaryFromCue(context, aiNotes) {
     console.log("[PT Visit Bot] No AI notes provided; skipping visit summary.");
     return;
   }
-  
-  if (!process.env.OPENAI_API_KEY) {
-    console.log("[PT Visit Bot] OPENAI_API_KEY missing; cannot generate visit summary.");
-    return;
-  }
-  
+
   const page = context?.page || context;
-  
+
   const frame = await findTemplateScope(page);
   if (!frame) {
     console.log("[PT Visit Bot] Could not find PT Visit frame for summary.");
     return;
   }
-  
+
   const summarySelectors = [
     "#frm_visitSummary",
     "#frm_EASI1",
@@ -3629,31 +3559,29 @@ async function fillVisitSummaryFromCue(context, aiNotes) {
     "xpath=//*[contains(normalize-space(.),'Summary of Patient Overall Performance on this Visit')]/following::textarea[1]",
     "xpath=//*[contains(normalize-space(.),'Summary of Patient Overall Performance')]/following::textarea[1]",
   ];
-  
+
   const summaryBox = await firstVisibleLocator(frame, summarySelectors);
   if (!summaryBox) {
     console.log("[PT Visit Bot] Summary textarea not found (tried multiple selectors).");
     return;
   }
-  
-  const hasCue = needsVisitSummary(aiNotes);
-  console.log(
-              hasCue
-              ? "[PT Visit Bot] Assessment/summary cue detected in AI notes; generating visit summary."
-              : "[PT Visit Bot] No explicit assessment/summary keyword; generating generic HH PT visit summary from AI notes."
-              );
-  
-  console.log("[PT Visit Bot] Generating AI visit summary for PT Visit...");
-  const text = await generateVisitSummaryText(aiNotes);
-  if (!text) {
-    console.log("[PT Visit Bot] AI summary generation returned empty or errored; skipping.");
+
+  // WORD-FOR-WORD TRANSFER (no AI generation):
+  // If the AI note box includes an Assessment Summary / Clinical Statement / Evaluation Summary block,
+  // copy it verbatim into the Visit Summary/Assessment box. Otherwise, do nothing (do not generate).
+  const structured = parseStructuredFromFreeText(aiNotes || "");
+  const verbatim = String(structured?.clinicalStatement || "").trim();
+
+  if (!verbatim) {
+    console.log("[PT Visit Bot] No labeled Assessment Summary/Clinical Statement found in AI notes; skipping visit summary (no generation).");
     return;
   }
-  
+
   await summaryBox.fill("");
-  await summaryBox.type(text, { delay: 10 });
-  console.log("[PT Visit Bot] Filled visit summary.");
+  await summaryBox.type(verbatim, { delay: 10 });
+  console.log("[PT Visit Bot] Filled visit summary from AI note box (verbatim; no generation).");
 }
+
 
 
 /* =========================
