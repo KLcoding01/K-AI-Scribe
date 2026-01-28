@@ -1497,7 +1497,13 @@ function parseStructuredFromFreeText(aiNotes = "") {
   
   // ROM / Strength
   result.romStrength = parseRomAndStrength(text);
-
+  
+  // CLINICAL STATEMENT fallback
+  const topPara = text.trim().split(/\n{2,}/)[0];
+  if (topPara && topPara.length > 40) {
+    result.clinicalStatement = topPara.trim();
+  }
+  
   // ✅ Physical Assessment: pull values from narrative lines if present
   const parsedNeuro = parseNeuroFromText(text);
   result.neuro = { ...result.neuro, ...parsedNeuro };
@@ -1522,7 +1528,72 @@ function parseStructuredFromFreeText(aiNotes = "") {
   // CLINICAL STATEMENT / ASSESSMENT SUMMARY (explicit label parse)
   // =========================
   // Capture multi-line block until next known heading or blank-line break.
-  const clinicalBlockMatch =
+  
+  /* =========================
+   * Pain (tri-state + fields from AI note text)
+   * Supports:
+   *   Pain: Yes
+   *   Pain: No
+   *   Pain: Skip
+   * And fields:
+   *   Location Other:
+   *   Primary Location Other:
+   *   Intensity (0–10):
+   *   Increased by:
+   *   Relieved by:
+   *   Interferes with:
+   * =======================*/
+  try {
+    const painLine = text.match(/^\s*Pain\s*:\s*(Yes|No|Skip)\s*$/im);
+    if (painLine) {
+      const choice = String(painLine[1] || "").trim().toLowerCase();
+      result.painDirective = choice; // yes|no|skip
+      if (choice === "skip") {
+        // Leave pain fields untouched downstream
+      } else if (choice === "yes") {
+        result.pain.hasPain = true;
+      } else if (choice === "no") {
+        result.pain.hasPain = false;
+      }
+    }
+
+    // Pull pain detail lines if present (works even if Pain line omitted)
+    const locMatch =
+      text.match(/^\s*(?:Location\s+Other|Primary\s+Location\s+Other)\s*:\s*(.+)\s*$/im);
+    if (locMatch) {
+      result.pain.primaryLocationText = String(locMatch[1] || "").trim();
+    }
+
+    const intMatch =
+      text.match(/^\s*Intensity\s*\(0\s*[-–]\s*10\)\s*:\s*([0-9]{1,2})\s*$/im) ||
+      text.match(/^\s*Intensity\s*:\s*([0-9]{1,2})\s*$/im);
+    if (intMatch) {
+      result.pain.intensityValue = String(intMatch[1] || "").trim();
+      // If intensity is provided, assume pain = yes unless explicitly "No" or "Skip"
+      if (!result.painDirective) result.pain.hasPain = true;
+      if (result.painDirective === "yes") result.pain.hasPain = true;
+    }
+
+    const incMatch = text.match(/^\s*Increased\s+by\s*:\s*(.+)\s*$/im);
+    if (incMatch) result.pain.increasedBy = String(incMatch[1] || "").trim();
+
+    const relMatch = text.match(/^\s*Relieved\s+by\s*:\s*(.+)\s*$/im);
+    if (relMatch) result.pain.relievedBy = String(relMatch[1] || "").trim();
+
+    const intfMatch = text.match(/^\s*Interferes\s+with\s*:\s*(.+)\s*$/im);
+    if (intfMatch) result.pain.interferesWith = String(intfMatch[1] || "").trim();
+
+    // If any pain detail fields exist and no directive, assume pain = yes
+    const hasAnyPainDetail =
+      !!(result.pain.primaryLocationText || result.pain.intensityValue || result.pain.increasedBy || result.pain.relievedBy || result.pain.interferesWith);
+    if (hasAnyPainDetail && !result.painDirective) {
+      result.pain.hasPain = true;
+    }
+  } catch (e) {
+    console.log("[Pain Parser] Error parsing pain:", e.message);
+  }
+
+const clinicalBlockMatch =
   text.match(
              /(?:^|\n)\s*(assessment summary|clinical statement|evaluation summary|assessment)\s*:\s*([\s\S]+?)(?=\n\s*(subjective|orientation|speech|vision|hearing|vital signs|bp|hr|rr|temp|temperature|dme|pmh|diagnosis|dx|prior level|prior level of function|bed mobility|transfers|gait|living situation|person helping|goals for patient|goals|frequency)\s*:|\n{2,}|$)/i
              );
@@ -1589,9 +1660,15 @@ async function extractNoteDataFromAI(aiNotes, visitType = "Evaluation") {
   
   const defaults = {
     relevantHistory: structured.relevantHistory || "PMH as documented in medical record.",
-
-    clinicalStatement: (structured.clinicalStatement || ""),
-
+    
+    clinicalStatement: isReeval
+    ? "Pt has been receiving skilled HH PT to address functional mobility deficits secondary to muscle weakness, impaired balance, and unsteady gait. Progress has been slow, and pt continues to demonstrate difficulty with bed mobility, transfers, decreased gait tolerance, unsteady gait, and poor balance contributing to high fall risk. Pt requires continued HEP training, fall-prevention education, and safety instruction with functional mobility to reduce fall risk. Pt still has potential and continues to benefit from skilled HH PT to work toward goals and improve ADL performance. Ongoing skilled HH PT remains medically necessary to address these deficits and promote safe functional independence."
+    : isDischarge
+    ? "Pt has completed a course of skilled HH PT to address pain, weakness, impaired mobility, and fall risk. Pt now demonstrates improved strength, transfer ability, and gait tolerance with safer functional mobility using the recommended assistive device. Residual deficits may remain but are manageable with independent HEP and caregiver support. Pt demonstrates adequate safety awareness and is appropriate for discharge from skilled HH PT at this time. Pt will continue with HEP and follow up with MD as needed."
+    : isVisit
+    ? "Pt continues with skilled HH PT to address ongoing deficits in strength, balance, gait, and activity tolerance. Pt demonstrates variable progress with functional mobility, requiring cues for safety, proper sequencing, and efficient gait mechanics. Current session focused on TherEx, TherAct, and gait training to improve mobility, decrease fall risk, and support ADL performance. Pt continues to benefit from skilled HH PT to address these impairments and reinforce HEP and safety strategies."
+    : `${demoLine} who presents with PMH consists of ${structured.relevantHistory || "multiple comorbidities"} and is referred for HH PT to address severe generalized weakness, dependence with bed mobility and transfers, impaired functional mobility, and high caregiver burden. Pt demonstrates objective functional limitations including Dep bed mobility, Dep transfers via Hoyer lift, non-ambulatory status, and wheelchair dependence, contributing to high risk for skin breakdown, deconditioning, and caregiver injury. Pt resides in an assisted living memory care unit with 24/7 caregiver support, and the home environment and safety factors were assessed with no significant hazards identified at this time. Pt requires skilled HH PT to provide caregiver training for safe Hoyer lift transfers, positioning, pressure relief strategies, therapeutic exercise instruction, and development of an appropriate HEP. Pt POC will emphasize TherEx, TherAct, caregiver education, positioning, ROM, and pressure sore prevention to maximize comfort, safety, and quality of care. Pt requires continued skilled HH PT per POC to improve caregiver competence, prevent secondary complications, and support safe long-term management.`,
+    
     vitals: {
       temperature: "",
       temperatureTypeValue: "4", // Temporal – DO NOT OVERRIDE
@@ -1732,6 +1809,20 @@ ${text}
     if (typeof sanitizeRelevantHistory === "function") {
       parsed.relevantHistory = sanitizeRelevantHistory(parsed.relevantHistory);
     }
+    
+    if (visitLabel === "PT INITIAL PT EVALUATION") {
+      const fallback =
+      typeof buildEvalClinicalStatementFallback === "function"
+      ? buildEvalClinicalStatementFallback(structured)
+      : defaults.clinicalStatement;
+      
+      const ok =
+      typeof isValidSixSentencePtParagraph === "function"
+      ? isValidSixSentencePtParagraph(parsed.clinicalStatement)
+      : true;
+      
+      if (!ok) parsed.clinicalStatement = fallback;
+    }
   } catch (e) {
     console.log("⚠️ sanitize/enforce skipped:", e.message);
   }
@@ -1740,7 +1831,7 @@ ${text}
     visitType,
     hasExplicitPMH: structured.hasExplicitPMH,
     relevantHistory: (parsed.relevantHistory || defaults.relevantHistory || "").trim(),
-    clinicalStatement: ((structured.clinicalStatement || "").trim() || (parsed.clinicalStatement || defaults.clinicalStatement || "").trim()),
+    clinicalStatement: (parsed.clinicalStatement || defaults.clinicalStatement || "").trim(),
     vitals: {
       temperature: parsed.vitals?.temperature || defaults.vitals.temperature,
       temperatureTypeValue: parsed.vitals?.temperatureTypeValue || defaults.vitals.temperatureTypeValue,
@@ -2134,7 +2225,16 @@ async function fillPainSection(context, data) {
   
   const pain = data?.pain || {};
   
-  // If NO pain in note → tick "No Pain Reported" and exit
+  
+  // Tri-state directive from AI note text: yes|no|skip
+  const painDirective = String(data?.painDirective || data?.painDirectiveValue || data?.pain?.directive || "").trim().toLowerCase();
+  if (painDirective === "skip") {
+    console.log("⏭️ Pain: Skip detected in AI note; skipping Pain section.");
+    return;
+  }
+  if (painDirective === "yes") pain.hasPain = true;
+  if (painDirective === "no") pain.hasPain = false;
+// If NO pain in note → tick "No Pain Reported" and exit
   if (!pain.hasPain) {
     try {
       const noPainBox = await firstVisibleLocator(frame, [
@@ -2153,7 +2253,19 @@ async function fillPainSection(context, data) {
     }
     return;
   }
-  
+
+  // If pain is present, ensure any "No Pain" checkbox is OFF (some templates persist the prior state)
+  try {
+    const noPainBox = await firstVisibleLocator(frame, [
+      "#frm_PainAsmtNoPain",
+      "input[type='checkbox'][name*='NoPain']",
+      "input[type='checkbox'][id*='NoPain']",
+    ]);
+    if (noPainBox && (await noPainBox.isVisible().catch(() => false))) {
+      await noPainBox.uncheck().catch(() => {});
+    }
+  } catch {}
+
   // Normalize location: "Other, L knee" -> "L knee"
   const normalizePainLocation = (raw) => {
     let s = (raw || "").toString().trim();
@@ -2186,10 +2298,22 @@ async function fillPainSection(context, data) {
     // That looks like the textbox id; we support both anyway.
     if (locationText) {
       const siteOther = await firstVisibleLocator(frame, [
+        // Most common IDs (and the known typo variant)
         "#frm_PainAsmtSiteOtherDescPrim",
-        "#frm_PaintAsmtSiteOtherDescPrim", // <-- your provided ID (typo variant)
+        "#frm_PaintAsmtSiteOtherDescPrim",
+        // Sometimes rendered as textarea
+        "textarea#frm_PainAsmtSiteOtherDescPrim",
+        "textarea#frm_PaintAsmtSiteOtherDescPrim",
+        // Fuzzy fallbacks
         "input[id*='PainAsmtSiteOtherDescPrim']",
+        "textarea[id*='PainAsmtSiteOtherDescPrim']",
         "input[id*='PaintAsmtSiteOtherDescPrim']",
+        "textarea[id*='PaintAsmtSiteOtherDescPrim']",
+        "input[name*='SiteOtherDescPrim']",
+        "textarea[name*='SiteOtherDescPrim']",
+        // Label-driven fallback (Location Other / Primary Location Other)
+        "xpath=//label[contains(translate(normalize-space(.),'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'location other')]/following::input[1]",
+        "xpath=//label[contains(translate(normalize-space(.),'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'location other')]/following::textarea[1]",
       ]);
       
       if (siteOther) {
@@ -3127,28 +3251,28 @@ async function fillPhysicalRomStrength(context, romStrength) {
 async function clickSave(contextOrPage) {
   // Accept: Page, Frame, BrowserContext, or wrapper { page }
   let scope = contextOrPage?.page || contextOrPage;
-
+  
   // If they passed a BrowserContext, convert to a Page
   // (BrowserContext has pages(), not locator()).
   if (scope && typeof scope.pages === "function" && typeof scope.locator !== "function") {
     const pages = scope.pages();
     if (pages && pages.length) scope = pages[0];
   }
-
+  
   function normalizeScope(s) {
     if (s && typeof s.locator === "function") return s; // Page/Frame
     if (s?.page && typeof s.page.locator === "function") return s.page;
     if (s?.frame && typeof s.frame.locator === "function") return s.frame;
-
+    
     // If wrapper contains a BrowserContext
     if (s && typeof s.pages === "function") {
       const pages = s.pages();
       if (pages && pages.length && typeof pages[0].locator === "function") return pages[0];
     }
-
+    
     throw new TypeError("clickSave(): scope must be Playwright Page/Frame/BrowserContext or {page}/{frame}");
   }
-
+  
   const saveSelectors = [
     "#btnSave",
     "input#btnSave",
@@ -3156,187 +3280,56 @@ async function clickSave(contextOrPage) {
     "input[type='button'][value='Save']",
     "input[type='submit'][value='Save']",
     "xpath=//input[contains(@onclick, \"modifyForm('save'\") )]",
-    "xpath=//*[self::input or self::button][contains(translate(normalize-space(string(.)),'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'save')]",
+    "xpath=//*[self::input or self::button][contains(translate(normalize-space(.),'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'save')]",
   ];
-
-  // --- Save popup handling ----------------------------------------------------
-  function isNonFatalSavePopup(msg = "") {
-    const s = String(msg || "").trim();
-    return /(page is saving|please wait|processing|saving\.\.\.|saving)/i.test(s);
-  }
-
-  function looksFatalSavePopup(msg = "") {
-    const s = String(msg || "").trim();
-    if (!s) return false;
-    if (isNonFatalSavePopup(s)) return false;
-    // Common Kinnser/WellSky validation/lock/error copy
-    return /(required|missing|must\s+be|cannot|unable|invalid|error|locked|already|session|permission|access|not\s+allowed)/i.test(s);
-  }
-
-  async function waitForSaveToComplete(page) {
-    const start = Date.now();
-    const maxMs = 20000;
-
-    // Best-effort: wait until the "saving/please wait" text disappears
-    while (Date.now() - start < maxMs) {
-      let bodyText = "";
+  
+  async function tryClick(s, label) {
+    const pageOrFrame = normalizeScope(s);
+    
+    for (const sel of saveSelectors) {
+      const loc = pageOrFrame.locator(sel).first();
+      
+      const visible = await loc.isVisible().catch(() => false);
+      if (!visible) continue;
+      
+      await loc.scrollIntoViewIfNeeded().catch(() => {});
       try {
-        bodyText = await page.evaluate(() => (document.body && (document.body.innerText || "")) || "");
+        await loc.click({ force: true, timeout: 5000 });
       } catch {
-        // If navigation happened, just continue polling
+        // JS fallback (Page/Frame only)
+        await pageOrFrame.evaluate(() => {
+          const byId = document.querySelector("#btnSave");
+          if (byId) return byId.click();
+          
+          const byOnclick = Array.from(document.querySelectorAll("input,button"))
+          .find(el => (el.getAttribute("onclick") || "").includes("modifyForm('save')"));
+          if (byOnclick) return byOnclick.click();
+          
+          const byValue = Array.from(
+                                     document.querySelectorAll("input[type='button'],input[type='submit'],button")
+                                     ).find(el => ((el.value || el.textContent || "").trim().toLowerCase() === "save"));
+          if (byValue) return byValue.click();
+        });
       }
-      if (!/(page is saving|please wait|processing|saving)/i.test(bodyText)) return true;
-      await page.waitForTimeout(400);
+      
+      console.log(`✅ Clicked Save (${label}) using selector: ${sel}`);
+      return true;
     }
-    console.log("[PT Visit Bot] ⚠️ Save wait timeout reached; proceeding cautiously.");
+    
     return false;
   }
-
-  async function handleDomSaveModal(page) {
-    // Returns array of messages observed (may be empty).
-    const messages = [];
-    try {
-      // Grab visible dialog-ish elements and attempt to close them.
-      const candidates = page.locator(
-        "xpath=//*[(@role='dialog' or contains(@class,'modal') or contains(@class,'ui-dialog') or contains(@class,'k-window') or contains(@class,'dialog')) and not(contains(@style,'display: none'))]"
-      );
-      const count = await candidates.count().catch(() => 0);
-      if (!count) return messages;
-
-      for (let i = 0; i < Math.min(count, 3); i++) {
-        const dlg = candidates.nth(i);
-        const visible = await dlg.isVisible().catch(() => false);
-        if (!visible) continue;
-
-        const text = (await dlg.innerText().catch(() => "")) || "";
-        const trimmed = text.replace(/\s+/g, " ").trim();
-        if (trimmed) messages.push(trimmed);
-
-        // Try common buttons
-        const btns = [
-          dlg.locator("button:has-text('OK')").first(),
-          dlg.locator("button:has-text('Ok')").first(),
-          dlg.locator("button:has-text('Close')").first(),
-          dlg.locator("button:has-text('Yes')").first(),
-          dlg.locator("input[type='button'][value='OK']").first(),
-          dlg.locator("input[type='button'][value='Close']").first(),
-          dlg.locator("xpath=.//*[self::a or self::button][contains(translate(normalize-space(string(.)),'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'close')]").first(),
-        ];
-        for (const b of btns) {
-          const bv = await b.isVisible().catch(() => false);
-          if (bv) {
-            await b.click({ force: true, timeout: 2000 }).catch(() => {});
-            break;
-          }
-        }
-      }
-    } catch {
-      // ignore
-    }
-    return messages;
+  
+  // Try on main scope/page
+  if (await tryClick(scope, "scope")) return true;
+  
+  // Try all iframes (common in Kinnser/WellSky)
+  const page = normalizeScope(scope);
+  const frames = typeof page.frames === "function" ? page.frames() : [];
+  for (const fr of frames) {
+    if (await tryClick(fr, "frame")) return true;
   }
-
-  async function clickAndHandle(pageOrFrame, label) {
-    const pageLike = normalizeScope(pageOrFrame);
-    const page = typeof pageLike.page === "function" ? pageLike.page() : pageLike;
-
-    const dialogMessages = [];
-    const dialogHandler = async (d) => {
-      const msg = String(d.message() || "").trim();
-      if (msg) dialogMessages.push(msg);
-      try { await d.accept(); } catch {}
-    };
-
-    // Attach listener temporarily (only if this is a Page)
-    let attached = false;
-    try {
-      if (page && typeof page.on === "function") {
-        page.on("dialog", dialogHandler);
-        attached = true;
-      }
-    } catch {}
-
-    try {
-      // Click Save via robust selector set
-      for (const sel of saveSelectors) {
-        const loc = pageLike.locator(sel).first();
-        const visible = await loc.isVisible().catch(() => false);
-        if (!visible) continue;
-
-        await loc.scrollIntoViewIfNeeded().catch(() => {});
-        try {
-          await loc.click({ force: true, timeout: 7000 });
-        } catch {
-          // JS fallback (Page/Frame only)
-          await pageLike.evaluate(() => {
-            const byId = document.querySelector("#btnSave");
-            if (byId) return byId.click();
-
-            const byOnclick = Array.from(document.querySelectorAll("input,button"))
-              .find(el => (el.getAttribute("onclick") || "").includes("modifyForm('save')"));
-            if (byOnclick) return byOnclick.click();
-
-            const byText = Array.from(document.querySelectorAll("input,button,a"))
-              .find(el => /save/i.test((el.value || el.innerText || "").trim()));
-            if (byText) return byText.click();
-          }).catch(() => {});
-        }
-
-        console.log(`✅ Clicked Save (${label}) using selector: ${sel}`);
-
-        // DOM modal handling (non-blocking)
-        const domMsgs = await handleDomSaveModal(page).catch(() => []);
-        for (const m of domMsgs) dialogMessages.push(m);
-
-        // If we saw a "Page is saving..." modal, wait it out.
-        await waitForSaveToComplete(page).catch(() => {});
-
-        // If any popup messages exist, decide fatal vs non-fatal
-        if (dialogMessages.length) {
-          const combined = dialogMessages.join(" | ").replace(/\s+/g, " ").trim();
-
-          // If there is any message that looks fatal, fail with that.
-          const fatalMsg = dialogMessages.find(looksFatalSavePopup);
-          if (fatalMsg) {
-            throw new Error(`SAVE ERROR POPUP: ${fatalMsg}`);
-          }
-
-          // If only non-fatal messages (e.g., Page is saving...), log + continue.
-          if (combined) {
-            console.log(`[PT Visit Bot] ⚠️ Save popup (non-fatal): ${combined}`);
-          }
-        }
-
-        return true;
-      }
-
-      console.log("⚠️ Save button not found — skipping save.");
-      return false;
-    } finally {
-      // Remove listener
-      if (attached) {
-        try { page.off("dialog", dialogHandler); } catch {}
-      }
-    }
-  }
-
-  // Try save click on the passed scope (Page/Frame)
-  const primary = await clickAndHandle(scope, "page");
-  if (primary) return true;
-
-  // If we have a template scope / iframe, try it too
-  try {
-    const frame = (typeof findTemplateScope === "function")
-      ? await findTemplateScope(scope?.page || scope)
-      : null;
-    if (frame) {
-      const inFrame = await clickAndHandle(frame, "iframe");
-      if (inFrame) return true;
-    }
-  } catch {
-    // ignore
-  }
-
+  
+  console.log("⚠️ Save button not found — skipping save.");
   return false;
 }
 
@@ -3538,15 +3531,20 @@ async function fillVisitSummaryFromCue(context, aiNotes) {
     console.log("[PT Visit Bot] No AI notes provided; skipping visit summary.");
     return;
   }
-
+  
+  if (!process.env.OPENAI_API_KEY) {
+    console.log("[PT Visit Bot] OPENAI_API_KEY missing; cannot generate visit summary.");
+    return;
+  }
+  
   const page = context?.page || context;
-
+  
   const frame = await findTemplateScope(page);
   if (!frame) {
     console.log("[PT Visit Bot] Could not find PT Visit frame for summary.");
     return;
   }
-
+  
   const summarySelectors = [
     "#frm_visitSummary",
     "#frm_EASI1",
@@ -3559,29 +3557,31 @@ async function fillVisitSummaryFromCue(context, aiNotes) {
     "xpath=//*[contains(normalize-space(.),'Summary of Patient Overall Performance on this Visit')]/following::textarea[1]",
     "xpath=//*[contains(normalize-space(.),'Summary of Patient Overall Performance')]/following::textarea[1]",
   ];
-
+  
   const summaryBox = await firstVisibleLocator(frame, summarySelectors);
   if (!summaryBox) {
     console.log("[PT Visit Bot] Summary textarea not found (tried multiple selectors).");
     return;
   }
-
-  // WORD-FOR-WORD TRANSFER (no AI generation):
-  // If the AI note box includes an Assessment Summary / Clinical Statement / Evaluation Summary block,
-  // copy it verbatim into the Visit Summary/Assessment box. Otherwise, do nothing (do not generate).
-  const structured = parseStructuredFromFreeText(aiNotes || "");
-  const verbatim = String(structured?.clinicalStatement || "").trim();
-
-  if (!verbatim) {
-    console.log("[PT Visit Bot] No labeled Assessment Summary/Clinical Statement found in AI notes; skipping visit summary (no generation).");
+  
+  const hasCue = needsVisitSummary(aiNotes);
+  console.log(
+              hasCue
+              ? "[PT Visit Bot] Assessment/summary cue detected in AI notes; generating visit summary."
+              : "[PT Visit Bot] No explicit assessment/summary keyword; generating generic HH PT visit summary from AI notes."
+              );
+  
+  console.log("[PT Visit Bot] Generating AI visit summary for PT Visit...");
+  const text = await generateVisitSummaryText(aiNotes);
+  if (!text) {
+    console.log("[PT Visit Bot] AI summary generation returned empty or errored; skipping.");
     return;
   }
-
+  
   await summaryBox.fill("");
-  await summaryBox.type(verbatim, { delay: 10 });
-  console.log("[PT Visit Bot] Filled visit summary from AI note box (verbatim; no generation).");
+  await summaryBox.type(text, { delay: 10 });
+  console.log("[PT Visit Bot] Filled visit summary.");
 }
-
 
 
 /* =========================
