@@ -826,52 +826,55 @@ async function postSaveAudit(targetOrWrapper, expected = {}) {
   // Accept: Page/Frame or wrapper { page, context }
   const page = targetOrWrapper?.page || targetOrWrapper;
   const context =
-  targetOrWrapper?.context ||
-  (page && typeof page.context === "function" ? page.context() : null);
-  
+    targetOrWrapper?.context ||
+    (page && typeof page.context === "function" ? page.context() : null);
+
   const issues = [];
-  
-  async function snapshotOnce(tag) {
-    const scope = await findTemplateScope(page, { timeoutMs: 15000 }).catch(() => null);
+
+  let reopenAttempted = false;
+  let reopenSkippedNonFatal = false;
+  let reloadAttempted = false;
+
+  async function snapshotOnce(tag, targetPage = page) {
+    const scope = await findTemplateScope(targetPage, { timeoutMs: 15000 }).catch(() => null);
     if (!scope) {
       issues.push(`${tag}: Could not resolve active template iframe/scope`);
       return null;
     }
-    
+
     const snap = {};
     snap.visitDate = await safeGetValue(scope, "#frm_visitdate");
     snap.timeIn = await safeGetValue(scope, "#frm_timein");
     snap.timeOut = await safeGetValue(scope, "#frm_timeout");
     // optional but useful
     snap.medDx = await safeGetValue(scope, "#frm_MedDiagText");
-    
     return snap;
   }
-  
+
   function validateSnap(tag, snap) {
     if (!snap) return;
-    
+
     if (expected.visitDate) {
       const want = normalizeDateToMMDDYYYY(expected.visitDate);
       const got = normalizeDateToMMDDYYYY(snap.visitDate);
       if (!got) issues.push(`${tag}: Visit date is blank after save`);
       else if (want && got !== want) issues.push(`${tag}: Visit date mismatch (want ${want}, got ${got})`);
     }
-    
+
     if (expected.timeIn) {
       const want = normalizeTimeToHHMM(expected.timeIn);
       const got = normalizeTimeToHHMM(snap.timeIn);
       if (!got) issues.push(`${tag}: Time In is blank after save`);
       else if (want && got !== want) issues.push(`${tag}: Time In mismatch (want ${want}, got ${got})`);
     }
-    
+
     if (expected.timeOut) {
       const want = normalizeTimeToHHMM(expected.timeOut);
       const got = normalizeTimeToHHMM(snap.timeOut);
       if (!got) issues.push(`${tag}: Time Out is blank after save`);
       else if (want && got !== want) issues.push(`${tag}: Time Out mismatch (want ${want}, got ${got})`);
     }
-    
+
     if (expected.medDx) {
       const want = String(expected.medDx || "").trim();
       const got = String(snap.medDx || "").trim();
@@ -879,59 +882,83 @@ async function postSaveAudit(targetOrWrapper, expected = {}) {
       else if (want && got && got !== want) issues.push(`${tag}: Med Dx mismatch`);
     }
   }
-  
-  // Phase 1: immediate DOM snapshot (can still be false-positive, but gives diagnostics)
-  const snap1 = await snapshotOnce("Immediate");
+
+  // Phase 1: immediate DOM snapshot (diagnostic; can be false-positive)
+  const snap1 = await snapshotOnce("Immediate", page);
   validateSnap("Immediate", snap1);
-  
-  // Phase 2: hard persistence check by REOPENING the same note from Hotbox.
-  // Reason: Kinnser can keep in-memory DOM values even when Save did not persist.
+
+  // Phase 1.5: reload the SAME note URL and re-snapshot.
+  // This is the most reliable persistence check without depending on HotBox layout.
+  // If Save did not persist, reload will typically wipe the fields back to previous server state.
+  if (expected.visitDate || expected.timeIn || expected.timeOut || expected.medDx) {
+    try {
+      reloadAttempted = true;
+
+      // Best-effort wait for save XHR/navigation
+      await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
+      const urlBefore = page.url();
+
+      // Reload current note page
+      await page.reload({ waitUntil: "domcontentloaded", timeout: 45000 }).catch(async () => {
+        // fallback: direct goto same URL if reload fails
+        if (urlBefore) await page.goto(urlBefore, { waitUntil: "domcontentloaded", timeout: 45000 }).catch(() => {});
+      });
+
+      const snapReload = await snapshotOnce("Reload", page);
+      validateSnap("Reload", snapReload);
+    } catch (e) {
+      issues.push(`Reload: Exception while reloading note for persistence check: ${String(e?.message || e)}`);
+    }
+  } else {
+    log("[PT Visit Bot] ℹ️ Post-save reload persistence check skipped: no expected key fields provided.");
+  }
+
+  // Phase 2: optional HotBox reopen check (strongest, but can fail due to layout/session).
+  // Keep it NON-FATAL by default; strict mode can re-enable fatal behavior.
   if (context && expected.patientName && expected.visitDate) {
+    reopenAttempted = true;
     try {
       const taskType = expected.taskType || "PT Visit";
-      
-      // Go back to HotBox, then re-open the same row again.
-      // This forces us to read server-persisted values, not the current DOM state.
+
       await navigateToHotBoxRobust(page);
       await setHotboxShow100(page);
-      
+
       await openHotboxPatientTask(page, expected.patientName, expected.visitDate, taskType);
-      
+
       const reopenedPage = getActivePageFromContext(context) || page;
-      
-      // Ensure we are on the reopened visit edit form (scope resolves)
-      const scope2 = await findTemplateScope(reopenedPage, { timeoutMs: 20000 }).catch(() => null);
-      if (!scope2) {
-        issues.push("Reopen: Could not resolve template iframe/scope after reopening the note");
-      } else {
-        const snap2 = {};
-        snap2.visitDate = await safeGetValue(scope2, "#frm_visitdate");
-        snap2.timeIn = await safeGetValue(scope2, "#frm_timein");
-        snap2.timeOut = await safeGetValue(scope2, "#frm_timeout");
-        snap2.medDx = await safeGetValue(scope2, "#frm_MedDiagText");
-        // Validate re-opened snapshot strictly (this is the source of truth)
-        validateSnap("Reopen", snap2);
-      }
+
+      const snap2 = await snapshotOnce("Reopen", reopenedPage);
+      validateSnap("Reopen", snap2);
     } catch (e) {
       const strictAudit = /^(1|true|yes)$/i.test(String(process.env.POST_SAVE_AUDIT_STRICT || "").trim());
       const msg = `Reopen: Exception while reopening note for persistence check: ${String(e?.message || e)}`;
       if (strictAudit) {
         issues.push(msg);
       } else {
+        reopenSkippedNonFatal = true;
         log(`[PT Visit Bot] ⚠️ Post-save reopen audit skipped (non-fatal): ${msg}`);
       }
     }
   } else {
-    // If we don't have enough info to reopen, keep the immediate checks only.
-    log("[PT Visit Bot] ℹ️ Post-save persistence check (reopen) skipped: missing context/patientName/visitDate");
+    log("[PT Visit Bot] ℹ️ Post-save reopen persistence check skipped: missing context/patientName/visitDate");
   }
-  
+
   if (issues.length) {
     throw new Error(`POST-SAVE AUDIT FAIL: ${issues.join("; ")}`);
   }
-  
-  log("✅ Post-save audit passed (key fields persisted after reopening the note).");
+
+  // Accurate success messaging (avoid misleading “persisted after reopening” when we didn't reopen)
+  if (reopenAttempted && !reopenSkippedNonFatal) {
+    log("✅ Post-save audit passed (reload + reopen checks succeeded).");
+  } else if (reloadAttempted && reopenSkippedNonFatal) {
+    log("✅ Post-save audit passed (reload persistence check succeeded; reopen skipped non-fatal).");
+  } else if (reloadAttempted) {
+    log("✅ Post-save audit passed (reload persistence check succeeded).");
+  } else {
+    log("✅ Post-save audit passed (immediate checks only).");
+  }
 }
+
 
 
 async function selectTemplateGW2(context) {
