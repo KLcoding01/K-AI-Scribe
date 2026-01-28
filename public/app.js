@@ -1,3 +1,8 @@
+// app.js (FULL FILE) — adds dictation-based Subjective capture + post-convert patch
+// - If convert-dictation returns a generic Subjective, we overwrite Subjective with verbatim dictation-derived subjective.
+// - No server changes required.
+
+'use strict';
 
 // -------------------------
 // Sanitize AI Notes
@@ -10,7 +15,7 @@ function sanitizeNotes(text) {
   // Normalize CRLF -> LF (keeps all spacing/indentation intact)
   t = t.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
 
-  // Replace non‑breaking spaces with regular spaces (optional but helps consistency)
+  // Replace non-breaking spaces with regular spaces (optional but helps consistency)
   t = t.replace(/\u00A0/g, " ");
 
   // Do NOT collapse spaces/tabs, and do NOT strip indentation after newlines.
@@ -19,26 +24,108 @@ function sanitizeNotes(text) {
   return t;
 }
 
+// -------------------------
+// Subjective capture (dictation -> Subjective block, verbatim)
+// -------------------------
+
+function looksGenericSubjective(line = "") {
+  const t = String(line || "").trim().toLowerCase();
+  if (!t) return true;
+
+  // Common generic model outputs we want to override
+  const genericPhrases = [
+    "no new complaints",
+    "agrees to pt",
+    "agrees to pt tx",
+    "agrees to therapy",
+    "tolerated tx well",
+    "no adverse reactions",
+  ];
+
+  return genericPhrases.some(p => t.includes(p));
+}
+
+// Extract a good Subjective sentence(s) from dictation, preferring caregiver/family report.
+function extractSubjectiveFromDictation(dictationRaw = "") {
+  const d = String(dictationRaw || "").trim();
+  if (!d) return "";
+
+  // Normalize whitespace a bit (do not destroy meaning)
+  const norm = d.replace(/\s+/g, " ").trim();
+
+  // Prefer explicit caregiver/family presence/report
+  // Examples:
+  // "Pt daughter in law present throughout PT tx. Daughter in law reports pt does some HEP at home..."
+  const caregiverMatch = norm.match(
+    /(pt\s+(?:daughter|son|wife|husband|caregiver|cg|family|daughter-in-law|son-in-law)[^.]*(?:present|reports|states)[^.]*\.[^.]*\.)/i
+  );
+  if (caregiverMatch && caregiverMatch[1]) return caregiverMatch[1].trim();
+
+  // Next best: any "reports/states/denies/complains" sentence
+  const reportMatch = norm.match(
+    /((?:pt|caregiver|family)[^.]*(?:reports|states|denies|complains|notes|indicates)[^.]*\.)/i
+  );
+  if (reportMatch && reportMatch[1]) return reportMatch[1].trim();
+
+  // Fallback: first 1–2 sentences from dictation
+  const sentences = norm.split(/(?<=[.!?])\s+/).filter(Boolean);
+  if (sentences.length >= 2) return `${sentences[0]} ${sentences[1]}`.trim();
+  return (sentences[0] || "").trim();
+}
+
+// Replace Subjective block content inside templateText.
+// Expected format in your templates: "Subjective:" on its own line then content until next heading.
+function patchSubjectiveInTemplate(templateTextRaw = "", subjectiveTextRaw = "") {
+  const templateText = String(templateTextRaw || "");
+  const subj = String(subjectiveTextRaw || "").trim();
+  if (!templateText || !subj) return templateText;
+
+  // Capture existing Subjective block
+  const re = /(^\s*Subjective\s*:\s*\n)([\s\S]*?)(\n\s*(?:Vital Signs|Pain Assessment|Functional Status|Response to Treatment|Exercises:|Teaching Tools|Assessment:|Goals|Plan)\s*[:\n])/im;
+
+  const m = templateText.match(re);
+  if (!m) {
+    // If template has "Subjective:" inline (some eval templates do), do an alternate replace
+    const reInline = /(^\s*Subjective\s*:\s*)(.*)$/im;
+    if (reInline.test(templateText)) {
+      return templateText.replace(reInline, `$1${subj}`);
+    }
+    return templateText;
+  }
+
+  const existingBlock = (m[2] || "").trim();
+  const firstLine = existingBlock.split("\n").map(s => s.trim()).filter(Boolean)[0] || "";
+
+  // Only override if the current Subjective looks generic/placeholder
+  // (If user already edited the Subjective, we leave it alone.)
+  if (existingBlock && !looksGenericSubjective(firstLine)) {
+    return templateText;
+  }
+
+  const replacement = `${m[1]}${subj}\n${m[3]}`;
+  return templateText.replace(re, replacement);
+}
+
 (() => {
   const el = (id) => document.getElementById(id);
-  
+
   const apiBase = window.location.origin;
   el("apiBasePill").textContent = `API: ${apiBase}`;
-  
+
   let pollTimer = null;
   let activeJobId = null;
-  
+
   function setBadge(text, kind = "") {
     const b = el("jobBadge");
     b.textContent = text;
     b.className = "badge" + (kind ? " " + kind : "");
   }
-  
+
   function setStatus(text) {
     el("statusBox").textContent = text;
     el("statusBox").scrollTop = el("statusBox").scrollHeight;
   }
-  
+
   async function httpJson(url, options = {}) {
     const res = await fetch(url, {
       ...options,
@@ -55,7 +142,7 @@ function sanitizeNotes(text) {
     }
     return body;
   }
-  
+
   async function testHealth() {
     try {
       setBadge("Checking…", "warn");
@@ -68,22 +155,22 @@ function sanitizeNotes(text) {
       setStatus(`Health check failed:\n${e?.message || e}`);
     }
   }
-  
+
   function stopPolling() {
     if (pollTimer) clearInterval(pollTimer);
     pollTimer = null;
   }
-  
+
   async function pollJob(jobId) {
     stopPolling();
     pollTimer = setInterval(async () => {
       try {
         const job = await httpJson(`/job-status/${encodeURIComponent(jobId)}`);
-        
+
         if (job.status === "completed") setBadge("Completed", "ok");
         else if (job.status === "failed") setBadge("Failed", "bad");
         else setBadge(job.status || "running", "warn");
-        
+
         const summaryLines = [
           `jobId: ${job.jobId}`,
           `status: ${job.status}`,
@@ -92,10 +179,10 @@ function sanitizeNotes(text) {
           `updatedAt: ${job.updatedAt ? new Date(job.updatedAt).toISOString() : ""}`,
           `finishedAt: ${job.finishedAt ? new Date(job.finishedAt).toISOString() : ""}`,
         ];
-        
+
         const logText = Array.isArray(job.logs) ? job.logs.join("\n") : (job.log || "");
         setStatus(summaryLines.join("\n") + (logText ? `\n\n${logText}` : ""));
-        
+
         if (job.status === "completed" || job.status === "failed") {
           stopPolling();
         }
@@ -106,7 +193,7 @@ function sanitizeNotes(text) {
       }
     }, 1200);
   }
-  
+
   function clearForm() {
     el("patientName").value = "";
     el("visitDate").value = "";
@@ -115,13 +202,13 @@ function sanitizeNotes(text) {
     el("aiNotes").value = sanitizeNotes("");
     if (el("dictationNotes")) el("dictationNotes").value = "";
     if (el("imageFile")) el("imageFile").value = "";
-    
+
     setBadge("Idle");
     setStatus("No job yet.");
     activeJobId = null;
     stopPolling();
   }
-  
+
   async function runAutomation() {
     const kinnserUsername = el("kinnserUsername").value.trim();
     const kinnserPassword = el("kinnserPassword").value;
@@ -131,24 +218,24 @@ function sanitizeNotes(text) {
     const timeIn = el("timeIn").value.trim();
     const timeOut = el("timeOut").value.trim();
     const aiNotes = el("aiNotes").value || "";
-    
+
     if (!patientName || !visitDate || !taskType) {
       setBadge("Missing fields", "bad");
       setStatus("Please fill Patient name, Visit date, and Task type.");
       return;
     }
-    
+
     if (!kinnserUsername || !kinnserPassword) {
       setBadge("Missing login", "bad");
       setStatus("Please enter Kinnser username and password.");
       return;
     }
-    
+
     try {
       el("btnRun").disabled = true;
       setBadge("Starting…", "warn");
       setStatus("Submitting job…");
-      
+
       const body = {
         kinnserUsername,
         kinnserPassword,
@@ -159,12 +246,12 @@ function sanitizeNotes(text) {
         timeOut,
         aiNotes: aiNotes.replace(/\r\n/g, "\n"),
       };
-      
+
       const resp = await httpJson("/run-automation", {
         method: "POST",
         body: JSON.stringify(body),
       });
-      
+
       activeJobId = resp.jobId;
       setBadge("Running", "warn");
       setStatus(`Job started.\njobId: ${activeJobId}`);
@@ -176,7 +263,7 @@ function sanitizeNotes(text) {
       el("btnRun").disabled = false;
     }
   }
-  
+
   async function convertDictation() {
     const dictation = (el("dictationNotes")?.value || "").trim();
     if (!dictation) {
@@ -184,27 +271,32 @@ function sanitizeNotes(text) {
       setStatus("Convert failed:\nPlease enter dictation first.");
       return;
     }
-    
+
     try {
       el("btnConvert").disabled = true;
       setBadge("Converting…", "warn");
       setStatus("Converting dictation → selected template…");
-      
+
       const taskType = (el("taskType")?.value || "").trim();
       const templateKey = (el("templateKey")?.value || "").trim();
-      
+
       // Choose template: dropdown first, else based on task type
       let templateText = "";
       if (templateKey && TEMPLATES[templateKey]) templateText = TEMPLATES[templateKey];
       else if ((taskType || "").toLowerCase().includes("evaluation") && TEMPLATES.pt_eval_default) templateText = TEMPLATES.pt_eval_default;
       else templateText = TEMPLATES.pt_visit_default || "";
-      
+
       const resp = await httpJson("/convert-dictation", {
         method: "POST",
         body: JSON.stringify({ dictation, taskType, templateText }),
       });
-      
-      el("aiNotes").value = sanitizeNotes(resp.templateText || "");
+
+      // Apply Subjective patch (verbatim from dictation) if Subjective in AI output is generic/placeholder
+      let outText = String(resp.templateText || "");
+      const subjFromDictation = extractSubjectiveFromDictation(dictation);
+      outText = patchSubjectiveInTemplate(outText, subjFromDictation);
+
+      el("aiNotes").value = sanitizeNotes(outText);
       setBadge("Ready", "ok");
       setStatus("Conversion completed. Review AI Notes, then click Run Automation.");
     } catch (e) {
@@ -214,7 +306,7 @@ function sanitizeNotes(text) {
       el("btnConvert").disabled = false;
     }
   }
-  
+
   function fileToDataUrl(file) {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
@@ -223,7 +315,7 @@ function sanitizeNotes(text) {
       reader.readAsDataURL(file);
     });
   }
-  
+
   async function convertImage() {
     const file = el("imageFile")?.files?.[0];
     if (!file) {
@@ -231,27 +323,27 @@ function sanitizeNotes(text) {
       setStatus("Image convert failed:\nPlease choose an image file first.");
       return;
     }
-    
+
     try {
       el("btnConvertImage").disabled = true;
       setBadge("Converting…", "warn");
       setStatus("Converting image → selected template…");
-      
+
       const imageDataUrl = await fileToDataUrl(file);
-      
+
       const taskType = (el("taskType")?.value || "").trim();
       const templateKey = (el("templateKey")?.value || "").trim();
-      
+
       let templateText = "";
       if (templateKey && TEMPLATES[templateKey]) templateText = TEMPLATES[templateKey];
       else if ((taskType || "").toLowerCase().includes("evaluation") && TEMPLATES.pt_eval_default) templateText = TEMPLATES.pt_eval_default;
       else templateText = TEMPLATES.pt_visit_default || "";
-      
+
       const resp = await httpJson("/convert-image", {
         method: "POST",
         body: JSON.stringify({ imageDataUrl, taskType, templateText }),
       });
-      
+
       el("aiNotes").value = sanitizeNotes(resp.templateText || "");
       setBadge("Ready", "ok");
       setStatus("Image conversion completed. Review AI Notes, then click Run Automation.");
@@ -262,7 +354,7 @@ function sanitizeNotes(text) {
       el("btnConvertImage").disabled = false;
     }
   }
-  
+
   // ------------------------------
   // Templates (client-side)
   // ------------------------------
@@ -545,7 +637,7 @@ Plan
 Frequency:
 Effective Date: `
   };
-  
+
   function initTemplates() {
     const dd = el("templateKey");
     if (!dd) return;
@@ -564,7 +656,7 @@ Effective Date: `
       setStatus(`Loaded template: ${key}`);
     });
   }
-  
+
   // ------------------------------
   // Remember Kinnser credentials (localStorage)
   // ------------------------------
@@ -577,7 +669,7 @@ Effective Date: `
       if (el("rememberCreds") && (u || p)) el("rememberCreds").checked = true;
     } catch {}
   }
-  
+
   function saveCreds() {
     try {
       if (!el("rememberCreds") || !el("rememberCreds").checked) {
@@ -594,7 +686,7 @@ Effective Date: `
       setStatus("Failed to save credentials.");
     }
   }
-  
+
   function clearCreds() {
     try {
       localStorage.removeItem("ks_kinnser_user");
@@ -604,19 +696,19 @@ Effective Date: `
       setStatus("Cleared saved Kinnser credentials.");
     } catch {}
   }
-  
+
   initTemplates();
   loadSavedCreds();
   if (el("btnSaveCreds")) el("btnSaveCreds").addEventListener("click", saveCreds);
   if (el("btnClearCreds")) el("btnClearCreds").addEventListener("click", clearCreds);
-  
+
   el("btnHealth").addEventListener("click", testHealth);
   el("btnRun").addEventListener("click", runAutomation);
   el("btnClear").addEventListener("click", clearForm);
-  
+
   if (el("btnConvert")) el("btnConvert").addEventListener("click", convertDictation);
   if (el("btnConvertImage")) el("btnConvertImage").addEventListener("click", convertImage);
-  
+
   el("kinnserPassword").addEventListener("keydown", (e) => {
     if (e.key === "Enter") runAutomation();
   });
