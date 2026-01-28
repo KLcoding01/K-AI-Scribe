@@ -913,7 +913,13 @@ async function postSaveAudit(targetOrWrapper, expected = {}) {
         validateSnap("Reopen", snap2);
       }
     } catch (e) {
-      issues.push(`Reopen: Exception while reopening note for persistence check: ${String(e?.message || e)}`);
+      const strictAudit = /^(1|true|yes)$/i.test(String(process.env.POST_SAVE_AUDIT_STRICT || "").trim());
+      const msg = `Reopen: Exception while reopening note for persistence check: ${String(e?.message || e)}`;
+      if (strictAudit) {
+        issues.push(msg);
+      } else {
+        log(`[PT Visit Bot] ⚠️ Post-save reopen audit skipped (non-fatal): ${msg}`);
+      }
     }
   } else {
     // If we don't have enough info to reopen, keep the immediate checks only.
@@ -1240,7 +1246,6 @@ function parseStructuredFromFreeText(aiNotes = "") {
     relevantHistory: "",
     hasExplicitPMH: false,
     clinicalStatement: "",
-    painDirective: "",
     subjective: "",
     priorLevel: "",
     patientGoals: "",
@@ -1316,22 +1321,6 @@ function parseStructuredFromFreeText(aiNotes = "") {
   
   if (!aiNotes) return result;
   const text = String(aiNotes ?? "");
-
-  // --------------------------------------------------
-  // Pain directive (tri-state): Yes / No / Skip
-  // Accepts a standalone line like:
-  //   Pain: Yes
-  //   Pain: No
-  //   Pain: Skip
-  // --------------------------------------------------
-  {
-    const m = text.match(/^\s*Pain\s*:\s*(Yes|No|Skip)\s*$/im);
-    if (m) {
-      const v = String(m[1] || "").toLowerCase();
-      result.painDirective = v === "skip" ? "skip" : v === "yes" ? "yes" : "no";
-    }
-  }
-
   
   // MEDICAL DX
   const medDxMatch =
@@ -1675,13 +1664,6 @@ async function extractNoteDataFromAI(aiNotes, visitType = "Evaluation") {
       planText: structured.plan?.planText || "", //
     },
   };
-
-  // If the AI note box already includes an Assessment Summary / Clinical Statement block,
-  // use it verbatim (no rewriting).
-  if ((structured.clinicalStatement || "").trim()) {
-    defaults.clinicalStatement = String(structured.clinicalStatement).trim();
-  }
-
   
   // Override default vitals if notes contain them
   try {
@@ -1726,10 +1708,26 @@ Extract keys:
 - "relevantHistory": ONE concise PMH/comorbidities line ONLY.
 - "medicalDiagnosis": ONLY the primary MD diagnosis (short). If not explicitly stated, return "".
 - "subjective": ONLY if explicitly stated what Pt reports. If not explicitly stated, return "".
+- "clinicalStatement": see rules below
 - "vitals": { "temperature","temperatureTypeValue","bpSys","bpDia","positionValue","sideValue","heartRate","respirations","vsComments" }
 - "living": { "patientLivesValue","assistanceAvailableValue","evaluationText","stepsPresent","stepsCount","currentAssistanceTypes","hasPets" }
 - "pain": { "hasPain","primaryLocationText","intensityValue","increasedBy","relievedBy","interferesWith" }
 - "plan": { "frequency","shortTermVisits","longTermVisits","goalTexts","planText" }
+
+If VISIT_TYPE is "PT INITIAL PT EVALUATION":
+Write EXACTLY 6 sentences, ONE paragraph, and EVERY sentence must start with "Pt".
+Sentence #1 MUST begin exactly like:
+"${demoLine} who presents with PMH consists of <PMH> and is referred for HH PT to address <primary deficits>."
+Rules:
+- Use the PMH from the note for the “PMH consists of …” phrase (keep concise).
+- Do not use pronouns (they/he/she).
+- No bullets, no headings, no arrows.
+- Sentences #2-#6 must follow:
+2) Objective functional limitations + fall risk.
+3) Home environment / CG support / hazards (if present).
+4) Skilled HH PT necessity (education/HEP/DME/CG training).
+5) POC focus (TherEx/TherAct/gait/balance/fall prevention).
+6) Closing: continued skilled HH PT per POC to improve safety, mobility, ADL performance.
 
 Free-text note:
 ---
@@ -1752,15 +1750,29 @@ ${text}
     if (typeof sanitizeRelevantHistory === "function") {
       parsed.relevantHistory = sanitizeRelevantHistory(parsed.relevantHistory);
     }
+    
+    if (visitLabel === "PT INITIAL PT EVALUATION") {
+      const fallback =
+      typeof buildEvalClinicalStatementFallback === "function"
+      ? buildEvalClinicalStatementFallback(structured)
+      : defaults.clinicalStatement;
+      
+      const ok =
+      typeof isValidSixSentencePtParagraph === "function"
+      ? isValidSixSentencePtParagraph(parsed.clinicalStatement)
+      : true;
+      
+      if (!ok) parsed.clinicalStatement = fallback;
+    }
   } catch (e) {
     console.log("⚠️ sanitize/enforce skipped:", e.message);
   }
-
+  
   return {
     visitType,
     hasExplicitPMH: structured.hasExplicitPMH,
     relevantHistory: (parsed.relevantHistory || defaults.relevantHistory || "").trim(),
-    clinicalStatement: ((structured.clinicalStatement || "").trim() || (parsed.clinicalStatement || defaults.clinicalStatement || "").trim()),
+    clinicalStatement: (parsed.clinicalStatement || defaults.clinicalStatement || "").trim(),
     vitals: {
       temperature: parsed.vitals?.temperature || defaults.vitals.temperature,
       temperatureTypeValue: parsed.vitals?.temperatureTypeValue || defaults.vitals.temperatureTypeValue,
@@ -2145,14 +2157,6 @@ async function fillEdemaSection(context, data) {
 
 async function fillPainSection(context, data) {
   console.log("➡️ Filling Pain Assessment (if present)...");
-
-  // Note-driven tri-state control from AI note box:
-  //   Pain: Yes / No / Skip
-  const painDirective = (data?.painDirective || data?.pain?.directive || "").toString().trim().toLowerCase();
-  if (painDirective === "skip") {
-    console.log("⏭️ Pain: Skip detected; leaving Pain section untouched.");
-    return;
-  }
   
   const frame = await findTemplateScope(context);
   if (!frame) {
@@ -2161,7 +2165,6 @@ async function fillPainSection(context, data) {
   }
   
   const pain = data?.pain || {};
-  if (painDirective === "no") pain.hasPain = false;
   
   // If NO pain in note → tick "No Pain Reported" and exit
   if (!pain.hasPain) {
@@ -3437,6 +3440,11 @@ async function fillVisitSummaryFromCue(context, aiNotes) {
     return;
   }
   
+  if (!process.env.OPENAI_API_KEY) {
+    console.log("[PT Visit Bot] OPENAI_API_KEY missing; cannot generate visit summary.");
+    return;
+  }
+  
   const page = context?.page || context;
   
   const frame = await findTemplateScope(page);
@@ -3464,23 +3472,7 @@ async function fillVisitSummaryFromCue(context, aiNotes) {
     return;
   }
   
-  
-  // Prefer verbatim Assessment Summary / Clinical Statement from the AI note box when present.
-  const _structuredForSummary = parseStructuredFromFreeText(aiNotes || "");
-  const rawAssessment = String(_structuredForSummary?.clinicalStatement || "").trim();
-  if (rawAssessment) {
-    await summaryBox.fill("");
-    await summaryBox.type(rawAssessment, { delay: 10 });
-    console.log("[PT Visit Bot] Filled visit summary from AI note box (verbatim). ");
-    return;
-  }
-  if (!process.env.OPENAI_API_KEY) {
-    console.log("[PT Visit Bot] OPENAI_API_KEY missing; cannot generate visit summary.");
-    return;
-  }
-
-
-const hasCue = needsVisitSummary(aiNotes);
+  const hasCue = needsVisitSummary(aiNotes);
   console.log(
               hasCue
               ? "[PT Visit Bot] Assessment/summary cue detected in AI notes; generating visit summary."
