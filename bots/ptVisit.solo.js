@@ -81,36 +81,85 @@ async function firstVisibleLocator(scope, selectors) {
   return null;
 }
 
+async function safeSetValue(locator, value, label = "field", timeoutMs = 60000) {
+  const v = String(value ?? "");
+  if (!locator) throw new Error(`safeSetValue: locator missing for ${label}`);
+  
+  await locator.scrollIntoViewIfNeeded().catch(() => {});
+  await locator.click({ timeout: 5000 }).catch(() => {});
+  
+  // Attempt fill (fastest)
+  try {
+    await locator.fill("", { timeout: timeoutMs }).catch(() => {});
+    await locator.fill(v, { timeout: timeoutMs });
+  } catch (e) {
+    // Fallback: direct JS assignment (more reliable in some WellSky fields)
+    await locator.evaluate((el, val) => {
+      el.value = val;
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+      el.dispatchEvent(new Event("change", { bubbles: true }));
+      el.dispatchEvent(new Event("blur", { bubbles: true }));
+    }, v);
+  }
+  
+  let persisted = (await locator.inputValue().catch(() => "")).trim();
+  if (v.trim() && !persisted) {
+    throw new Error(`ASSERT FAIL: ${label} did not persist after set`);
+  }
+  
+  // Detect truncation (common in long PMH fields). Retry via JS and warn if still truncated.
+  if (v.trim() && persisted && persisted !== v.trim()) {
+    await locator.evaluate((el, val) => {
+      el.value = val;
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+      el.dispatchEvent(new Event("change", { bubbles: true }));
+      el.dispatchEvent(new Event("blur", { bubbles: true }));
+    }, v);
+    
+    const persisted2 = (await locator.inputValue().catch(() => "")).trim();
+    if (persisted2 && persisted2 !== v.trim()) {
+      log(`⚠️ ${label} appears truncated: wanted ${v.trim().length} chars, got ${persisted2.length} chars`);
+    }
+    persisted = persisted2 || persisted;
+  }
+  
+  return persisted;
+}
+
+async function safeFillLargeText(locator, value, label = "field", timeoutMs = 60000) {
+  return safeSetValue(locator, String(value ?? ""), label, timeoutMs);
+}
+
+
 async function verifySetText(scope, selector, value, label) {
   const v = String(value ?? "").trim();
   if (!v) return true;
-
+  
   const loc = scope.locator(selector).first();
   const visible = await loc.isVisible().catch(() => false);
   if (!visible) return false;
-
+  
   await loc.scrollIntoViewIfNeeded().catch(() => {});
-  // Focus is important in Kinnser because onfocus may mutate the 'name' attribute
-  await loc.click({ timeout: 3000, force: true }).catch(() => {});
-
-  // Prefer direct value-set + events (more reliable than keyboard typing in Kinnser)
+  await loc.click({ timeout: 1500 }).catch(() => {});
+  await loc.fill("").catch(() => {});
+  await loc.type(v, { delay: 8 }).catch(async () => {
+    await loc.fill(v).catch(() => {});
+  });
+  
+  // Force-set + events
   await loc.evaluate((el, val) => {
     el.value = val;
     el.dispatchEvent(new Event("input", { bubbles: true }));
     el.dispatchEvent(new Event("change", { bubbles: true }));
     el.dispatchEvent(new Event("blur", { bubbles: true }));
-  }, v).catch(async () => {
-    // Fallback: fill (works for many inputs/textareas)
-    await loc.fill(v).catch(() => {});
-  });
-
+  }, v).catch(() => {});
+  
   const got = await loc.inputValue().catch(() => "");
   const ok = (got || "").trim() === v;
-
+  
   console.log(ok ? `[PT Visit Bot] ✅ VERIFIED ${label}` : `[PT Visit Bot] ❌ VERIFY FAIL ${label} (got="${got}")`);
   return ok;
 }
-
 
 
 // Read value from input/textarea safely (iframe/page safe)
@@ -832,9 +881,7 @@ async function postSaveAudit(targetOrWrapper, expected = {}) {
   
   const issues = [];
   
-    const warnings = [];
-  const strictReopen = /^(1|true|yes)$/i.test(String(process.env.POST_SAVE_AUDIT_STRICT || "").trim());
-async function snapshotOnce(tag) {
+  async function snapshotOnce(tag) {
     const scope = await findTemplateScope(page, { timeoutMs: 15000 }).catch(() => null);
     if (!scope) {
       issues.push(`${tag}: Could not resolve active template iframe/scope`);
@@ -905,8 +952,7 @@ async function snapshotOnce(tag) {
       // Ensure we are on the reopened visit edit form (scope resolves)
       const scope2 = await findTemplateScope(reopenedPage, { timeoutMs: 20000 }).catch(() => null);
       if (!scope2) {
-        if (strictReopen) issues.push("Reopen: Could not resolve template iframe/scope after reopening the note");
-        else warnings.push("Reopen skipped: Could not resolve template iframe/scope after reopening the note");
+        issues.push("Reopen: Could not resolve template iframe/scope after reopening the note");
       } else {
         const snap2 = {};
         snap2.visitDate = await safeGetValue(scope2, "#frm_visitdate");
@@ -917,16 +963,10 @@ async function snapshotOnce(tag) {
         validateSnap("Reopen", snap2);
       }
     } catch (e) {
-      if (strictReopen) {
-        issues.push(`Reopen: Exception while reopening note for persistence check: ${String(e?.message || e)}`);
-      } else {
-        warnings.push(`Reopen skipped (non-fatal): ${String(e?.message || e)}`);
-        log("[PT Visit Bot] ⚠️ Post-save reopen audit skipped (non-fatal):", String(e?.message || e));
-      }
+      issues.push(`Reopen: Exception while reopening note for persistence check: ${String(e?.message || e)}`);
     }
   } else {
     // If we don't have enough info to reopen, keep the immediate checks only.
-    warnings.push("Reopen skipped: missing context/patientName/visitDate");
     log("[PT Visit Bot] ℹ️ Post-save persistence check (reopen) skipped: missing context/patientName/visitDate");
   }
   
@@ -934,11 +974,7 @@ async function snapshotOnce(tag) {
     throw new Error(`POST-SAVE AUDIT FAIL: ${issues.join("; ")}`);
   }
   
-  if (warnings.length) {
-    log("✅ Post-save audit passed (reload persistence check succeeded; reopen skipped non-fatal).");
-  } else {
-    log("✅ Post-save audit passed (key fields persisted after reopening the note).");
-  }
+  log("✅ Post-save audit passed (key fields persisted after reopening the note).");
 }
 
 
@@ -2046,7 +2082,8 @@ async function fillSubjectiveOnly(context, data) {
   if (data.subjective) {
     const subjArea = await firstVisibleLocator(frame, ["#frm_SubInfo"]);
     if (subjArea) {
-      await verifySetText(frame, "#frm_SubInfo", data.subjective, "Subjective (#frm_SubInfo)");
+      await subjArea.fill("");
+      await subjArea.type(data.subjective, { delay: 20 });
       console.log("🗣 Subjective filled");
     }
   }
@@ -3164,88 +3201,183 @@ async function fillPhysicalRomStrength(context, romStrength) {
 // Save button helper (shared)
 // =========================
 async function clickSave(contextOrPage) {
-  // Accept: Page, Frame, BrowserContext, or wrapper { page }
-  let scope = contextOrPage?.page || contextOrPage;
-  
-  // If they passed a BrowserContext, convert to a Page
-  // (BrowserContext has pages(), not locator()).
-  if (scope && typeof scope.pages === "function" && typeof scope.locator !== "function") {
-    const pages = scope.pages();
-    if (pages && pages.length) scope = pages[0];
-  }
-  
-  function normalizeScope(s) {
-    if (s && typeof s.locator === "function") return s; // Page/Frame
-    if (s?.page && typeof s.page.locator === "function") return s.page;
-    if (s?.frame && typeof s.frame.locator === "function") return s.frame;
-    
-    // If wrapper contains a BrowserContext
-    if (s && typeof s.pages === "function") {
-      const pages = s.pages();
-      if (pages && pages.length && typeof pages[0].locator === "function") return pages[0];
-    }
-    
-    throw new TypeError("clickSave(): scope must be Playwright Page/Frame/BrowserContext or {page}/{frame}");
-  }
-  
-  const saveSelectors = [
-    "#btnSave",
-    "input#btnSave",
-    "button#btnSave",
-    "input[type='button'][value='Save']",
-    "input[type='submit'][value='Save']",
-    "xpath=//input[contains(@onclick, \"modifyForm('save'\") )]",
-    "xpath=//*[self::input or self::button][contains(translate(normalize-space(.),'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'save')]",
-  ];
-  
+        // Accept: Page, Frame, BrowserContext, or wrapper { page }
+        let scope = contextOrPage?.page || contextOrPage;
+        
+        // If they passed a BrowserContext, convert to a Page
+        if (scope && typeof scope.pages === "function" && typeof scope.locator !== "function") {
+        const pages = scope.pages();
+        if (pages && pages.length) scope = pages[0];
+        }
+        
+        function normalizeScope(s) {
+        if (s && typeof s.locator === "function") return s; // Page/Frame
+        if (s?.page && typeof s.page.locator === "function") return s.page;
+        if (s?.frame && typeof s.frame.locator === "function") return s.frame;
+        
+        if (s && typeof s.pages === "function") {
+        const pages = s.pages();
+        if (pages && pages.length && typeof pages[0].locator === "function") return pages[0];
+        }
+        
+        throw new TypeError("clickSave(): scope must be Playwright Page/Frame/BrowserContext or {page}/{frame}");
+        }
+        
+        const saveSelectors = [
+        "#btnSave",
+        "input#btnSave",
+        "button#btnSave",
+        "input[type='button'][value='Save']",
+        "input[type='submit'][value='Save']",
+        "xpath=//input[contains(@onclick, \"modifyForm('save'\") )]",
+        "xpath=//*[self::input or self::button][contains(translate(normalize-space(.),'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'save')]",
+        ];
+        
+        // Heuristic: does popup message look like a validation failure?
+        function isBadDialogMessage(msg = "") {
+        const m = String(msg || "").toLowerCase();
+        return (
+        m.includes("error") ||
+        m.includes("required") ||
+        m.includes("missing") ||
+        m.includes("cannot") ||
+        m.includes("unable") ||
+        m.includes("invalid") ||
+        m.includes("please correct") ||
+        m.includes("must be") ||
+        m.includes("failed")
+        );
+        }
+        
+        async function assertNoOnPageErrors(pageOrFrame) {
+        // WellSky/Kinnser error containers — keep this tight to avoid false positives
+        const errorSelectors = [
+        ".validation-summary-errors",
+        ".validation-summary",
+        ".field-validation-error",
+        "#error",
+        "#errors",
+        "text=/please correct/i",
+        "text=/validation/i",
+        "text=/required/i",
+        "text=/unable to save/i",
+        "text=/error occurred/i",
+        ];
+        
+        for (const sel of errorSelectors) {
+        const loc = pageOrFrame.locator(sel).first();
+        const visible = await loc.isVisible().catch(() => false);
+        if (!visible) continue;
+        
+        const txt = (await loc.innerText().catch(() => "")).trim();
+        
+        // Only fail if there is meaningful error text (avoid empty containers)
+        if (txt && txt.length >= 3) {
+        throw new Error(`SAVE_VALIDATION_ERROR: ${txt.slice(0, 500)}`);
+      }
+      }
+      }
+
+        async function waitForSavingToComplete(pageOrFrame) {
+          const scope = pageOrFrame;
+          const start = Date.now();
+          const MAX_MS = 20000;
+          const patterns = [/page is saving/i, /please wait/i, /processing/i, /saving/i];
+          while (Date.now() - start < MAX_MS) {
+            try {
+              const txt = await scope.evaluate(() => document.body ? (document.body.innerText || "") : "");
+              if (!patterns.some((re) => re.test(String(txt || "")))) return;
+            } catch {}
+            await new Promise(r => setTimeout(r, 500));
+          }
+        }
+
   async function tryClick(s, label) {
-    const pageOrFrame = normalizeScope(s);
-    
-    for (const sel of saveSelectors) {
-      const loc = pageOrFrame.locator(sel).first();
+      const pageOrFrame = normalizeScope(s);
       
+      // For dialog listening we need the underlying Page object
+      const page = typeof pageOrFrame.page === "function" ? pageOrFrame.page() : pageOrFrame;
+      
+      for (const sel of saveSelectors) {
+      const loc = pageOrFrame.locator(sel).first();
       const visible = await loc.isVisible().catch(() => false);
       if (!visible) continue;
       
       await loc.scrollIntoViewIfNeeded().catch(() => {});
+      
+      // Start listening for dialog BEFORE clicking.
+      const dialogPromise =
+        typeof page.waitForEvent === "function"
+          ? page.waitForEvent("dialog", { timeout: 8000 }).catch(() => null)
+          : Promise.resolve(null);
+      
       try {
-        await loc.click({ force: true, timeout: 5000 });
+        await loc.click({ force: true, timeout: 8000 });
       } catch {
         // JS fallback (Page/Frame only)
         await pageOrFrame.evaluate(() => {
           const byId = document.querySelector("#btnSave");
           if (byId) return byId.click();
-          
+      
           const byOnclick = Array.from(document.querySelectorAll("input,button"))
-          .find(el => (el.getAttribute("onclick") || "").includes("modifyForm('save')"));
+            .find(el => (el.getAttribute("onclick") || "").includes("modifyForm('save')"));
           if (byOnclick) return byOnclick.click();
-          
+      
           const byValue = Array.from(
-                                     document.querySelectorAll("input[type='button'],input[type='submit'],button")
-                                     ).find(el => ((el.value || el.textContent || "").trim().toLowerCase() === "save"));
+            document.querySelectorAll("input[type='button'],input[type='submit'],button")
+          ).find(el => ((el.value || el.textContent || "").trim().toLowerCase() === "save"));
           if (byValue) return byValue.click();
         });
       }
       
-      console.log(`✅ Clicked Save (${label}) using selector: ${sel}`);
+      log(`✅ Clicked Save (${label}) using selector: ${sel}`);
+        
+        // Wait a moment for Kinnser save routines
+        try {
+        if (typeof page.waitForLoadState === "function") {
+          await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
+        }
+        } catch {}
+        
+        // If a dialog appeared, inspect its message.
+        const dlg = await dialogPromise;
+        if (dlg) {
+        const msg = dlg.message?.() || "";
+        log(`⚠️ Save popup detected: ${msg}`);
+          
+          // The global dialog handler already accepts, but we try accepting safely anyway.
+          try { await dlg.accept(); } catch {}
+          
+          if (isBadDialogMessage(msg)) {
+          throw new Error(`SAVE_POPUP_ERROR: ${msg}`);
+        }
+      } else {
+        // No dialog captured. Still allow time for any inline validation to render.
+        await wait(1000);
+      }
+
+      // Check for inline page validation/errors after save
+      await assertNoOnPageErrors(pageOrFrame);
+
+      // Extra settle time for Kinnser to persist
+      await wait(1500);
       return true;
     }
-    
+
     return false;
   }
-  
+
   // Try on main scope/page
   if (await tryClick(scope, "scope")) return true;
-  
+
   // Try all iframes (common in Kinnser/WellSky)
   const page = normalizeScope(scope);
   const frames = typeof page.frames === "function" ? page.frames() : [];
   for (const fr of frames) {
     if (await tryClick(fr, "frame")) return true;
   }
-  
-  console.log("⚠️ Save button not found — skipping save.");
-  return false;
+
+  throw new Error("SAVE_BUTTON_NOT_FOUND");
 }
 
 
@@ -3896,7 +4028,9 @@ async function fillPtVisitSubjectiveAndPlan(context, noteData = {}) {
   if (subjectiveText) {
     const subjBox = await firstVisibleLocator(frame, ["#frm_paObservs"]);
     if (subjBox) {
-      await verifySetText(frame, "#frm_paObservs", subjectiveText, "Subjective (#frm_paObservs)");
+      await subjBox.fill("");
+      await subjBox.type(subjectiveText, { delay: 20 });
+      console.log("[PT Visit Bot] Filled Subjective information (#frm_paObservs).");
     }
   }
   
@@ -3917,7 +4051,9 @@ async function fillPtVisitSubjectiveAndPlan(context, noteData = {}) {
   
   const planInput = await firstVisibleLocator(frame, ["#frm_goalsMeetByTxt"]);
   if (planInput) {
-    await verifySetText(frame, "#frm_goalsMeetByTxt", planText, "Plan (#frm_goalsMeetByTxt)");
+    await planInput.fill("");
+    await planInput.type(planText, { delay: 20 });
+    console.log("[PT Visit Bot] Filled Plan for next visit / POC (#frm_goalsMeetByTxt).");
   }
 }
 
@@ -4629,8 +4765,7 @@ async function runPtVisitBot({
     await wait(2500);
     
     // ✅ Post-save audit (matches PT Evaluation behavior)
-    const _noteUrlBeforeSave = activePage.url();
-    await postSaveAuditV2({ page: activePage, context }, { visitDate, timeIn, timeOut, patientName, taskType: "PT Visit", noteUrl: _noteUrlBeforeSave });
+    await postSaveAudit({ page: activePage, context }, { visitDate, timeIn, timeOut, patientName, taskType: "PT Visit" });
     
     // Additional read-only sanity checks (do NOT re-fill fields here)
     try {
@@ -4671,94 +4806,3 @@ async function runPtVisitBot({
 module.exports = {
   runPtVisitBot,
 };
-
-
-
-// ============================================================================
-// Post-save audit v2: verify persistence by reopening the SAME NOTE URL (not HotBox)
-// - Avoids HotBox layout/access differences.
-// - Reads key persisted fields from the note after save.
-// - Treats HotBox reopen as optional (non-fatal unless POST_SAVE_AUDIT_STRICT=1).
-// ============================================================================
-async function postSaveAuditV2(targetOrWrapper, expected = {}) {
-  const page = targetOrWrapper?.page || targetOrWrapper;
-  const context =
-    targetOrWrapper?.context ||
-    (page && typeof page.context === "function" ? page.context() : null);
-
-  const strictReopen = /^(1|true|yes)$/i.test(String(process.env.POST_SAVE_AUDIT_STRICT || "").trim());
-  const issues = [];
-
-  const noteUrl = String(expected.noteUrl || page.url() || "").trim();
-
-  // Best-effort: wait for common "saving" overlays/text to clear
-  try {
-    const start = Date.now();
-    const maxMs = 20000;
-    while (Date.now() - start < maxMs) {
-      const bodyText = await page.evaluate(() => (document.body && document.body.innerText) ? document.body.innerText : "").catch(() => "");
-      if (!/page is saving|saving\.\.\.|please wait|processing/i.test(bodyText)) break;
-      await page.waitForTimeout(400);
-    }
-  } catch (_) {}
-
-  // Step 1: reopen the same note URL and verify key fields persisted
-  try {
-    if (noteUrl && /^https?:\/\//i.test(noteUrl)) {
-      console.log(`[PT Visit Bot] 🔁 Post-save audit: reopening same note URL for persistence check...`);
-      await page.goto(noteUrl, { waitUntil: "domcontentloaded", timeout: 45000 });
-      await page.waitForTimeout(1200);
-    } else {
-      console.log(`[PT Visit Bot] ⚠️ Post-save audit: noteUrl missing; using current page.`);
-    }
-
-    const scope = await findTemplateScope(page).catch(() => null);
-    if (!scope) {
-      issues.push(`ReopenSameNote: Could not find template scope after reopening note URL. Current page: ${page.url()}`);
-    } else {
-      const readVisitDate = await safeGetValue(scope, "#frm_visitdate", "visit date", { timeout: 6000 });
-      const readTimeIn = await safeGetValue(scope, "#frm_timein", "time in", { timeout: 6000 });
-      const readTimeOut = await safeGetValue(scope, "#frm_timeout", "time out", { timeout: 6000 });
-
-      const expDate = expected.visitDate ? normalizeDateToMMDDYYYY(expected.visitDate) : "";
-      const gotDate = readVisitDate ? normalizeDateToMMDDYYYY(readVisitDate) : "";
-
-      if (!readVisitDate) issues.push("ReopenSameNote: Visit date is blank after save.");
-      if (!readTimeIn) issues.push("ReopenSameNote: Time In is blank after save.");
-      if (!readTimeOut) issues.push("ReopenSameNote: Time Out is blank after save.");
-
-      if (expDate && gotDate && expDate !== gotDate) issues.push(`ReopenSameNote: Visit date mismatch (expected ${expDate}, got ${gotDate}).`);
-      if (expected.timeIn && readTimeIn && String(readTimeIn).trim() !== String(expected.timeIn).trim()) {
-        issues.push(`ReopenSameNote: Time In mismatch (expected ${expected.timeIn}, got ${readTimeIn}).`);
-      }
-      if (expected.timeOut && readTimeOut && String(readTimeOut).trim() !== String(expected.timeOut).trim()) {
-        issues.push(`ReopenSameNote: Time Out mismatch (expected ${expected.timeOut}, got ${readTimeOut}).`);
-      }
-    }
-  } catch (e) {
-    issues.push(`ReopenSameNote: Exception while reopening same note URL: ${e?.message || e}`);
-  }
-
-  // Step 2 (optional): legacy HotBox reopen check (non-fatal by default)
-  try {
-    if (typeof navigateToHotboxRobust === "function") {
-      console.log("➡️ Checking if we are already on the HotBox screen...");
-      const already = (typeof isAlreadyOnHotbox === "function") ? await isAlreadyOnHotbox(page).catch(() => false) : false;
-      if (!already) {
-        console.log("➡️ Navigating to HotBox (robust mode)...");
-        await navigateToHotboxRobust(page);
-      }
-    }
-  } catch (e) {
-    const msg = `ReopenHotBox: Unable to navigate to HotBox (layout differs or access blocked).`;
-    if (strictReopen) issues.push(msg);
-    else console.log(`[PT Visit Bot] ⚠️ Post-save reopen audit skipped (non-fatal): ${msg}`);
-  }
-
-  if (issues.length) {
-    throw new Error(`POST-SAVE AUDIT FAIL: ${issues.join(" ")}`);
-  }
-
-  console.log("✅ Post-save audit passed (reopen same-note persistence check succeeded; HotBox reopen optional).");
-}
-
