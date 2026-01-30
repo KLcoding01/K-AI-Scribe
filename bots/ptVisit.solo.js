@@ -4629,7 +4629,8 @@ async function runPtVisitBot({
     await wait(2500);
     
     // ✅ Post-save audit (matches PT Evaluation behavior)
-    await postSaveAudit({ page: activePage, context }, { visitDate, timeIn, timeOut, patientName, taskType: "PT Visit" });
+    const _noteUrlBeforeSave = activePage.url();
+    await postSaveAuditV2({ page: activePage, context }, { visitDate, timeIn, timeOut, patientName, taskType: "PT Visit", noteUrl: _noteUrlBeforeSave });
     
     // Additional read-only sanity checks (do NOT re-fill fields here)
     try {
@@ -4670,3 +4671,94 @@ async function runPtVisitBot({
 module.exports = {
   runPtVisitBot,
 };
+
+
+
+// ============================================================================
+// Post-save audit v2: verify persistence by reopening the SAME NOTE URL (not HotBox)
+// - Avoids HotBox layout/access differences.
+// - Reads key persisted fields from the note after save.
+// - Treats HotBox reopen as optional (non-fatal unless POST_SAVE_AUDIT_STRICT=1).
+// ============================================================================
+async function postSaveAuditV2(targetOrWrapper, expected = {}) {
+  const page = targetOrWrapper?.page || targetOrWrapper;
+  const context =
+    targetOrWrapper?.context ||
+    (page && typeof page.context === "function" ? page.context() : null);
+
+  const strictReopen = /^(1|true|yes)$/i.test(String(process.env.POST_SAVE_AUDIT_STRICT || "").trim());
+  const issues = [];
+
+  const noteUrl = String(expected.noteUrl || page.url() || "").trim();
+
+  // Best-effort: wait for common "saving" overlays/text to clear
+  try {
+    const start = Date.now();
+    const maxMs = 20000;
+    while (Date.now() - start < maxMs) {
+      const bodyText = await page.evaluate(() => (document.body && document.body.innerText) ? document.body.innerText : "").catch(() => "");
+      if (!/page is saving|saving\.\.\.|please wait|processing/i.test(bodyText)) break;
+      await page.waitForTimeout(400);
+    }
+  } catch (_) {}
+
+  // Step 1: reopen the same note URL and verify key fields persisted
+  try {
+    if (noteUrl && /^https?:\/\//i.test(noteUrl)) {
+      console.log(`[PT Visit Bot] 🔁 Post-save audit: reopening same note URL for persistence check...`);
+      await page.goto(noteUrl, { waitUntil: "domcontentloaded", timeout: 45000 });
+      await page.waitForTimeout(1200);
+    } else {
+      console.log(`[PT Visit Bot] ⚠️ Post-save audit: noteUrl missing; using current page.`);
+    }
+
+    const scope = await findTemplateScope(page).catch(() => null);
+    if (!scope) {
+      issues.push(`ReopenSameNote: Could not find template scope after reopening note URL. Current page: ${page.url()}`);
+    } else {
+      const readVisitDate = await safeGetValue(scope, "#frm_visitdate", "visit date", { timeout: 6000 });
+      const readTimeIn = await safeGetValue(scope, "#frm_timein", "time in", { timeout: 6000 });
+      const readTimeOut = await safeGetValue(scope, "#frm_timeout", "time out", { timeout: 6000 });
+
+      const expDate = expected.visitDate ? normalizeDateToMMDDYYYY(expected.visitDate) : "";
+      const gotDate = readVisitDate ? normalizeDateToMMDDYYYY(readVisitDate) : "";
+
+      if (!readVisitDate) issues.push("ReopenSameNote: Visit date is blank after save.");
+      if (!readTimeIn) issues.push("ReopenSameNote: Time In is blank after save.");
+      if (!readTimeOut) issues.push("ReopenSameNote: Time Out is blank after save.");
+
+      if (expDate && gotDate && expDate !== gotDate) issues.push(`ReopenSameNote: Visit date mismatch (expected ${expDate}, got ${gotDate}).`);
+      if (expected.timeIn && readTimeIn && String(readTimeIn).trim() !== String(expected.timeIn).trim()) {
+        issues.push(`ReopenSameNote: Time In mismatch (expected ${expected.timeIn}, got ${readTimeIn}).`);
+      }
+      if (expected.timeOut && readTimeOut && String(readTimeOut).trim() !== String(expected.timeOut).trim()) {
+        issues.push(`ReopenSameNote: Time Out mismatch (expected ${expected.timeOut}, got ${readTimeOut}).`);
+      }
+    }
+  } catch (e) {
+    issues.push(`ReopenSameNote: Exception while reopening same note URL: ${e?.message || e}`);
+  }
+
+  // Step 2 (optional): legacy HotBox reopen check (non-fatal by default)
+  try {
+    if (typeof navigateToHotboxRobust === "function") {
+      console.log("➡️ Checking if we are already on the HotBox screen...");
+      const already = (typeof isAlreadyOnHotbox === "function") ? await isAlreadyOnHotbox(page).catch(() => false) : false;
+      if (!already) {
+        console.log("➡️ Navigating to HotBox (robust mode)...");
+        await navigateToHotboxRobust(page);
+      }
+    }
+  } catch (e) {
+    const msg = `ReopenHotBox: Unable to navigate to HotBox (layout differs or access blocked).`;
+    if (strictReopen) issues.push(msg);
+    else console.log(`[PT Visit Bot] ⚠️ Post-save reopen audit skipped (non-fatal): ${msg}`);
+  }
+
+  if (issues.length) {
+    throw new Error(`POST-SAVE AUDIT FAIL: ${issues.join(" ")}`);
+  }
+
+  console.log("✅ Post-save audit passed (reopen same-note persistence check succeeded; HotBox reopen optional).");
+}
+
