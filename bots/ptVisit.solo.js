@@ -161,6 +161,80 @@ async function verifySetText(scope, selector, value, label) {
   return ok;
 }
 
+function extractAssessmentVerbatim(aiNotes) {
+  const t = String(aiNotes || "");
+  if (!t.trim()) return "";
+
+  // Look for a labeled block in the AI note box and return it verbatim (trimmed).
+  const labels = [
+    "Assessment Summary",
+    "Clinical Statement",
+    "Evaluation Summary",
+    "Assessment"
+  ];
+
+  const lines = t.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
+  let startIdx = -1;
+  let labelUsed = "";
+
+  for (let i = 0; i < lines.length; i++) {
+    const ln = lines[i];
+    for (const lab of labels) {
+      const re = new RegExp("^\\s*" + lab.replace(/[-/\\^$*+?.()|[\]{}]/g, "\\$&") + "\\s*:\\s*(.*)$", "i");
+      const mm = ln.match(re);
+      if (mm) {
+        startIdx = i;
+        labelUsed = lab;
+        break;
+      }
+    }
+    if (startIdx !== -1) break;
+  }
+
+  if (startIdx === -1) return "";
+
+  // Capture from label line onward until next heading-like line (Something:) or end.
+  const captured = [];
+  for (let j = startIdx; j < lines.length; j++) {
+    const ln = lines[j];
+
+    // If not the first line and we hit a new heading, stop.
+    if (j > startIdx) {
+      const headingish = ln.match(/^\s*[A-Za-z][A-Za-z0-9 \-/()]*\s*:\s*.*$/);
+      if (headingish) break;
+    }
+    captured.push(ln);
+  }
+
+  // If the first line had inline content after "Label:", keep it and subsequent lines as-is.
+  // Return as one paragraph unless user included line breaks (we preserve them).
+  const outText = captured.join("\n").trim();
+
+  // If block is just "Label:" with nothing else, treat as missing.
+  const onlyLabel = new RegExp("^\\s*" + labelUsed + "\\s*:\\s*$", "i");
+  if (onlyLabel.test(outText)) return "";
+
+  // Strip the label prefix but preserve remaining content (verbatim).
+  // Example: "Assessment Summary: Pt ..." -> "Pt ..."
+  const labelPrefix = new RegExp("^\s*" + labelUsed + "\s*:\s*", "i");
+  return outText.replace(labelPrefix, "").trim();
+}
+
+async function setLocatorValue(locator, value, labelForLog = "field") {
+  const v = String(value ?? "");
+  await locator.waitFor({ state: "visible", timeout: 30000 }).catch(() => {});
+  await locator.scrollIntoViewIfNeeded().catch(() => {});
+  await locator.click({ timeout: 3000, force: true }).catch(() => {});
+  await locator.evaluate((el, val) => {
+    el.value = val;
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+    el.blur();
+  }, v);
+  console.log(`✅ Set ${labelForLog} (verbatim) (${v.length} chars).`);
+}
+
+
 
 // Read value from input/textarea safely (iframe/page safe)
 async function safeGetValue(scope, selector, label = "", opts = {}) {
@@ -3578,57 +3652,46 @@ async function fillVisitSummaryFromCue(context, aiNotes) {
     console.log("[PT Visit Bot] No AI notes provided; skipping visit summary.");
     return;
   }
-  
-  if (!process.env.OPENAI_API_KEY) {
-    console.log("[PT Visit Bot] OPENAI_API_KEY missing; cannot generate visit summary.");
-    return;
-  }
-  
+
   const page = context?.page || context;
-  
+
   const frame = await findTemplateScope(page);
   if (!frame) {
     console.log("[PT Visit Bot] Could not find PT Visit frame for summary.");
     return;
   }
-  
+
+  // IMPORTANT: PT Visit assessment summary field id is frm_visitSummary
   const summarySelectors = [
     "#frm_visitSummary",
     "#frm_EASI1",
     "#frm_EASI",
     "#frm_AssessmentSummary",
     "#frm_assessmentSummary",
-    "#frm_Summary",
-    "#frm_summary",
-    "xpath=//label[contains(normalize-space(.),'Summary of Patient Overall Performance')]/following::textarea[1]",
+    "textarea[name*='visitSummary']",
+    "xpath=//*[contains(normalize-space(.),'Assessment Summary')]/following::textarea[1]",
     "xpath=//*[contains(normalize-space(.),'Summary of Patient Overall Performance on this Visit')]/following::textarea[1]",
     "xpath=//*[contains(normalize-space(.),'Summary of Patient Overall Performance')]/following::textarea[1]",
   ];
-  
+
   const summaryBox = await firstVisibleLocator(frame, summarySelectors);
   if (!summaryBox) {
     console.log("[PT Visit Bot] Summary textarea not found (tried multiple selectors).");
     return;
   }
-  
-  const hasCue = needsVisitSummary(aiNotes);
-  console.log(
-              hasCue
-              ? "[PT Visit Bot] Assessment/summary cue detected in AI notes; generating visit summary."
-              : "[PT Visit Bot] No explicit assessment/summary keyword; generating generic HH PT visit summary from AI notes."
-              );
-  
-  console.log("[PT Visit Bot] Generating AI visit summary for PT Visit...");
-  const text = await generateVisitSummaryText(aiNotes);
-  if (!text) {
-    console.log("[PT Visit Bot] AI summary generation returned empty or errored; skipping.");
+
+  // VERBATIM ONLY: pull the Assessment Summary/Clinical Statement block from the AI note box.
+  // Do NOT generate or rewrite during transfer.
+  const verbatim = extractAssessmentVerbatim(aiNotes);
+  if (!verbatim) {
+    console.log("[PT Visit Bot] No Assessment Summary/Clinical Statement found in AI notes; skipping summary fill (verbatim-only mode).");
     return;
   }
-  
-  await summaryBox.fill("");
-  await summaryBox.type(text, { delay: 10 });
-  console.log("[PT Visit Bot] Filled visit summary.");
+
+  await setLocatorValue(summaryBox, verbatim, "frm_visitSummary (visit summary)");
+  console.log("[PT Visit Bot] ✅ Visit assessment summary filled verbatim from AI note box.");
 }
+
 
 
 /* =========================
