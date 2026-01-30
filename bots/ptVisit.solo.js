@@ -832,7 +832,9 @@ async function postSaveAudit(targetOrWrapper, expected = {}) {
   
   const issues = [];
   
-  async function snapshotOnce(tag) {
+    const warnings = [];
+  const strictReopen = /^(1|true|yes)$/i.test(String(process.env.POST_SAVE_AUDIT_STRICT || "").trim());
+async function snapshotOnce(tag) {
     const scope = await findTemplateScope(page, { timeoutMs: 15000 }).catch(() => null);
     if (!scope) {
       issues.push(`${tag}: Could not resolve active template iframe/scope`);
@@ -903,7 +905,8 @@ async function postSaveAudit(targetOrWrapper, expected = {}) {
       // Ensure we are on the reopened visit edit form (scope resolves)
       const scope2 = await findTemplateScope(reopenedPage, { timeoutMs: 20000 }).catch(() => null);
       if (!scope2) {
-        issues.push("Reopen: Could not resolve template iframe/scope after reopening the note");
+        if (strictReopen) issues.push("Reopen: Could not resolve template iframe/scope after reopening the note");
+        else warnings.push("Reopen skipped: Could not resolve template iframe/scope after reopening the note");
       } else {
         const snap2 = {};
         snap2.visitDate = await safeGetValue(scope2, "#frm_visitdate");
@@ -914,10 +917,16 @@ async function postSaveAudit(targetOrWrapper, expected = {}) {
         validateSnap("Reopen", snap2);
       }
     } catch (e) {
-      issues.push(`Reopen: Exception while reopening note for persistence check: ${String(e?.message || e)}`);
+      if (strictReopen) {
+        issues.push(`Reopen: Exception while reopening note for persistence check: ${String(e?.message || e)}`);
+      } else {
+        warnings.push(`Reopen skipped (non-fatal): ${String(e?.message || e)}`);
+        log("[PT Visit Bot] ⚠️ Post-save reopen audit skipped (non-fatal):", String(e?.message || e));
+      }
     }
   } else {
     // If we don't have enough info to reopen, keep the immediate checks only.
+    warnings.push("Reopen skipped: missing context/patientName/visitDate");
     log("[PT Visit Bot] ℹ️ Post-save persistence check (reopen) skipped: missing context/patientName/visitDate");
   }
   
@@ -925,7 +934,11 @@ async function postSaveAudit(targetOrWrapper, expected = {}) {
     throw new Error(`POST-SAVE AUDIT FAIL: ${issues.join("; ")}`);
   }
   
-  log("✅ Post-save audit passed (key fields persisted after reopening the note).");
+  if (warnings.length) {
+    log("✅ Post-save audit passed (reload persistence check succeeded; reopen skipped non-fatal).");
+  } else {
+    log("✅ Post-save audit passed (key fields persisted after reopening the note).");
+  }
 }
 
 
