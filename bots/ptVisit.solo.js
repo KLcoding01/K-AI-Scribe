@@ -84,32 +84,33 @@ async function firstVisibleLocator(scope, selectors) {
 async function verifySetText(scope, selector, value, label) {
   const v = String(value ?? "").trim();
   if (!v) return true;
-  
+
   const loc = scope.locator(selector).first();
   const visible = await loc.isVisible().catch(() => false);
   if (!visible) return false;
-  
+
   await loc.scrollIntoViewIfNeeded().catch(() => {});
-  await loc.click({ timeout: 1500 }).catch(() => {});
-  await loc.fill("").catch(() => {});
-  await loc.type(v, { delay: 8 }).catch(async () => {
-    await loc.fill(v).catch(() => {});
-  });
-  
-  // Force-set + events
+  // Focus is important in Kinnser because onfocus may mutate the 'name' attribute
+  await loc.click({ timeout: 3000, force: true }).catch(() => {});
+
+  // Prefer direct value-set + events (more reliable than keyboard typing in Kinnser)
   await loc.evaluate((el, val) => {
     el.value = val;
     el.dispatchEvent(new Event("input", { bubbles: true }));
     el.dispatchEvent(new Event("change", { bubbles: true }));
     el.dispatchEvent(new Event("blur", { bubbles: true }));
-  }, v).catch(() => {});
-  
+  }, v).catch(async () => {
+    // Fallback: fill (works for many inputs/textareas)
+    await loc.fill(v).catch(() => {});
+  });
+
   const got = await loc.inputValue().catch(() => "");
   const ok = (got || "").trim() === v;
-  
+
   console.log(ok ? `[PT Visit Bot] ✅ VERIFIED ${label}` : `[PT Visit Bot] ❌ VERIFY FAIL ${label} (got="${got}")`);
   return ok;
 }
+
 
 
 // Read value from input/textarea safely (iframe/page safe)
@@ -1528,72 +1529,7 @@ function parseStructuredFromFreeText(aiNotes = "") {
   // CLINICAL STATEMENT / ASSESSMENT SUMMARY (explicit label parse)
   // =========================
   // Capture multi-line block until next known heading or blank-line break.
-  
-  /* =========================
-   * Pain (tri-state + fields from AI note text)
-   * Supports:
-   *   Pain: Yes
-   *   Pain: No
-   *   Pain: Skip
-   * And fields:
-   *   Location Other:
-   *   Primary Location Other:
-   *   Intensity (0–10):
-   *   Increased by:
-   *   Relieved by:
-   *   Interferes with:
-   * =======================*/
-  try {
-    const painLine = text.match(/^\s*Pain\s*:\s*(Yes|No|Skip)\s*$/im);
-    if (painLine) {
-      const choice = String(painLine[1] || "").trim().toLowerCase();
-      result.painDirective = choice; // yes|no|skip
-      if (choice === "skip") {
-        // Leave pain fields untouched downstream
-      } else if (choice === "yes") {
-        result.pain.hasPain = true;
-      } else if (choice === "no") {
-        result.pain.hasPain = false;
-      }
-    }
-
-    // Pull pain detail lines if present (works even if Pain line omitted)
-    const locMatch =
-      text.match(/^\s*(?:Location\s+Other|Primary\s+Location\s+Other)\s*:\s*(.+)\s*$/im);
-    if (locMatch) {
-      result.pain.primaryLocationText = String(locMatch[1] || "").trim();
-    }
-
-    const intMatch =
-      text.match(/^\s*Intensity\s*\(0\s*[-–]\s*10\)\s*:\s*([0-9]{1,2})\s*$/im) ||
-      text.match(/^\s*Intensity\s*:\s*([0-9]{1,2})\s*$/im);
-    if (intMatch) {
-      result.pain.intensityValue = String(intMatch[1] || "").trim();
-      // If intensity is provided, assume pain = yes unless explicitly "No" or "Skip"
-      if (!result.painDirective) result.pain.hasPain = true;
-      if (result.painDirective === "yes") result.pain.hasPain = true;
-    }
-
-    const incMatch = text.match(/^\s*Increased\s+by\s*:\s*(.+)\s*$/im);
-    if (incMatch) result.pain.increasedBy = String(incMatch[1] || "").trim();
-
-    const relMatch = text.match(/^\s*Relieved\s+by\s*:\s*(.+)\s*$/im);
-    if (relMatch) result.pain.relievedBy = String(relMatch[1] || "").trim();
-
-    const intfMatch = text.match(/^\s*Interferes\s+with\s*:\s*(.+)\s*$/im);
-    if (intfMatch) result.pain.interferesWith = String(intfMatch[1] || "").trim();
-
-    // If any pain detail fields exist and no directive, assume pain = yes
-    const hasAnyPainDetail =
-      !!(result.pain.primaryLocationText || result.pain.intensityValue || result.pain.increasedBy || result.pain.relievedBy || result.pain.interferesWith);
-    if (hasAnyPainDetail && !result.painDirective) {
-      result.pain.hasPain = true;
-    }
-  } catch (e) {
-    console.log("[Pain Parser] Error parsing pain:", e.message);
-  }
-
-const clinicalBlockMatch =
+  const clinicalBlockMatch =
   text.match(
              /(?:^|\n)\s*(assessment summary|clinical statement|evaluation summary|assessment)\s*:\s*([\s\S]+?)(?=\n\s*(subjective|orientation|speech|vision|hearing|vital signs|bp|hr|rr|temp|temperature|dme|pmh|diagnosis|dx|prior level|prior level of function|bed mobility|transfers|gait|living situation|person helping|goals for patient|goals|frequency)\s*:|\n{2,}|$)/i
              );
@@ -2097,8 +2033,7 @@ async function fillSubjectiveOnly(context, data) {
   if (data.subjective) {
     const subjArea = await firstVisibleLocator(frame, ["#frm_SubInfo"]);
     if (subjArea) {
-      await subjArea.fill("");
-      await subjArea.type(data.subjective, { delay: 20 });
+      await verifySetText(frame, "#frm_SubInfo", data.subjective, "Subjective (#frm_SubInfo)");
       console.log("🗣 Subjective filled");
     }
   }
@@ -2225,16 +2160,7 @@ async function fillPainSection(context, data) {
   
   const pain = data?.pain || {};
   
-  
-  // Tri-state directive from AI note text: yes|no|skip
-  const painDirective = String(data?.painDirective || data?.painDirectiveValue || data?.pain?.directive || "").trim().toLowerCase();
-  if (painDirective === "skip") {
-    console.log("⏭️ Pain: Skip detected in AI note; skipping Pain section.");
-    return;
-  }
-  if (painDirective === "yes") pain.hasPain = true;
-  if (painDirective === "no") pain.hasPain = false;
-// If NO pain in note → tick "No Pain Reported" and exit
+  // If NO pain in note → tick "No Pain Reported" and exit
   if (!pain.hasPain) {
     try {
       const noPainBox = await firstVisibleLocator(frame, [
@@ -2253,19 +2179,7 @@ async function fillPainSection(context, data) {
     }
     return;
   }
-
-  // If pain is present, ensure any "No Pain" checkbox is OFF (some templates persist the prior state)
-  try {
-    const noPainBox = await firstVisibleLocator(frame, [
-      "#frm_PainAsmtNoPain",
-      "input[type='checkbox'][name*='NoPain']",
-      "input[type='checkbox'][id*='NoPain']",
-    ]);
-    if (noPainBox && (await noPainBox.isVisible().catch(() => false))) {
-      await noPainBox.uncheck().catch(() => {});
-    }
-  } catch {}
-
+  
   // Normalize location: "Other, L knee" -> "L knee"
   const normalizePainLocation = (raw) => {
     let s = (raw || "").toString().trim();
@@ -2298,22 +2212,10 @@ async function fillPainSection(context, data) {
     // That looks like the textbox id; we support both anyway.
     if (locationText) {
       const siteOther = await firstVisibleLocator(frame, [
-        // Most common IDs (and the known typo variant)
         "#frm_PainAsmtSiteOtherDescPrim",
-        "#frm_PaintAsmtSiteOtherDescPrim",
-        // Sometimes rendered as textarea
-        "textarea#frm_PainAsmtSiteOtherDescPrim",
-        "textarea#frm_PaintAsmtSiteOtherDescPrim",
-        // Fuzzy fallbacks
+        "#frm_PaintAsmtSiteOtherDescPrim", // <-- your provided ID (typo variant)
         "input[id*='PainAsmtSiteOtherDescPrim']",
-        "textarea[id*='PainAsmtSiteOtherDescPrim']",
         "input[id*='PaintAsmtSiteOtherDescPrim']",
-        "textarea[id*='PaintAsmtSiteOtherDescPrim']",
-        "input[name*='SiteOtherDescPrim']",
-        "textarea[name*='SiteOtherDescPrim']",
-        // Label-driven fallback (Location Other / Primary Location Other)
-        "xpath=//label[contains(translate(normalize-space(.),'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'location other')]/following::input[1]",
-        "xpath=//label[contains(translate(normalize-space(.),'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'location other')]/following::textarea[1]",
       ]);
       
       if (siteOther) {
@@ -3981,9 +3883,7 @@ async function fillPtVisitSubjectiveAndPlan(context, noteData = {}) {
   if (subjectiveText) {
     const subjBox = await firstVisibleLocator(frame, ["#frm_paObservs"]);
     if (subjBox) {
-      await subjBox.fill("");
-      await subjBox.type(subjectiveText, { delay: 20 });
-      console.log("[PT Visit Bot] Filled Subjective information (#frm_paObservs).");
+      await verifySetText(frame, "#frm_paObservs", subjectiveText, "Subjective (#frm_paObservs)");
     }
   }
   
@@ -4004,9 +3904,7 @@ async function fillPtVisitSubjectiveAndPlan(context, noteData = {}) {
   
   const planInput = await firstVisibleLocator(frame, ["#frm_goalsMeetByTxt"]);
   if (planInput) {
-    await planInput.fill("");
-    await planInput.type(planText, { delay: 20 });
-    console.log("[PT Visit Bot] Filled Plan for next visit / POC (#frm_goalsMeetByTxt).");
+    await verifySetText(frame, "#frm_goalsMeetByTxt", planText, "Plan (#frm_goalsMeetByTxt)");
   }
 }
 
