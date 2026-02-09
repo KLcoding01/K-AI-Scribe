@@ -50,12 +50,12 @@ async function callOpenAIJSONSafe(prompt, timeoutMs = 12000) {
 
 
 //
-// EXPIRATION CHECK – blocks use after Feb 1, 2026
+// EXPIRATION CHECK – blocks use after Mar 1, 2026
 //
-const EXPIRATION_DATE = new Date("2026-02-01T00:00:00Z");
+const EXPIRATION_DATE = new Date("2026-03-01T00:00:00Z");
 const NOW = new Date();
 if (NOW > EXPIRATION_DATE) {
-  console.log("❌ Application expired on Feb 01, 2026.");
+  console.log("❌ Application expired on Mar 01, 2026.");
   throw new Error("Software expiration reached — contact support for renewal.");
 }
 
