@@ -26,7 +26,7 @@ function extractVitalsFromText(raw = "") {
   const hr = t.match(/\b(?:heart\s*rate|hr)\s*[:=]?\s*(\d{2,3})\b/i);
   const rr = t.match(/\b(?:resp(?:irations?)?|rr)\s*[:=]?\s*(\d{1,2})\b/i);
   const temp = t.match(/\b(?:temp(?:erature)?)\s*[:=]?\s*(\d{2,3}(?:\.\d)?)\b/i);
-
+  
   return {
     bpSys: bp ? String(bp[1]) : "",
     bpDia: bp ? String(bp[2]) : "",
@@ -39,7 +39,7 @@ function extractVitalsFromText(raw = "") {
 function patchVitalsInTemplate(templateTextRaw = "", vitals = {}) {
   let t = String(templateTextRaw || "");
   if (!t) return t;
-
+  
   const v = vitals || {};
   if (v.temperature) t = t.replace(/(\bTemp\s*:\s*)([^\n\r]*)/i, `$1${v.temperature}`);
   if (v.bpSys || v.bpDia) {
@@ -48,7 +48,7 @@ function patchVitalsInTemplate(templateTextRaw = "", vitals = {}) {
   }
   if (v.heartRate) t = t.replace(/(\bHeart\s*Rate\s*:\s*)([^\n\r]*)/i, `$1${v.heartRate}`);
   if (v.respirations) t = t.replace(/(\bRespirations\s*:\s*)([^\n\r]*)/i, `$1${v.respirations}`);
-
+  
   return t;
 }
 
@@ -61,7 +61,7 @@ function looksGenericSubjective(text = "") {
   if (!t) return true;
   if (t.length < 10) return true;
   if (t === "." || t === "-" || t === "n/a" || t === "na") return true;
-
+  
   const genericPhrases = [
     "pt agrees to pt evaluation",
     "pt agrees to pt re-evaluation",
@@ -79,7 +79,7 @@ function looksGenericSubjective(text = "") {
     "no changes since last visit",
     "subjective:",
   ];
-
+  
   return genericPhrases.some(p => t.includes(p));
 }
 
@@ -96,72 +96,86 @@ function normalizeSubjectTokens(s = "") {
 
 function stripJunkFromDictation(raw = "") {
   const text = String(raw || "").replace(/\r\n/g, "\n");
-
+  
   const lines = text
-    .split("\n")
-    .map(l => String(l || "").trim())
-    .filter(Boolean)
-    // Remove prompt/instruction lines
-    .filter(l => !/^\s*(generate|write|create|revise|condense|make|fix)\b/i.test(l));
-
+  .split("\n")
+  .map(l => String(l || "").trim())
+  .filter(Boolean)
+  // Remove prompt/instruction lines
+  .filter(l => !/^\s*(generate|write|create|revise|condense|make|fix)\b/i.test(l));
+  
   let joined = lines.join(" ");
-
+  
   // Strip vitals fragments
   joined = joined
-    .replace(/\b(?:bp|blood\s*pressure)\s*[:=]?\s*\d{2,3}\s*\/\s*\d{2,3}\b/ig, "")
-    .replace(/\b(?:heart\s*rate|hr)\s*[:=]?\s*\d{2,3}\b/ig, "")
-    .replace(/\b(?:resp(?:irations?)?|rr)\s*[:=]?\s*\d{1,2}\b/ig, "")
-    .replace(/\b(?:temp(?:erature)?)\s*[:=]?\s*\d{2,3}(?:\.\d)?\b/ig, "");
-
+  .replace(/\b(?:bp|blood\s*pressure)\s*[:=]?\s*\d{2,3}\s*\/\s*\d{2,3}\b/ig, "")
+  .replace(/\b(?:heart\s*rate|hr)\s*[:=]?\s*\d{2,3}\b/ig, "")
+  .replace(/\b(?:resp(?:irations?)?|rr)\s*[:=]?\s*\d{1,2}\b/ig, "")
+  .replace(/\b(?:temp(?:erature)?)\s*[:=]?\s*\d{2,3}(?:\.\d)?\b/ig, "");
+  
   // Remove headings if pasted
   joined = joined.replace(/\b(subjective|assessment summary|assessment|plan|goals|vital signs|pain assessment)\s*[:\-]?\b/ig, " ");
-
+  
   return joined.replace(/\s+/g, " ").trim();
 }
 
 function splitSentencesSmart(text = "") {
   const t = String(text || "").trim();
   if (!t) return [];
-  // split on . ! ? but keep abbreviations simple
-  const parts = t.split(/(?<=[.!?])\s+(?=[A-Z(]|Pt\b|pt\b|CG\b|cg\b)/g);
-  return parts.map(s => s.trim()).filter(Boolean);
+  const parts = t.split(/(?<=[.!?])\s+/).map(s => s.trim()).filter(Boolean);
+  return parts.length ? parts : [t];
 }
 
-function scoreSubjectiveSentence(sentence = "") {
-  const t = String(sentence || "").trim();
-  const low = t.toLowerCase();
-  if (!t) return -999;
+function isDemographicsOrHistoryLine(s = "") {
+  const low = String(s || "").toLowerCase();
+  return (
+          /\b\d{1,3}\s*y\/?o\b/.test(low) ||
+          /\byear\s*old\b/.test(low) ||
+          /\bpmh\b/.test(low) ||
+          /\bpast\s*medical\b/.test(low) ||
+          /\bmedical\s*history\b/.test(low) ||
+          /\bmedical\s*(?:dx|diagnosis)\b/.test(low) ||
+          /\bpt\s+is\s+a\b/.test(low) ||
+          /\bpresents?\s+with\s+pmh\b/.test(low) ||
+          /\bhtn\b|\bhld\b|\bdm2\b|\bdiabetes\b|\bhx\b|\bcancer\b|\bprostate\b/.test(low) && /\bpmh\b|\bhistory\b|\bdiagnosis\b/.test(low)
+          );
+}
 
-  // Hard exclude demographics / PMH / dx style lines
+function scoreSubjectiveSentence(s = "") {
+  const t = String(s || "").trim();
+  const low = t.toLowerCase();
+  
+  // HARD BLOCK: demographics/history/diagnosis never belongs in Subjective
+  if (isDemographicsOrHistoryLine(t)) return -999;
+  
+  // Hard exclusions (objective/treatment leakage)
   const exclude = [
-    "y/o", "year old", "female", "male", "pmh", "history", "diagnosis", "dx", "medical diagnosis",
-    "htn", "dm", "hld", "cad", "ckd", "copd", "cva", "afib", "bph", "cancer", "prostate",
-    "gait training", "transfer training", "bed mobility",
+    "therex", "theract", "gait training", "transfer training", "bed mobility",
     "vc", "tc", "mmt", "mmts", "rom", "tinetti", "poma", "stairs",
     "educated", "education", "instructed",
     "assessment summary", "assessment:", "plan", "goals",
     "skilled", "medically necessary", "vital signs", "bp", "hr", "rr", "temp"
   ];
   if (exclude.some(k => low.includes(k))) return -500;
-
+  
   let score = 0;
-
+  
   // Strong subjective verbs/phrases
   if (/\b(pt\s*)?(reports?|states?|verbalizes?|verbalized|noted|denies|c\/o|complains?|endorses?)\b/i.test(t)) score += 10;
   if (/\b(caregiver|cg|family|daughter|son|wife|husband)\s+reports?\b/i.test(t)) score += 10;
-
+  
   // Symptom/tolerance cues
   if (/\b(pain|sore|stiff|dizzy|fatigue|tired|weak|numb|tingl|radicul|fear of falling|falls)\b/i.test(t)) score += 4;
-
+  
   // Starts like a subjective statement
   if (/^(pt|caregiver|cg|family|daughter|son|wife|husband)\b/i.test(t)) score += 2;
-
+  
   // Penalize generic consent-only lines
   if (/(agrees to (pt|therapy)|no new complaints|tolerated)/i.test(t)) score -= 4;
-
+  
   // Penalize very short fragments
   if (t.length < 20) score -= 2;
-
+  
   return score;
 }
 
@@ -169,26 +183,26 @@ function scoreSubjectiveSentence(sentence = "") {
 function extractSubjectiveFromDictation(dictationRaw = "") {
   const raw = String(dictationRaw || "").trim();
   if (!raw) return "Pt agrees to PT evaluation and treatment.";
-
+  
   const cleaned = stripJunkFromDictation(raw);
   if (!cleaned) return "Pt agrees to PT evaluation and treatment.";
-
+  
   const norm = normalizeSubjectTokens(cleaned);
   const sentences = splitSentencesSmart(norm);
-
+  
   const scored = sentences
-    .map(s => ({ s: s.trim(), score: scoreSubjectiveSentence(s) }))
-    .filter(x => x.s && x.score > 0)
-    .sort((a, b) => b.score - a.score);
-
+  .map(s => ({ s: s.trim(), score: scoreSubjectiveSentence(s) }))
+  .filter(x => x.s && x.score > 0)
+  .sort((a, b) => b.score - a.score);
+  
   if (!scored.length) return "Pt agrees to PT evaluation and treatment.";
-
+  
   const picked = [];
   for (const item of scored) {
     if (picked.length >= 2) break;
     if (!picked.includes(item.s)) picked.push(item.s);
   }
-
+  
   return normalizeSubjectTokens(picked.join(" "));
 }
 
@@ -200,54 +214,67 @@ function patchSubjectiveInTemplate(templateTextRaw = "", subjectiveTextRaw = "")
   const templateText = String(templateTextRaw || "");
   const subj = String(subjectiveTextRaw || "").trim();
   if (!templateText || !subj) return templateText;
-
-  const re = /(^\s*Subjective\s*:?\s*\n)([\s\S]*?)(?=\n\s*(?:Vital\s*Signs|Pain|Pain\s*Assessment|Functional\s*Status|Living\s*Situation|Neuro|ROM|Strength|Assessment|Goals|Plan)\b|$)/im;
-  if (!re.test(templateText)) {
-    // Fallback: if there's "Subjective:" on same line
-    const re2 = /(^\s*Subjective\s*:?\s*)([^\n\r]*)/im;
-    if (re2.test(templateText)) {
-      const current = (templateText.match(re2) || [])[2] || "";
-      if (!looksGenericSubjective(current)) return templateText;
-      return templateText.replace(re2, `$1${subj}`);
+  
+  const re = /(^\s*Subjective\s*:?\s*\n)([\s\S]*?)(?=\n\s*(?:Vital\s*Signs|Pain\s*Assessment|Pain|Functional\s*Status|Functional\s*Assessment|Response\s*to\s*Treatment|Exercises|Teaching\s*Tools|Education|Assessment\s*Summary|Assessment|Goals|Plan|Frequency)\b|\s*$)/im;
+  const m = templateText.match(re);
+  
+  if (!m) {
+    const reInline = /(^\s*Subjective\s*:?\s*)(.*)$/im;
+    if (reInline.test(templateText)) {
+      const existing = (templateText.match(reInline)?.[2] || "").trim();
+      const firstLine = existing.split("\n").map(x => x.trim()).filter(Boolean)[0] || "";
+      if (existing && !looksGenericSubjective(firstLine)) return templateText;
+      return templateText.replace(reInline, `$1${subj}`);
     }
     return templateText;
   }
-
-  const m = templateText.match(re);
-  const currentBlock = (m && m[2]) ? String(m[2]).trim() : "";
-  if (currentBlock && !looksGenericSubjective(currentBlock)) return templateText;
-
-  return templateText.replace(re, `$1${subj}\n`);
+  
+  const existingBlock = (m[2] || "").trim();
+  const firstLine = existingBlock.split("\n").map(x => x.trim()).filter(Boolean)[0] || "";
+  
+  if (existingBlock && !looksGenericSubjective(firstLine)) return templateText;
+  return templateText.replace(re, `${m[1]}${subj}\n`);
 }
 
 
 // -------------------------
-// PT Visit Assessment generator + patch (ELITE 6 sentences)
+// Pt Visit ONLY — Medicare-justifiable Assessment generator + patch
 // -------------------------
+function normalizeClinicalTerms(s = "") {
+  return String(s || "")
+  .replace(/\bpatient\b/ig, "Pt")
+  .replace(/\blow\s*back\s*pain\b/ig, "LBP")
+  .replace(/\bchronic\s*low\s*back\s*pain\b/ig, "chronic LBP")
+  .replace(/\bprostate\s*cancer\b/ig, "prostate cx")
+  .replace(/\bradiation\s*therapy\b/ig, "radiation tx")
+  .replace(/\s+/g, " ")
+  .trim();
+}
+
 function buildVisitAssessmentFromDictation(dictationRaw = "") {
-  const d = String(dictationRaw || "").toLowerCase();
-
-  const hasWeak = /\bweak|weakness\b/i.test(d);
-  const hasBalance = /\bbalance|unsteady|fall risk|fear of falling\b/i.test(d);
-  const hasPainMgmt = /\bpain\b/i.test(d);
-  const hasLBP = /\blow back|lbp|lumbar\b/i.test(d);
-  const hasCancer = /\bprostate\b|\bcx\b|\bcancer\b/i.test(d);
-  const hasFallRisk = /\bfall risk\b/i.test(d) || hasBalance;
-
-  const s1 = (() => {
-    if (hasLBP) return "Pt demonstrates fair tolerance to PT tx today with improved participation following skilled interventions to address chronic LBP and mobility limitations.";
-    if (hasPainMgmt) return "Pt demonstrates fair tolerance to PT tx today with improved participation following skilled interventions to address pain and functional limitations.";
-    return "Pt demonstrates fair tolerance to PT tx today with improved participation following skilled interventions to address mobility limitations.";
-  })();
-
+  const d0 = normalizeClinicalTerms(String(dictationRaw || "").replace(/\r\n/g, "\n"));
+  const low = d0.toLowerCase();
+  
+  const hasLBP = /\b(lbp|low back pain)\b/i.test(d0) || /\bchronic\b/i.test(low);
+  const hasGait = /\b(gait|ambulat|walk|fww|walker|cane|ad)\b/i.test(low);
+  const hasTransfers = /\b(transfer|sit\s*to\s*stand|bed\s*mobility|sup\s*to\s*sit|rolling)\b/i.test(low);
+  const hasFallRisk = /\b(fall\s*risk|unsteady|unsafe|loss\s*of\s*balance|lob|fear\s*of\s*fall)\b/i.test(low);
+  const hasWeak = /\b(weak|weakness|decondition|strength)\b/i.test(low);
+  const hasBalance = /\b(balance|postur|stability)\b/i.test(low);
+  const hasPainMgmt = /\b(pain\s*management|pain)\b/i.test(low);
+  const hasCancer = /\b(prostate\s*cx|prostate|cancer|radiation)\b/i.test(low);
+  
+  const s1 = "Pt demonstrates fair tolerance to today’s skilled HH PT visit with intermittent rest breaks required for energy conservation and symptom monitoring.";
   const s2 = (() => {
-    const focus = [];
-    if (hasWeak) focus.push("strengthening");
-    if (hasBalance) focus.push("balance/safety training");
-    focus.push("functional mobility training");
-    return `Skilled PT provided ${focus.join(", ")}, with VC/TC for pacing, posture, and body mechanics.`;
+    const parts = [];
+    if (hasPainMgmt && hasLBP) parts.push("pain management for chronic LBP");
+    else if (hasPainMgmt) parts.push("pain management strategies");
+    if (hasTransfers) parts.push("functional mobility training for bed mobility and transfers");
+    else parts.push("functional mobility training for safe transfers");
+    if (hasGait) parts.push("gait training to improve household ambulation safety");
+    else parts.push("upright tolerance training to improve mobility safety");
+    return `Tx emphasized ${parts.join(", ")}, with VC/TC provided to improve sequencing, posture, and body mechanics.`;
   })();
-
   const s3 = (() => {
     const deficits = [];
     if (hasWeak) deficits.push("LE weakness");
@@ -256,29 +283,26 @@ function buildVisitAssessmentFromDictation(dictationRaw = "") {
     const defText = deficits.length ? deficits.join(", ") : "ongoing strength and balance deficits";
     return `Pt demonstrates gradual functional improvement; however, ${defText} continue to limit task carryover and increase fall risk during mobility.`;
   })();
-
   const s4 = (() => {
     if (hasCancer) {
       return "Gait and safety training incorporated pacing, AD management, and environmental scanning due to medical complexity and fatigue/safety concerns associated with prostate cx and radiation tx.";
     }
     return "Gait and safety training incorporated pacing, AD management, and environmental scanning to reduce fall/injury risk during mobility within the home.";
   })();
-
   const s5 = (() => {
     const risk = hasFallRisk ? "high fall risk" : "increased fall risk";
     const painClause = (hasLBP || hasPainMgmt) ? "manage pain flare-ups, " : "";
     return `Pt continues to require skilled PT for real-time clinical judgment to ${painClause}progress exercise dosing, and provide ongoing VC/TC for safety due to ${risk} and variable tolerance.`;
   })();
-
   const s6 = "Continued skilled HH PT remains medically necessary to progress toward goals, maximize functional independence, and prevent decline/hospitalization.";
-
+  
   const clean = (s) => {
     let t = String(s || "").trim().replace(/\s+/g, " ");
     t = t.replace(/\bPt\s+Pt\b/ig, "Pt").replace(/\.\.+/g, ".");
     if (!/[.!?]$/.test(t)) t += ".";
     return t;
   };
-
+  
   return [clean(s1), clean(s2), clean(s3), clean(s4), clean(s5), clean(s6)].join(" ");
 }
 
@@ -286,129 +310,263 @@ function patchVisitAssessmentInTemplate(templateTextRaw = "", assessmentTextRaw 
   const templateText = String(templateTextRaw || "");
   const assess = String(assessmentTextRaw || "").trim();
   if (!templateText || !assess) return templateText;
-
+  
   const re = /(^\s*Assessment\s*:\s*)([\s\S]*?)(?=\n\s*(?:Plan|Goals|Frequency|Effective\s*Date)\b|$)/im;
   if (re.test(templateText)) {
     return templateText.replace(re, `$1${assess}\n`);
   }
-
+  
   return templateText + `\n\nAssessment:\n${assess}\n`;
 }
 
 
 // -------------------------
 // ELITE PT Evaluation Assessment Summary generator (STRICT FORMAT)
+// - Sentence 1 MUST be: "Pt is a <age/sex> presents with PMH consist of <pmh>."
+// - Sentences 2–6 fixed in your Medicare-justifiable structure
+// - Adds stronger, objective-sounding modifiers based on dictation cues (no invented metrics)
 // -------------------------
-function buildEvalAssessmentSummaryFromDictation(dictationRaw = "") {
-  const d = String(dictationRaw || "");
-  const ageMatch = d.match(/(\d{1,3})\s*y\/o/i);
-  const age = ageMatch ? ageMatch[1] : "__";
-  const gender = /\bfemale\b/i.test(d) ? "female" : (/\bmale\b/i.test(d) ? "male" : "__");
-
-  const pmhMatch = d.match(/(?:pmh|relevant\s*medical\s*history)\s*[:\-]?\s*([^\n\r]+)/i);
-  const pmh = pmhMatch ? pmhMatch[1].trim() : "__";
-
-  const mdMatch = d.match(/medical\s*diagnosis\s*[:\-]?\s*([^\n\r]+)/i);
-  const md = mdMatch ? mdMatch[1].trim() : "__";
-
-  const s1 = `Pt is a ${age} y/o ${gender} who presents with HNP of ${md} which consists of PMH of ${pmh}.`;
-  const s2 = "Pt underwent PT initial evaluation with completion of home safety assessment, DME assessment, and initiation of HEP education, with education provided on fall prevention strategies, proper use of AD, pain and edema management as indicated, and establishment of PT POC and functional goals to progress pt toward PLOF.";
-  const s3 = "Objective findings demonstrate impaired bed mobility, transfers, and gait with AD, poor balance reactions, and generalized weakness contributing to limited household mobility and dependence with ADLs, placing pt at high fall risk.";
-  const s4 = "Pt demonstrates decreased safety awareness and delayed balance reactions within the home environment, with environmental risk factors that further increase fall risk.";
-  const s5 = "Skilled HH PT is medically necessary to provide TherEx, functional mobility training, gait and balance training, and skilled safety education to improve strength, mobility, and functional independence while reducing risk of falls and injury.";
-  const s6 = "Continued skilled HH PT remains indicated.";
-
-  return [s1, s2, s3, s4, s5, s6].join(" ");
+function normEvalPmhList(pmh = "") {
+  let p = String(pmh || "").trim();
+  
+  // Remove leading labels
+  p = p.replace(/^\s*(pmh|past\s*medical\s*history)\s*[:\-]?\s*/i, "");
+  
+  // Normalize common items (light touch)
+  p = p
+  .replace(/hypertension/ig, "HTN")
+  .replace(/hyperlipidemia/ig, "HLD")
+  .replace(/diabetes\s*(type\s*2|ii|2)/ig, "DM2")
+  .replace(/prostate\s*cancer/ig, "prostate cx");
+  
+  // Strip trailing punctuation
+  p = p.replace(/[.]+$/g, "").trim();
+  
+  // Collapse whitespace
+  p = p.replace(/\s+/g, " ").trim();
+  
+  return p;
 }
 
+function extractEvalDemo(dictation = "") {
+  const d = String(dictation || "");
+  // Common patterns: "78 y/o male", "78 yo male", "78 y.o. male"
+  const m = d.match(/\b(\d{1,3})\s*(?:y\/?o|yo|y\.o\.)\s*(male|female)\b/i);
+  if (!m) return { ageSex: "" };
+  return { ageSex: `${m[1]} y/o ${m[2].toLowerCase()}` };
+}
+
+function extractEvalPmh(dictation = "") {
+  const d = String(dictation || "");
+  
+  // Prefer explicit "PMH ..." line
+  let pmh =
+  (d.match(/\bPMH\s*(?:consists of|include[s]?|significant for)?\s*[:\-]?\s*([^\n\r.]+)/i)?.[1] || "").trim();
+  
+  // If not found, pull from a demographic sentence like "Pt is a 78 y/o male presents with PMH consist of HTN..."
+  if (!pmh) {
+    pmh = (d.match(/\bpresents?\s+with\s+PMH\s*(?:consists of|include[s]?|significant for)?\s*([^\n\r.]+)/i)?.[1] || "").trim();
+  }
+  
+  return normEvalPmhList(pmh);
+}
+
+function buildEvalAssessmentSummaryFromDictation(dictationRaw = "") {
+  const d0 = normalizeClinicalTerms(String(dictationRaw || "").replace(/\r\n/g, "\n"));
+  const low = d0.toLowerCase();
+  
+  const { ageSex } = extractEvalDemo(d0);
+  const pmh = extractEvalPmh(d0);
+  
+  // Cue detection (no invented numbers)
+  const bedbound = /\bbed\s*bound|bedbound\b/i.test(low);
+  const unableAmb = /\bunable\s+to\s+(ambulat|walk)\b/i.test(low);
+  const fearFall = /\bfear\s+of\s+fall|fearful\s+of\s+fall/i.test(low);
+  const unsteady = /\bunsteady\b/i.test(low);
+  const impairedBalance = /\bimpaired\s+balance|poor\s+balance|balance\s+deficit/i.test(low);
+  const weakness = /\bweak|weakness|decondition/i.test(low);
+  const painLBP = /\b(lbp|low back pain)\b/i.test(low);
+  const radic = /\bradicul|radiat(ing|es|ed)?\b|numb|tingl/i.test(low);
+  const transfers = /\btransfer|sit\s*to\s*stand|bed\s*mobility|rolling|sup\s*to\s*sit/i.test(low);
+  const gait = /\bgait|ambulat|walk|fww|walker|cane|ad\b/i.test(low);
+  
+  // Sentence 1: STRICT format (demo + PMH)
+  const s1BaseAge = ageSex ? `${ageSex}` : "";
+  const s1BasePmh = pmh ? `${pmh}` : "multiple comorbidities";
+  const s1 = `Pt is a ${s1BaseAge || "adult"} presents with PMH consist of ${s1BasePmh}.`
+  .replace(/\s+/g, " ")
+  .replace(/\bPt\s+is\s+a\s+adult\s+presents\b/i, "Pt presents");
+  
+  // Sentence 2: STRICT eval services (your exact line)
+  const s2 =
+  "Pt is seen for PT initial evaluation, home assessment, DME assessment, HEP training/education, fall safety precautions, fall prevention, proper use of AD, education on pain/edema management, and PT POC/goal planning to return to PLOF.";
+  
+  // Sentence 3: Objective deficits (more “objective-sounding” based on cues, no invented measures)
+  let s3 = "Pt demonstrates gross strength deficit with difficulty with bed mobility, transfers, gait, and balance deficits leading to high fall risk.";
+  if (bedbound || unableAmb) {
+    s3 = "Pt demonstrates gross strength deficit with limited upright tolerance and difficulty with bed mobility and transfers; gait is currently unsafe/limited, contributing to high fall risk once mobility is attempted.";
+  } else if (fearFall && gait) {
+    s3 = "Pt demonstrates gross strength deficit with difficulty with transfers and gait due to fear of falling and impaired balance, contributing to high fall risk.";
+  } else if ((unsteady || impairedBalance) && gait) {
+    s3 = "Pt demonstrates gross strength deficit with difficulty with transfers and gait due to unsteady gait pattern and impaired balance reactions, contributing to high fall risk.";
+  } else if (painLBP && radic) {
+    s3 = "Pt demonstrates gross strength deficit with difficulty with transfers and gait due to chronic LBP with radiating symptoms, contributing to high fall risk.";
+  }
+  
+  // Sentence 4: Weakness + balance justification (your strict sentence, with slight objective add-ons)
+  let s4 = "Pt presents with weakness and impaired balance and will benefit from skilled HH PT to decrease fall/injury risk.";
+  if (fearFall) s4 = "Pt presents with weakness, impaired balance, and fear of falling and will benefit from skilled HH PT to decrease fall/injury risk.";
+  if (bedbound) s4 = "Pt presents with weakness and impaired balance with limited upright tolerance and will benefit from skilled HH PT to decrease fall/injury risk and reduce risk of further decline.";
+  
+  // Sentence 5: Skilled need (your strict sentence, with objective-sounding skilled elements)
+  let s5 =
+  "Pt is a good candidate and will benefit from skilled HH PT to address limitations and impairments as mentioned in order to improve overall functional mobility status, decrease fall risk, and improve QoL.";
+  // Add skilled qualifiers (still not inventing metrics)
+  const needsVC = (transfers || gait || impairedBalance || fearFall || unsteady);
+  if (needsVC) {
+    s5 =
+    "Pt is a good candidate and will benefit from skilled HH PT to address limitations and impairments as mentioned, including progression of task-specific training with ongoing VC/TC for safety and sequencing, in order to improve overall functional mobility status, decrease fall risk, and improve QoL.";
+  }
+  
+  // Sentence 6: STRICT medical necessity line (fixes your “Pt Continued…” issue)
+  const s6 = "Continued skilled HH PT remains medically necessary.";
+  
+  // Final clean-up
+  const clean = (s) => {
+    let t = String(s || "").trim().replace(/\s+/g, " ");
+    t = t.replace(/\bPt\s+Pt\b/ig, "Pt").replace(/\.\.+/g, ".");
+    if (!/[.!?]$/.test(t)) t += ".";
+    return t;
+  };
+  
+  // IMPORTANT: exactly 6 sentences, in your format.
+  return [clean(s1), clean(s2), clean(s3), clean(s4), clean(s5), clean(s6)].join(" ");
+}
+
+// Replace/patch the "Assessment Summary:" block in eval templates.
 function patchEvalAssessmentSummary(templateTextRaw = "", summaryTextRaw = "") {
   const templateText = String(templateTextRaw || "");
   const summary = String(summaryTextRaw || "").trim();
   if (!templateText || !summary) return templateText;
-
-  const re = /(^|\n)(Assessment Summary\s*:\s*)([^\n\r]*)/i;
+  
+  const re = /(^\s*Assessment\s*Summary\s*:\s*)([\s\S]*?)(?=\n\s*(?:Goals|Plan|Frequency|Short-Term\s*Goals|Long-Term\s*Goals)\b|$)/im;
   if (re.test(templateText)) {
-    return templateText.replace(re, (m0, p1, p2) => `${p1}${p2}${summary}`);
+    return templateText.replace(re, `$1${summary}\n`);
   }
   return templateText + `\n\nAssessment Summary: ${summary}\n`;
 }
 
 
-// -------------------------
-// UI + API
-// -------------------------
 (() => {
-  const LS_ACTIVE_JOB_ID = "ks_active_job_id";
+  const el = (id) => document.getElementById(id);
+  
+  const apiBase = window.location.origin;
+  el("apiBasePill").textContent = `API: ${apiBase}`;
+  
+  let pollTimer = null;
+  let activeJobId = null;
+  const STORAGE_ACTIVE_JOB = "kinScribeActiveJobId";
+  const STORAGE_ACTIVE_JOB_UPDATED = "kinScribeActiveJobUpdatedAt";
 
-  function el(id) { return document.getElementById(id); }
-
-  const badge = el("badge");
-  const statusBox = el("status");
-
-  function setBadge(text, kind) {
-    if (!badge) return;
-    badge.textContent = text || "";
-    badge.className = "badge" + (kind ? ` ${kind}` : "");
+  function persistActiveJob(jobId) {
+    try {
+      if (!jobId) {
+        localStorage.removeItem(STORAGE_ACTIVE_JOB);
+        localStorage.removeItem(STORAGE_ACTIVE_JOB_UPDATED);
+      } else {
+        localStorage.setItem(STORAGE_ACTIVE_JOB, String(jobId));
+        localStorage.setItem(STORAGE_ACTIVE_JOB_UPDATED, String(Date.now()));
+      }
+    } catch {}
   }
 
+  function readPersistedJob() {
+    try {
+      const id = localStorage.getItem(STORAGE_ACTIVE_JOB);
+      return id ? String(id) : "";
+    } catch {
+      return "";
+    }
+  }
+
+  function ensureStopButton() {
+    let btn = el("btnStopJob");
+    if (!btn) {
+      // Create if index.html doesn't have it yet
+      const runBtn = el("btnRun");
+      if (runBtn && runBtn.parentElement) {
+        btn = document.createElement("button");
+        btn.id = "btnStopJob";
+        btn.type = "button";
+        btn.textContent = "Stop";
+        btn.className = "btn danger";
+        btn.style.marginLeft = "8px";
+        runBtn.parentElement.appendChild(btn);
+      }
+    }
+    if (btn) {
+      btn.onclick = () => stopJob();
+      btn.disabled = !activeJobId;
+    }
+  }
+  
+  function setBadge(text, kind = "") {
+    const b = el("jobBadge");
+    b.textContent = text;
+    b.className = "badge" + (kind ? " " + kind : "");
+  }
+  
   function setStatus(text) {
-    if (!statusBox) return;
-    statusBox.textContent = text || "";
+    el("statusBox").textContent = text;
+    el("statusBox").scrollTop = el("statusBox").scrollHeight;
   }
-
-  async function httpJson(url, opts = {}) {
+  
+  async function httpJson(url, options = {}) {
     const res = await fetch(url, {
-      headers: { "Content-Type": "application/json" },
-      ...opts,
+      ...options,
+      headers: { "Content-Type": "application/json", ...(options.headers || {}) },
     });
-    const bodyText = await res.text().catch(() => "");
-    let body = null;
-    try { body = bodyText ? JSON.parse(bodyText) : null; } catch { body = bodyText; }
+    const txt = await res.text();
+    let body;
+    try { body = txt ? JSON.parse(txt) : {}; } catch { body = { raw: txt }; }
     if (!res.ok) {
-      const err = new Error((body && body.error) ? body.error : `HTTP ${res.status}`);
+      const err = new Error(body?.error || body?.message || `HTTP ${res.status}`);
       err.status = res.status;
       err.body = body;
       throw err;
     }
     return body;
   }
-
+  
   async function testHealth() {
     try {
       setBadge("Checking…", "warn");
-      const r = await httpJson("/health", { method: "GET" });
-      setBadge("OK", "ok");
-      setStatus(JSON.stringify(r, null, 2));
+      const res = await fetch("/health");
+      const txt = await res.text();
+      setBadge("Healthy", "ok");
+      setStatus(`GET /health\n\n${txt}`);
     } catch (e) {
       setBadge("Health failed", "bad");
-      setStatus(`Health failed:\n${e?.message || e}\n\n${JSON.stringify(e?.body || {}, null, 2)}`);
+      setStatus(`Health check failed:\n${e?.message || e}`);
     }
   }
-
-  // ------------------------------
-  // Job polling (resume-safe)
-  // ------------------------------
-  let pollTimer = null;
-  let activeJobId = null;
-
+  
   function stopPolling() {
     if (pollTimer) clearInterval(pollTimer);
     pollTimer = null;
   }
-
+  
   async function pollJob(jobId) {
     stopPolling();
-    if (!jobId) return;
-
     pollTimer = setInterval(async () => {
       try {
-        const job = await httpJson(`/job-status/${encodeURIComponent(jobId)}`, { method: "GET" });
-
+        const job = await httpJson(`/job-status/${encodeURIComponent(jobId)}`);
+        
         if (job.status === "completed") setBadge("Completed", "ok");
         else if (job.status === "failed") setBadge("Failed", "bad");
-        else if (job.status === "stopped") setBadge("Stopped", "warn");
+        else if (job.status === "cancelled") setBadge("Cancelled", "bad");
         else setBadge(job.status || "running", "warn");
-
+        
         const summaryLines = [
           `jobId: ${job.jobId}`,
           `status: ${job.status}`,
@@ -417,13 +575,15 @@ function patchEvalAssessmentSummary(templateTextRaw = "", summaryTextRaw = "") {
           `updatedAt: ${job.updatedAt ? new Date(job.updatedAt).toISOString() : ""}`,
           `finishedAt: ${job.finishedAt ? new Date(job.finishedAt).toISOString() : ""}`,
         ];
-
+        
         const logText = Array.isArray(job.logs) ? job.logs.join("\n") : (job.log || "");
         setStatus(summaryLines.join("\n") + (logText ? `\n\n${logText}` : ""));
-
-        if (job.status === "completed" || job.status === "failed" || job.status === "stopped") {
-          try { localStorage.removeItem(LS_ACTIVE_JOB_ID); } catch {}
+        
+        if (job.status === "completed" || job.status === "failed" || job.status === "cancelled") {
           stopPolling();
+          activeJobId = null;
+          persistActiveJob("");
+          ensureStopButton();
         }
       } catch (e) {
         setBadge("Polling error", "bad");
@@ -432,7 +592,7 @@ function patchEvalAssessmentSummary(templateTextRaw = "", summaryTextRaw = "") {
       }
     }, 1200);
   }
-
+  
   function clearForm() {
     el("patientName").value = "";
     el("visitDate").value = "";
@@ -441,12 +601,42 @@ function patchEvalAssessmentSummary(templateTextRaw = "", summaryTextRaw = "") {
     el("aiNotes").value = sanitizeNotes("");
     if (el("dictationNotes")) el("dictationNotes").value = "";
     if (el("imageFile")) el("imageFile").value = "";
-    if (el("audioFile")) el("audioFile").value = "";
     setBadge("Idle");
     setStatus("No job yet.");
     activeJobId = null;
-    try { localStorage.removeItem(LS_ACTIVE_JOB_ID); } catch {}
+    persistActiveJob("");
     stopPolling();
+    ensureStopButton();
+  }
+  
+
+  async function stopJob() {
+    if (!activeJobId) {
+      setStatus("No active job to stop.");
+      return;
+    }
+    try {
+      ensureStopButton();
+      const btn = el("btnStopJob");
+      if (btn) btn.disabled = true;
+
+      setBadge("Stopping…", "warn");
+      setStatus(`Requesting stop for jobId: ${activeJobId} ...`);
+
+      await httpJson(`/stop-job/${encodeURIComponent(activeJobId)}`, {
+        method: "POST",
+        body: JSON.stringify({}),
+      });
+
+      // Stop polling immediately; server will keep status updated if it can cancel
+      setBadge("Cancelled", "bad");
+      setStatus(`Stop requested for jobId: ${activeJobId}.`);
+    } catch (e) {
+      setBadge("Stop failed", "bad");
+      setStatus(`Stop failed:\n${e?.message || e}\n\n${JSON.stringify(e?.body || {}, null, 2)}`);
+    } finally {
+      ensureStopButton();
+    }
   }
 
   async function runAutomation() {
@@ -458,24 +648,24 @@ function patchEvalAssessmentSummary(templateTextRaw = "", summaryTextRaw = "") {
     const timeIn = el("timeIn").value.trim();
     const timeOut = el("timeOut").value.trim();
     const aiNotes = el("aiNotes").value || "";
-
+    
     if (!patientName || !visitDate || !taskType) {
       setBadge("Missing fields", "bad");
       setStatus("Please fill Patient name, Visit date, and Task type.");
       return;
     }
-
+    
     if (!kinnserUsername || !kinnserPassword) {
       setBadge("Missing login", "bad");
       setStatus("Please enter Kinnser username and password.");
       return;
     }
-
+    
     try {
       el("btnRun").disabled = true;
       setBadge("Starting…", "warn");
       setStatus("Submitting job…");
-
+      
       const body = {
         kinnserUsername,
         kinnserPassword,
@@ -486,14 +676,15 @@ function patchEvalAssessmentSummary(templateTextRaw = "", summaryTextRaw = "") {
         timeOut,
         aiNotes: aiNotes.replace(/\r\n/g, "\n"),
       };
-
+      
       const resp = await httpJson("/run-automation", {
         method: "POST",
         body: JSON.stringify(body),
       });
-
+      
       activeJobId = resp.jobId;
-      try { localStorage.setItem(LS_ACTIVE_JOB_ID, activeJobId); } catch {}
+      persistActiveJob(activeJobId);
+      ensureStopButton();
       setBadge("Running", "warn");
       setStatus(`Job started.\njobId: ${activeJobId}`);
       await pollJob(activeJobId);
@@ -504,43 +695,7 @@ function patchEvalAssessmentSummary(templateTextRaw = "", summaryTextRaw = "") {
       el("btnRun").disabled = false;
     }
   }
-
-  async function stopAutomation() {
-    if (!activeJobId) {
-      setBadge("No active job", "warn");
-      setStatus("No running job to stop.");
-      return;
-    }
-    try {
-      if (el("btnStop")) el("btnStop").disabled = true;
-      setBadge("Stopping…", "warn");
-      setStatus(`Requesting stop for jobId: ${activeJobId} …`);
-      const resp = await httpJson("/stop-job", {
-        method: "POST",
-        body: JSON.stringify({ jobId: activeJobId }),
-      });
-      setBadge("Stop requested", "warn");
-      setStatus(`Stop requested.\n${JSON.stringify(resp || {}, null, 2)}`);
-      await pollJob(activeJobId);
-    } catch (e) {
-      setBadge("Stop failed", "bad");
-      setStatus(`Stop failed:\n${e?.message || e}\n\n${JSON.stringify(e?.body || {}, null, 2)}`);
-    } finally {
-      if (el("btnStop")) el("btnStop").disabled = false;
-    }
-  }
-
-  async function resumeActiveJobIfAny() {
-    try {
-      const saved = localStorage.getItem(LS_ACTIVE_JOB_ID) || "";
-      if (!saved) return;
-      activeJobId = saved;
-      setBadge("Resuming…", "warn");
-      setStatus(`Resuming existing job.\njobId: ${activeJobId}`);
-      await pollJob(activeJobId);
-    } catch {}
-  }
-
+  
   async function convertDictation() {
     const dictation = (el("dictationNotes")?.value || "").trim();
     if (!dictation) {
@@ -548,46 +703,46 @@ function patchEvalAssessmentSummary(templateTextRaw = "", summaryTextRaw = "") {
       setStatus("Convert failed:\nPlease enter dictation first.");
       return;
     }
-
+    
     try {
       el("btnConvert").disabled = true;
       setBadge("Converting…", "warn");
       setStatus("Converting dictation → selected template…");
-
+      
       const taskType = (el("taskType")?.value || "").trim();
       const templateKey = (el("templateKey")?.value || "").trim();
-
+      
       let templateText = "";
       if (templateKey && TEMPLATES[templateKey]) templateText = TEMPLATES[templateKey];
       else if ((taskType || "").toLowerCase().includes("evaluation") && TEMPLATES.pt_eval_default) templateText = TEMPLATES.pt_eval_default;
       else templateText = TEMPLATES.pt_visit_default || "";
-
+      
       const resp = await httpJson("/convert-dictation", {
         method: "POST",
         body: JSON.stringify({ dictation, taskType, templateText }),
       });
-
+      
       let outText = String(resp.templateText || "");
-
+      
       // Subjective: always patch from dictation if AI output subjective looks generic
       const subjFromDictation = extractSubjectiveFromDictation(dictation);
       outText = patchSubjectiveInTemplate(outText, subjFromDictation);
-
+      
       // Pt Visit ONLY: patch Assessment
       if ((taskType || "").toLowerCase().includes("visit")) {
         const visitAssess = buildVisitAssessmentFromDictation(dictation);
         outText = patchVisitAssessmentInTemplate(outText, visitAssess);
       }
-
+      
       // PT Evaluation ONLY: patch vitals + Assessment Summary strict 6 sentences
       if ((taskType || "").toLowerCase().includes("evaluation")) {
         const vitals = extractVitalsFromText(dictation);
         outText = patchVitalsInTemplate(outText, vitals);
-
+        
         const evalSummary = buildEvalAssessmentSummaryFromDictation(dictation);
         outText = patchEvalAssessmentSummary(outText, evalSummary);
       }
-
+      
       el("aiNotes").value = sanitizeNotes(outText);
       setBadge("Ready", "ok");
       setStatus("Conversion completed. Review AI Notes, then click Run Automation.");
@@ -598,7 +753,7 @@ function patchEvalAssessmentSummary(templateTextRaw = "", summaryTextRaw = "") {
       el("btnConvert").disabled = false;
     }
   }
-
+  
   function fileToDataUrl(file) {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
@@ -607,7 +762,7 @@ function patchEvalAssessmentSummary(templateTextRaw = "", summaryTextRaw = "") {
       reader.readAsDataURL(file);
     });
   }
-
+  
   async function convertImage() {
     const file = el("imageFile")?.files?.[0];
     if (!file) {
@@ -615,27 +770,27 @@ function patchEvalAssessmentSummary(templateTextRaw = "", summaryTextRaw = "") {
       setStatus("Image convert failed:\nPlease choose an image file first.");
       return;
     }
-
+    
     try {
       el("btnConvertImage").disabled = true;
       setBadge("Converting…", "warn");
       setStatus("Converting image → selected template…");
-
+      
       const imageDataUrl = await fileToDataUrl(file);
-
+      
       const taskType = (el("taskType")?.value || "").trim();
       const templateKey = (el("templateKey")?.value || "").trim();
-
+      
       let templateText = "";
       if (templateKey && TEMPLATES[templateKey]) templateText = TEMPLATES[templateKey];
       else if ((taskType || "").toLowerCase().includes("evaluation") && TEMPLATES.pt_eval_default) templateText = TEMPLATES.pt_eval_default;
       else templateText = TEMPLATES.pt_visit_default || "";
-
+      
       const resp = await httpJson("/convert-image", {
         method: "POST",
         body: JSON.stringify({ imageDataUrl, taskType, templateText }),
       });
-
+      
       el("aiNotes").value = sanitizeNotes(resp.templateText || "");
       setBadge("Ready", "ok");
       setStatus("Image conversion completed. Review AI Notes, then click Run Automation.");
@@ -646,46 +801,257 @@ function patchEvalAssessmentSummary(templateTextRaw = "", summaryTextRaw = "") {
       el("btnConvertImage").disabled = false;
     }
   }
+  
 
-  // Voice memo / audio → dictation → template
-  async function convertAudio() {
-    const file = el("audioFile")?.files?.[0];
-    if (!file) {
-      setBadge("Audio convert failed", "bad");
-      setStatus("Audio convert failed:\nPlease choose an audio file first (Voice Memo .m4a/.mp3/.wav).");
-      return;
+  // ------------------------------
+  // Voice memo / audio → transcript → template
+  // - Adds controls dynamically (so you don't need to edit index.html)
+  // - Works best on desktop + iOS Safari/Chrome with microphone permission
+  // ------------------------------
+  let _recStream = null;
+  let _recorder = null;
+  let _recChunks = [];
+  let _lastAudioDataUrl = "";
+
+  function blobToDataUrl(blob) {
+    return new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => resolve(String(r.result || ""));
+      r.onerror = () => reject(r.error || new Error("Audio read failed"));
+      r.readAsDataURL(blob);
+    });
+  }
+
+  function ensureVoiceControls() {
+    // Attach near dictation box if present
+    const dict = el("dictationNotes");
+    if (!dict) return;
+
+    let wrap = el("voiceWrap");
+    if (wrap) return;
+
+    wrap = document.createElement("div");
+    wrap.id = "voiceWrap";
+    wrap.style.margin = "8px 0";
+    wrap.style.padding = "8px";
+    wrap.style.border = "1px solid rgba(255,255,255,0.12)";
+    wrap.style.borderRadius = "10px";
+
+    const row1 = document.createElement("div");
+    row1.style.display = "flex";
+    row1.style.flexWrap = "wrap";
+    row1.style.gap = "8px";
+    row1.style.alignItems = "center";
+
+    const btnRec = document.createElement("button");
+    btnRec.id = "btnRec";
+    btnRec.type = "button";
+    btnRec.className = "btn";
+    btnRec.textContent = "Record";
+
+    const btnRecStop = document.createElement("button");
+    btnRecStop.id = "btnRecStop";
+    btnRecStop.type = "button";
+    btnRecStop.className = "btn";
+    btnRecStop.textContent = "Stop Recording";
+    btnRecStop.disabled = true;
+
+    const inputAudio = document.createElement("input");
+    inputAudio.id = "audioFile";
+    inputAudio.type = "file";
+    inputAudio.accept = "audio/*";
+    inputAudio.style.maxWidth = "220px";
+
+    const btnTranscribe = document.createElement("button");
+    btnTranscribe.id = "btnTranscribe";
+    btnTranscribe.type = "button";
+    btnTranscribe.className = "btn";
+    btnTranscribe.textContent = "Transcribe";
+    btnTranscribe.disabled = true;
+
+    const btnAudioToTemplate = document.createElement("button");
+    btnAudioToTemplate.id = "btnAudioToTemplate";
+    btnAudioToTemplate.type = "button";
+    btnAudioToTemplate.className = "btn";
+    btnAudioToTemplate.textContent = "Audio → Template";
+    btnAudioToTemplate.disabled = true;
+
+    const btnClearAudio = document.createElement("button");
+    btnClearAudio.id = "btnClearAudio";
+    btnClearAudio.type = "button";
+    btnClearAudio.className = "btn";
+    btnClearAudio.textContent = "Clear Audio";
+    btnClearAudio.disabled = true;
+
+    const status = document.createElement("span");
+    status.id = "voiceStatus";
+    status.style.opacity = "0.9";
+    status.style.fontSize = "13px";
+    status.textContent = "Voice: idle";
+
+    row1.appendChild(btnRec);
+    row1.appendChild(btnRecStop);
+    row1.appendChild(inputAudio);
+    row1.appendChild(btnTranscribe);
+    row1.appendChild(btnAudioToTemplate);
+    row1.appendChild(btnClearAudio);
+    row1.appendChild(status);
+
+    wrap.appendChild(row1);
+
+    dict.parentElement.insertBefore(wrap, dict);
+
+    const setV = (t) => { status.textContent = t; };
+
+    async function startRecording() {
+      try {
+        setV("Voice: requesting mic…");
+        _recStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        _recChunks = [];
+        _lastAudioDataUrl = "";
+
+        _recorder = new MediaRecorder(_recStream);
+        _recorder.ondataavailable = (e) => { if (e.data && e.data.size > 0) _recChunks.push(e.data); };
+        _recorder.onstop = async () => {
+          try {
+            const blob = new Blob(_recChunks, { type: _recorder && _recorder.mimeType ? _recorder.mimeType : "audio/webm" });
+            _lastAudioDataUrl = await blobToDataUrl(blob);
+            setV("Voice: recorded ✓");
+            btnTranscribe.disabled = false;
+            btnAudioToTemplate.disabled = false;
+            btnClearAudio.disabled = false;
+          } catch (e) {
+            setV("Voice: record failed");
+            setStatus(`Voice recording failed:\n${e?.message || e}`);
+          } finally {
+            try { if (_recStream) _recStream.getTracks().forEach(t => t.stop()); } catch {}
+            _recStream = null;
+            _recorder = null;
+            _recChunks = [];
+          }
+        };
+
+        _recorder.start(250);
+        btnRec.disabled = true;
+        btnRecStop.disabled = false;
+        setV("Voice: recording…");
+      } catch (e) {
+        setV("Voice: mic denied");
+        setStatus(`Microphone permission failed:\n${e?.message || e}`);
+      }
     }
 
-    try {
-      if (el("btnConvertAudio")) el("btnConvertAudio").disabled = true;
-      setBadge("Transcribing…", "warn");
-      setStatus("Uploading audio → transcribing → converting into template…");
-
-      const audioDataUrl = await fileToDataUrl(file);
-
-      const taskType = (el("taskType")?.value || "").trim();
-      const templateKey = (el("templateKey")?.value || "").trim();
-
-      let templateText = "";
-      if (templateKey && TEMPLATES[templateKey]) templateText = TEMPLATES[templateKey];
-      else if ((taskType || "").toLowerCase().includes("evaluation") && TEMPLATES.pt_eval_default) templateText = TEMPLATES.pt_eval_default;
-      else templateText = TEMPLATES.pt_visit_default || "";
-
-      const resp = await httpJson("/convert-audio", {
-        method: "POST",
-        body: JSON.stringify({ audioDataUrl, taskType, templateText }),
-      });
-
-      if (el("dictationNotes") && resp.dictation) el("dictationNotes").value = sanitizeNotes(resp.dictation || "");
-      el("aiNotes").value = sanitizeNotes(resp.templateText || "");
-      setBadge("Ready", "ok");
-      setStatus("Audio conversion completed. Review AI Notes, then click Run Automation.");
-    } catch (e) {
-      setBadge("Audio convert failed", "bad");
-      setStatus(`Audio convert failed:\n${e?.message || e}\n\n${JSON.stringify(e?.body || {}, null, 2)}`);
-    } finally {
-      if (el("btnConvertAudio")) el("btnConvertAudio").disabled = false;
+    function stopRecording() {
+      try {
+        if (_recorder && _recorder.state !== "inactive") _recorder.stop();
+      } catch {}
+      btnRec.disabled = false;
+      btnRecStop.disabled = true;
+      setV("Voice: processing…");
     }
+
+    async function pickFileAudio() {
+      const f = inputAudio.files && inputAudio.files[0];
+      if (!f) return;
+      try {
+        setV("Voice: loading file…");
+        _lastAudioDataUrl = await fileToDataUrl(f);
+        setV("Voice: file loaded ✓");
+        btnTranscribe.disabled = false;
+        btnAudioToTemplate.disabled = false;
+        btnClearAudio.disabled = false;
+      } catch (e) {
+        setV("Voice: file failed");
+        setStatus(`Audio file load failed:\n${e?.message || e}`);
+      }
+    }
+
+    async function transcribeOnly() {
+      if (!_lastAudioDataUrl) return;
+      try {
+        btnTranscribe.disabled = true;
+        btnAudioToTemplate.disabled = true;
+        setBadge("Transcribing…", "warn");
+        setV("Voice: transcribing…");
+
+        const r = await httpJson("/transcribe-audio", {
+          method: "POST",
+          body: JSON.stringify({ audioDataUrl: _lastAudioDataUrl }),
+        });
+
+        const text = String(r.text || "").trim();
+        if (!text) throw new Error("Empty transcript");
+
+        // Append transcript into dictation
+        const cur = (dict.value || "").trim();
+        dict.value = (cur ? (cur + "\n") : "") + text;
+
+        setBadge("Ready", "ok");
+        setV("Voice: transcribed ✓");
+        setStatus("Transcription added to Dictation. Click Convert Dictation (or Audio → Template).");
+      } catch (e) {
+        setBadge("Transcribe failed", "bad");
+        setV("Voice: transcribe failed");
+        setStatus(`Transcription failed:\n${e?.message || e}\n\n${JSON.stringify(e?.body || {}, null, 2)}`);
+      } finally {
+        btnTranscribe.disabled = false;
+        btnAudioToTemplate.disabled = false;
+      }
+    }
+
+    async function audioToTemplate() {
+      if (!_lastAudioDataUrl) return;
+      try {
+        btnTranscribe.disabled = true;
+        btnAudioToTemplate.disabled = true;
+        setBadge("Converting…", "warn");
+        setV("Voice: audio → template…");
+
+        const taskType = (el("taskType")?.value || "").trim();
+        const templateKey = (el("templateKey")?.value || "").trim();
+
+        let templateText = "";
+        if (templateKey && TEMPLATES[templateKey]) templateText = TEMPLATES[templateKey];
+        else if ((taskType || "").toLowerCase().includes("evaluation") && TEMPLATES.pt_eval_default) templateText = TEMPLATES.pt_eval_default;
+        else templateText = TEMPLATES.pt_visit_default || "";
+
+        const r = await httpJson("/convert-audio", {
+          method: "POST",
+          body: JSON.stringify({ audioDataUrl: _lastAudioDataUrl, taskType, templateText }),
+        });
+
+        const transcript = String(r.dictation || "").trim();
+        if (transcript) dict.value = transcript;
+
+        // Reuse the existing client-side post-patch logic by calling convertDictation()
+        await convertDictation();
+
+        setV("Voice: template ready ✓");
+      } catch (e) {
+        setBadge("Audio convert failed", "bad");
+        setV("Voice: convert failed");
+        setStatus(`Audio conversion failed:\n${e?.message || e}\n\n${JSON.stringify(e?.body || {}, null, 2)}`);
+      } finally {
+        btnTranscribe.disabled = false;
+        btnAudioToTemplate.disabled = false;
+      }
+    }
+
+    function clearAudio() {
+      _lastAudioDataUrl = "";
+      inputAudio.value = "";
+      btnTranscribe.disabled = true;
+      btnAudioToTemplate.disabled = true;
+      btnClearAudio.disabled = true;
+      setV("Voice: cleared");
+    }
+
+    btnRec.onclick = startRecording;
+    btnRecStop.onclick = stopRecording;
+    inputAudio.onchange = pickFileAudio;
+    btnTranscribe.onclick = transcribeOnly;
+    btnAudioToTemplate.onclick = audioToTemplate;
+    btnClearAudio.onclick = clearAudio;
   }
 
   // ------------------------------
@@ -696,11 +1062,11 @@ function patchEvalAssessmentSummary(templateTextRaw = "", summaryTextRaw = "") {
 Pt reports no new complaints and agrees to PT tx today.
 
 Vital Signs
-Temp:
+Temp: 
 Temp Type: Temporal
-BP:
-Heart Rate:
-Respirations:
+BP:  
+Heart Rate: 
+Respirations: 
 Comments: Pt currently symptom-free with no adverse reactions noted. Cleared to continue with PT as planned.
 
 Pain Assessment
@@ -759,8 +1125,8 @@ Patient Goals: To improve mobility, strength, activity tolerance, decrease fall 
 Vital Signs
 Temp: 97.6
 Temp Type: Temporal
-BP:
-Heart Rate:
+BP:  
+Heart Rate: 
 Respirations: 18
 Comments: Pt is currently symptom-free and demonstrates no adverse reactions. Cleared to continue with physical therapy as planned. 
 
@@ -793,18 +1159,18 @@ Endurance: Poor
 Posture: Forward head lean, slouch posture, rounded shoulders, increased mid T-spine kyphosis
 
 Functional Status
-Bed Mobility:
+Bed Mobility: 
 Bed Mobility AD:
-Transfers:
+Transfers: 
 Transfers AD:
 
 Gait
 Level Surfaces
-Gait:
+Gait: Unable
 Gait Distance:
 Gait AD:
 
-Uneven Surfaces:
+Uneven Surfaces: 
 Uneven Surfaces Distance:
 Uneven Surfaces AD:
 
@@ -841,7 +1207,7 @@ Effective Date: `
     pt_discharge_default: `Vital Signs
 Temp:
 Temp Type: Temporal
-BP:
+BP: 
 Heart Rate:
 Respirations: 18
 Comments: Pt is currently symptom-free and demonstrates no adverse reactions. Cleared to continue with physical therapy as planned.
@@ -885,12 +1251,16 @@ Reason for discharge: PT POC completed and goals partially met.
 Condition at Discharge
 Current Status: Independent / Dependent / Needs Assistance / Needs Supervision
 Physical and Psychological Status: Pt presents with a pleasant demeanor and is able to follow simple physical therapy instructions to perform functional tasks when prompted.
+
 Course of Illness and Treatment
 Services Provided: Skilled physical therapy services were provided to address deficits in strength, balance, mobility, and functional independence. Interventions included TherEx, TherAct, gait and balance training, functional mobility training, and patient/caregiver education with VC/TC as needed to promote safety and carryover. Services were directed toward reducing fall risk, improving ADLs, and progressing the pt toward PLOF per established POC.
 Frequency/Duration: See IE.
 Patient Progress/Response: Pt demonstrates good tolerance to HH PT and has successfully met established goals. Pt is now independent with HEP and demonstrates good understanding of proper form and safety techniques. Improved overall mobility, strength, and balance noted during sessions. Education reinforced on continuation of HEP to maintain progress and prevent decline. No adverse reactions observed, and Pt verbalized confidence managing exercises independently. Continued PT not indicated at this time unless functional decline occurs.
+
 Post Discharge Goals: Pt will continue with daily HEP to maintain strength, flexibility, and activity tolerance; continue Indep with transfers and ambulation without assistive device as able; maintain safety during stair use; and seek follow-up with PCP if new symptoms or changes in mobility occur.
+
 Information Provided: Pt/family/caregiver reviewed fall and safety precautions for ADLs and functional mobility, and received training and review HEP with emphasis on safety and proper body mechanics.
+
 Treatment Preferences: Pt prefers to continue a home-based exercise routine and safe functional training under PT guidance, focusing on improving mobility and activity tolerance. Patient is agreeable to ongoing HEP and family/caregiver support as needed.`
     ,
     pt_reeval_default: `Subjective
@@ -899,7 +1269,7 @@ Pt agrees to PT Re-evaluation.
 Vital Signs
 Temp:
 Temp Type: Temporal
-BP:
+BP: 
 Heart Rate:
 Respirations: 18
 Comments: Pt is currently symptom-free and demonstrates no adverse reactions. Cleared to continue with physical therapy as planned.
@@ -908,25 +1278,46 @@ Pain:
 
 ROM / Strength:
 
+Neuro / Physical
+Orientation: AOx3
+Speech: Unremarkable
+Vision:
+Hearing:
+Skin: Intact
+Muscle Tone:
+Coordination:
+Sensation:
+Endurance:
+Posture:
+
 Functional Assessment
-Rolling:
-Sup to Sit:
-Sit to Sup:
+Bed Mobility:
+Bed Mobility AD:
 
-Transfers
-Sit to Stand:
-Stand to Sit:
-Toilet/BSC:
-Tub/Shower:
+Transfers:
+Transfers AD:
 
-Gait – Level:
+Gait
+Level Surfaces:
 Distance:
-Gait – Unlevel:
-Steps/stairs:
+Gait AD:
 
-Balance
-Sitting: Movement/mobility within position
-Standing: Movement/mobility within position
+Uneven Surfaces:
+Distance:
+Uneven Surfaces AD:
+
+Stairs:
+Distance:
+Stairs AD:
+
+Weight Bearing: FWB
+
+DME:
+
+Edema:
+Type:
+Location:
+Pitting Grade:
 
 Assessment Summary:
 
@@ -945,7 +1336,7 @@ Plan
 Frequency:
 Effective Date: `
   };
-
+  
   function initTemplates() {
     const dd = el("templateKey");
     if (!dd) return;
@@ -964,7 +1355,7 @@ Effective Date: `
       setStatus(`Loaded template: ${key}`);
     });
   }
-
+  
   // ------------------------------
   // Remember Kinnser credentials (localStorage)
   // ------------------------------
@@ -977,7 +1368,7 @@ Effective Date: `
       if (el("rememberCreds") && (u || p)) el("rememberCreds").checked = true;
     } catch {}
   }
-
+  
   function saveCreds() {
     try {
       if (!el("rememberCreds") || !el("rememberCreds").checked) {
@@ -994,7 +1385,7 @@ Effective Date: `
       setStatus("Failed to save credentials.");
     }
   }
-
+  
   function clearCreds() {
     try {
       localStorage.removeItem("ks_kinnser_user");
@@ -1004,23 +1395,32 @@ Effective Date: `
       setStatus("Cleared saved Kinnser credentials.");
     } catch {}
   }
-
+  
   initTemplates();
   loadSavedCreds();
-  resumeActiveJobIfAny();
+  ensureStopButton();
+  ensureVoiceControls();
 
+  // Resume polling if a job was already started and the page was closed/refreshed.
+  const persisted = readPersistedJob();
+  if (persisted) {
+    activeJobId = persisted;
+    setBadge("Resuming…", "warn");
+    setStatus(`Resuming existing job…\njobId: ${activeJobId}`);
+    ensureStopButton();
+    pollJob(activeJobId);
+  }
+  
   if (el("btnSaveCreds")) el("btnSaveCreds").addEventListener("click", saveCreds);
   if (el("btnClearCreds")) el("btnClearCreds").addEventListener("click", clearCreds);
-
+  
   el("btnHealth").addEventListener("click", testHealth);
   el("btnRun").addEventListener("click", runAutomation);
   el("btnClear").addEventListener("click", clearForm);
-
+  
   if (el("btnConvert")) el("btnConvert").addEventListener("click", convertDictation);
   if (el("btnConvertImage")) el("btnConvertImage").addEventListener("click", convertImage);
-  if (el("btnConvertAudio")) el("btnConvertAudio").addEventListener("click", convertAudio);
-  if (el("btnStop")) el("btnStop").addEventListener("click", stopAutomation);
-
+  
   el("kinnserPassword").addEventListener("keydown", (e) => {
     if (e.key === "Enter") runAutomation();
   });
