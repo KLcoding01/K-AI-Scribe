@@ -466,19 +466,8 @@ function patchEvalAssessmentSummary(templateTextRaw = "", summaryTextRaw = "") {
   let pollTimer = null;
   let activeJobId = null;
   
-  const ACTIVE_JOB_STORAGE_KEY = "kinscribe_activeJobId";
 
-  function persistActiveJobId(jobId) {
-    try {
-      if (jobId) localStorage.setItem(ACTIVE_JOB_STORAGE_KEY, String(jobId));
-      else localStorage.removeItem(ACTIVE_JOB_STORAGE_KEY);
-    } catch {}
-  }
-
-  function getPersistedJobId() {
-    try { return localStorage.getItem(ACTIVE_JOB_STORAGE_KEY) || ""; } catch { return ""; }
-  }
-
+  const ACTIVE_JOB_STORAGE_KEY = "ks_active_job_id";
   function setBadge(text, kind = "") {
     const b = el("jobBadge");
     b.textContent = text;
@@ -519,6 +508,154 @@ function patchEvalAssessmentSummary(templateTextRaw = "", summaryTextRaw = "") {
       setStatus(`Health check failed:\n${e?.message || e}`);
     }
   }
+
+
+  // ------------------------------
+  // Persist job polling across refresh / phone sleep
+  // ------------------------------
+  function resumeExistingJobIfAny() {
+    try {
+      const stored = localStorage.getItem(ACTIVE_JOB_STORAGE_KEY);
+      if (!stored) return;
+      activeJobId = String(stored);
+      setBadge("Resuming…", "warn");
+      setStatus(`Resuming job polling…\njobId: ${activeJobId}`);
+      if (el("btnStop")) el("btnStop").disabled = false;
+      pollJob(activeJobId);
+    } catch {}
+  }
+
+  // ------------------------------
+  // Stop / Cancel active job
+  // ------------------------------
+  async function stopJob() {
+    if (!activeJobId) {
+      setBadge("No job", "warn");
+      setStatus("No active job to stop.");
+      return;
+    }
+    try {
+      if (el("btnStop")) el("btnStop").disabled = true;
+      setBadge("Canceling…", "warn");
+      setStatus(`Requesting cancel…\njobId: ${activeJobId}`);
+      await httpJson(`/cancel-job/${encodeURIComponent(activeJobId)}`, { method: "POST" });
+      // polling will pick up canceled status
+      await pollJob(activeJobId);
+    } catch (e) {
+      setBadge("Cancel failed", "bad");
+      setStatus(`Cancel failed:\n${e?.message || e}\n\n${JSON.stringify(e?.body || {}, null, 2)}`);
+      if (el("btnStop")) el("btnStop").disabled = false;
+    }
+  }
+
+  // ------------------------------
+  // Audio (.m4a) → transcription → template
+  // Injects UI controls under the Image convert section.
+  // ------------------------------
+  function ensureAudioControls() {
+    // Already added?
+    if (el("audioFile") || el("btnConvertAudio")) return;
+
+    const anchorBtn = el("btnConvertImage") || el("btnConvert");
+    if (!anchorBtn) return;
+
+    const wrap = document.createElement("div");
+    wrap.style.marginTop = "14px";
+
+    const label = document.createElement("div");
+    label.textContent = "Convert from Audio (optional)";
+    label.style.fontWeight = "600";
+    label.style.marginBottom = "8px";
+
+    const input = document.createElement("input");
+    input.type = "file";
+    input.id = "audioFile";
+    input.accept = "audio/*,.m4a";
+    input.style.width = "100%";
+    input.style.marginBottom = "10px";
+    // Attempt to match styling of image input if present
+    const imgInput = el("imageFile");
+    if (imgInput && imgInput.className) input.className = imgInput.className;
+
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.id = "btnConvertAudio";
+    btn.textContent = "Convert Audio → Selected Template";
+    // Match styling of existing buttons
+    if (anchorBtn.className) btn.className = anchorBtn.className;
+
+    wrap.appendChild(label);
+    wrap.appendChild(input);
+    wrap.appendChild(btn);
+
+    // Insert after image convert button if present, else after dictation convert
+    const insertAfter = el("btnConvertImage") || el("btnConvert");
+    insertAfter.parentElement.insertBefore(wrap, insertAfter.nextSibling);
+  }
+
+  async function convertAudio() {
+    const file = el("audioFile")?.files?.[0];
+    if (!file) {
+      setBadge("Audio convert failed", "bad");
+      setStatus("Audio convert failed:\nPlease choose an audio file first (.m4a).");
+      return;
+    }
+    try {
+      if (el("btnConvertAudio")) el("btnConvertAudio").disabled = true;
+      setBadge("Transcribing…", "warn");
+      setStatus("Uploading audio and transcribing…");
+
+      const audioDataUrl = await fileToDataUrl(file);
+
+      const tr = await httpJson("/transcribe-audio", {
+        method: "POST",
+        body: JSON.stringify({
+          audioDataUrl,
+          filename: file.name || "voice.m4a",
+        }),
+      });
+
+      const transcript = String(tr?.text || "").trim();
+      if (!transcript) {
+        setBadge("Transcribe failed", "bad");
+        setStatus("Transcription returned empty text.");
+        return;
+      }
+
+      // Put transcript into dictation box and reuse existing convert pipeline
+      if (el("dictationNotes")) el("dictationNotes").value = transcript;
+      setBadge("Converting…", "warn");
+      setStatus("Transcribed. Converting transcript → selected template…");
+
+      await convertDictation();
+    } catch (e) {
+      setBadge("Audio convert failed", "bad");
+      setStatus(`Audio convert failed:\n${e?.message || e}\n\n${JSON.stringify(e?.body || {}, null, 2)}`);
+    } finally {
+      if (el("btnConvertAudio")) el("btnConvertAudio").disabled = false;
+    }
+  }
+
+  // ------------------------------
+  // Ensure Stop button exists next to Run
+  // ------------------------------
+  function ensureStopButton() {
+    if (el("btnStop")) return;
+    const runBtn = el("btnRun");
+    if (!runBtn) return;
+
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.id = "btnStop";
+    btn.textContent = "Stop";
+    btn.disabled = true;
+    if (runBtn.className) btn.className = runBtn.className;
+
+    // slight spacing
+    btn.style.marginLeft = "10px";
+
+    runBtn.parentElement.insertBefore(btn, runBtn.nextSibling);
+  }
   
   function stopPolling() {
     if (pollTimer) clearInterval(pollTimer);
@@ -533,6 +670,7 @@ function patchEvalAssessmentSummary(templateTextRaw = "", summaryTextRaw = "") {
         
         if (job.status === "completed") setBadge("Completed", "ok");
         else if (job.status === "failed") setBadge("Failed", "bad");
+        else if (job.status === "canceled" || job.status === "cancelled") setBadge("Canceled", "warn");
         else setBadge(job.status || "running", "warn");
         
         const summaryLines = [
@@ -547,11 +685,13 @@ function patchEvalAssessmentSummary(templateTextRaw = "", summaryTextRaw = "") {
         const logText = Array.isArray(job.logs) ? job.logs.join("\n") : (job.log || "");
         setStatus(summaryLines.join("\n") + (logText ? `\n\n${logText}` : ""));
         
-        if (job.status === "completed" || job.status === "failed" || job.status === "canceled") {
-          persistActiveJobId(null);
+        if (job.status === "completed" || job.status === "failed" || job.status === "canceled" || job.status === "cancelled") {
+          try { localStorage.removeItem(ACTIVE_JOB_STORAGE_KEY); } catch {}
+          activeJobId = null;
+          if (el("btnStop")) el("btnStop").disabled = true;
           stopPolling();
         }
-        } catch (e) {
+      } catch (e) {
         setBadge("Polling error", "bad");
         setStatus(`Polling failed:\n${e?.message || e}\n\n${JSON.stringify(e?.body || {}, null, 2)}`);
         stopPolling();
@@ -570,9 +710,10 @@ function patchEvalAssessmentSummary(templateTextRaw = "", summaryTextRaw = "") {
     setBadge("Idle");
     setStatus("No job yet.");
     activeJobId = null;
-    persistActiveJobId(null);
+    try { localStorage.removeItem(ACTIVE_JOB_STORAGE_KEY); } catch {}
+    if (el("btnStop")) el("btnStop").disabled = true;
     stopPolling();
-    }
+  }
   
   async function runAutomation() {
     const kinnserUsername = el("kinnserUsername").value.trim();
@@ -590,26 +731,6 @@ function patchEvalAssessmentSummary(templateTextRaw = "", summaryTextRaw = "") {
       return;
     }
     
-
-
-  async function stopJob() {
-    if (!activeJobId) {
-      setBadge("No active job", "warn");
-      setStatus("Stop requested, but there is no active job.");
-      return;
-    }
-    try {
-      setBadge("Stopping…", "warn");
-      setStatus(`Requesting stop…\njobId: ${activeJobId}`);
-      await httpJson(`/cancel-job/${encodeURIComponent(activeJobId)}`, { method: "POST" });
-      setBadge("Cancel requested", "warn");
-      setStatus(`Cancel requested.\njobId: ${activeJobId}\n\nThe server will stop the job if possible. You can keep this page closed; the job state is stored and can be checked later.`);
-    } catch (e) {
-      setBadge("Stop failed", "bad");
-      setStatus(`Stop failed:\n${e?.message || e}\n\n${JSON.stringify(e?.body || {}, null, 2)}`);
-    }
-  }
-
     if (!kinnserUsername || !kinnserPassword) {
       setBadge("Missing login", "bad");
       setStatus("Please enter Kinnser username and password.");
@@ -638,7 +759,8 @@ function patchEvalAssessmentSummary(templateTextRaw = "", summaryTextRaw = "") {
       });
       
       activeJobId = resp.jobId;
-      persistActiveJobId(activeJobId);
+      try { localStorage.setItem(ACTIVE_JOB_STORAGE_KEY, String(activeJobId)); } catch {}
+      if (el("btnStop")) el("btnStop").disabled = false;
       setBadge("Running", "warn");
       setStatus(`Job started.\njobId: ${activeJobId}`);
       await pollJob(activeJobId);
@@ -725,126 +847,6 @@ function patchEvalAssessmentSummary(templateTextRaw = "", summaryTextRaw = "") {
       return;
     }
     
-
-
-  async function convertAudio() {
-    const file = el("audioFile")?.files?.[0];
-    if (!file) {
-      setBadge("Audio convert failed", "bad");
-      setStatus("Audio convert failed:\nPlease choose an .m4a audio file first.");
-      return;
-    }
-
-    try {
-      el("btnConvertAudio").disabled = true;
-      setBadge("Transcribing…", "warn");
-      setStatus("Uploading audio and transcribing → selected template…");
-
-      const audioDataUrl = await fileToDataUrl(file);
-
-      const taskType = (el("taskType")?.value || "").trim();
-      const templateKey = (el("templateKey")?.value || "").trim();
-
-      let templateText = "";
-      if (templateKey && TEMPLATES[templateKey]) templateText = TEMPLATES[templateKey];
-      else if ((taskType || "").toLowerCase().includes("evaluation") && TEMPLATES.pt_eval_default) templateText = TEMPLATES.pt_eval_default;
-      else templateText = TEMPLATES.pt_visit_default || "";
-
-      const tResp = await httpJson("/transcribe-audio", {
-        method: "POST",
-        body: JSON.stringify({ audioDataUrl }),
-      });
-
-      const transcript = String(tResp.transcript || "").trim();
-      if (!transcript) throw new Error("Transcription returned empty text");
-      if (el("dictationNotes")) el("dictationNotes").value = transcript;
-
-      const resp = await httpJson("/convert-dictation", {
-        method: "POST",
-        body: JSON.stringify({ dictation: transcript, taskType, templateText }),
-      });
-
-      let outText = String(resp.templateText || "");
-
-      // Keep client-side patches consistent with Convert Dictation
-      if (transcript) {
-        const subjFromDictation = extractSubjectiveFromDictation(transcript);
-        outText = patchSubjectiveInTemplate(outText, subjFromDictation);
-
-        if ((taskType || "").toLowerCase().includes("visit")) {
-          const visitAssess = buildVisitAssessmentFromDictation(transcript);
-          outText = patchVisitAssessmentInTemplate(outText, visitAssess);
-        }
-
-        if ((taskType || "").toLowerCase().includes("evaluation")) {
-          const vitals = extractVitalsFromText(transcript);
-          outText = patchVitalsInTemplate(outText, vitals);
-
-          const evalSummary = buildEvalAssessmentSummaryFromDictation(transcript);
-          outText = patchEvalAssessmentSummary(outText, evalSummary);
-        }
-      }
-
-      el("aiNotes").value = sanitizeNotes(outText);
-      setBadge("Ready", "ok");
-      setStatus("Audio transcription + conversion completed. Review AI Notes, then click Run Automation.");
-    } catch (e) {
-      setBadge("Audio convert failed", "bad");
-      setStatus(`Audio convert failed:\n${e?.message || e}\n\n${JSON.stringify(e?.body || {}, null, 2)}`);
-    } finally {
-      el("btnConvertAudio").disabled = false;
-    }
-  }
-
-  function ensureAudioAndStopControls() {
-    // Try to place controls near existing dictation controls (best-effort).
-    const anchor =
-      el("dictationNotes")?.closest(".card") ||
-      el("dictationNotes")?.parentElement ||
-      el("btnConvert")?.parentElement ||
-      document.body;
-
-    // Audio input + button
-    if (!el("audioFile")) {
-      const wrap = document.createElement("div");
-      wrap.style.marginTop = "10px";
-
-      const label = document.createElement("div");
-      label.textContent = "Voice memo (.m4a) → Template:";
-      label.style.fontWeight = "600";
-      label.style.marginBottom = "6px";
-
-      const input = document.createElement("input");
-      input.type = "file";
-      input.id = "audioFile";
-      input.accept = "audio/*,.m4a";
-
-      const btn = document.createElement("button");
-      btn.id = "btnConvertAudio";
-      btn.type = "button";
-      btn.textContent = "Convert Audio";
-      btn.style.marginLeft = "8px";
-
-      wrap.appendChild(label);
-      wrap.appendChild(input);
-      wrap.appendChild(btn);
-
-      anchor.appendChild(wrap);
-    }
-
-    // Stop button
-    if (!el("btnStop")) {
-      const btnRun = el("btnRun");
-      const btn = document.createElement("button");
-      btn.id = "btnStop";
-      btn.type = "button";
-      btn.textContent = "Stop";
-      btn.style.marginLeft = "8px";
-      if (btnRun && btnRun.parentElement) btnRun.parentElement.appendChild(btn);
-      else anchor.appendChild(btn);
-    }
-  }
-
     try {
       el("btnConvertImage").disabled = true;
       setBadge("Converting…", "warn");
@@ -1217,33 +1219,25 @@ Effective Date: `
       setStatus("Cleared saved Kinnser credentials.");
     } catch {}
   }
-  
+  ensureStopButton();
+  ensureAudioControls();
   initTemplates();
   loadSavedCreds();
+  resumeExistingJobIfAny();
   
   if (el("btnSaveCreds")) el("btnSaveCreds").addEventListener("click", saveCreds);
   if (el("btnClearCreds")) el("btnClearCreds").addEventListener("click", clearCreds);
   
   el("btnHealth").addEventListener("click", testHealth);
-  // Resume polling after navigation / phone sleep
-  (function resumePersistedJob() {
-    const stored = getPersistedJobId();
-    if (!stored) return;
-    activeJobId = stored;
-    setBadge("Resuming…", "warn");
-    setStatus(`Resuming job polling...\njobId: ${activeJobId}`);
-    pollJob(activeJobId);
-  })();
-
   el("btnRun").addEventListener("click", runAutomation);
   el("btnClear").addEventListener("click", clearForm);
   
   if (el("btnConvert")) el("btnConvert").addEventListener("click", convertDictation);
   if (el("btnConvertImage")) el("btnConvertImage").addEventListener("click", convertImage);
-  ensureAudioAndStopControls();
   if (el("btnConvertAudio")) el("btnConvertAudio").addEventListener("click", convertAudio);
   if (el("btnStop")) el("btnStop").addEventListener("click", stopJob);
-el("kinnserPassword").addEventListener("keydown", (e) => {
+  
+  el("kinnserPassword").addEventListener("keydown", (e) => {
     if (e.key === "Enter") runAutomation();
   });
 })();
