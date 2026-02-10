@@ -380,7 +380,7 @@ function extractEvalPmh(dictation = "") {
   
   // Prefer explicit "PMH ..." line
   let pmh =
-  (d.match(/\bPMH\s*(?:consists of|include[s]?|significant for)?\s*[:\-]?\s*([^\n\r.]+)/i)?.[1] || "").trim();
+  (d.match(/\b(?:PMH|medical\s+history|history)\s*(?:consists\s+of|include[s]?|significant\s+for)?\s*[:\-]?\s*([^\n\r.]+)/i)?.[1] || "").trim();
   
   // If not found, pull from a demographic sentence like "Pt is a 78 y/o male presents with PMH consist of HTN..."
   if (!pmh) {
@@ -645,11 +645,15 @@ function patchEvalAssessmentSummary(templateTextRaw = "", summaryTextRaw = "") {
       setStatus("Converting dictation → selected template…");
       
       const taskType = (el("taskType")?.value || "").trim();
+      const tt = (taskType || "").toLowerCase();
+      const isVisitLike = tt.includes("visit");
+      const isEvalLike = tt.includes("evaluation") || tt.includes("eval") || tt.includes("soc") || tt.includes("oasis") || tt.includes("start of care") || tt.includes("recert") || tt.includes("re-eval") || tt.includes("reeval") || tt.includes("re-evaluation") || tt.includes("discharge") || tt.includes("dco");
+
       const templateKey = (el("templateKey")?.value || "").trim();
       
       let templateText = "";
       if (templateKey && TEMPLATES[templateKey]) templateText = TEMPLATES[templateKey];
-      else if ((taskType || "").toLowerCase().includes("evaluation") && TEMPLATES.pt_eval_default) templateText = TEMPLATES.pt_eval_default;
+      else if (isEvalLike && TEMPLATES.pt_eval_default) templateText = TEMPLATES.pt_eval_default;
       else templateText = TEMPLATES.pt_visit_default || "";
       
       const resp = await httpJson("/convert-dictation", {
@@ -664,13 +668,19 @@ function patchEvalAssessmentSummary(templateTextRaw = "", summaryTextRaw = "") {
       outText = patchSubjectiveInTemplate(outText, subjFromDictation);
       
       // Pt Visit ONLY: patch Assessment
-      if ((taskType || "").toLowerCase().includes("visit")) {
+      if (isVisitLike) {
         const visitAssess = buildVisitAssessmentFromDictation(dictation);
         outText = patchVisitAssessmentInTemplate(outText, visitAssess);
       }
       
-      // PT Evaluation ONLY: patch vitals + Assessment Summary strict 6 sentences
-      if ((taskType || "").toLowerCase().includes("evaluation")) {
+      
+      // Non-visit: ensure Assessment Summary is generated for other task types too
+      if (!isVisitLike && !isEvalLike) {
+        const summary = buildEvalAssessmentSummaryFromDictation(dictation);
+        outText = patchEvalAssessmentSummary(outText, summary);
+      }
+// PT Evaluation ONLY: patch vitals + Assessment Summary strict 6 sentences
+      if (isEvalLike) {
         const vitals = extractVitalsFromText(dictation);
         outText = patchVitalsInTemplate(outText, vitals);
         
@@ -714,11 +724,15 @@ function patchEvalAssessmentSummary(templateTextRaw = "", summaryTextRaw = "") {
       const imageDataUrl = await fileToDataUrl(file);
       
       const taskType = (el("taskType")?.value || "").trim();
+      const tt = (taskType || "").toLowerCase();
+      const isVisitLike = tt.includes("visit");
+      const isEvalLike = tt.includes("evaluation") || tt.includes("eval") || tt.includes("soc") || tt.includes("oasis") || tt.includes("start of care") || tt.includes("recert") || tt.includes("re-eval") || tt.includes("reeval") || tt.includes("re-evaluation") || tt.includes("discharge") || tt.includes("dco");
+
       const templateKey = (el("templateKey")?.value || "").trim();
       
       let templateText = "";
       if (templateKey && TEMPLATES[templateKey]) templateText = TEMPLATES[templateKey];
-      else if ((taskType || "").toLowerCase().includes("evaluation") && TEMPLATES.pt_eval_default) templateText = TEMPLATES.pt_eval_default;
+      else if (isEvalLike && TEMPLATES.pt_eval_default) templateText = TEMPLATES.pt_eval_default;
       else templateText = TEMPLATES.pt_visit_default || "";
       
       const resp = await httpJson("/convert-image", {
@@ -1207,9 +1221,10 @@ Effective Date: `
   if (el("btnConvert")) el("btnConvert").addEventListener("click", convertDictation);
   if (el("btnConvertImage")) el("btnConvertImage").addEventListener("click", convertImage);
 
-  // Voice memo/audio buttons
-  if (el("btnTranscribeAudio")) el("btnTranscribeAudio").addEventListener("click", () => transcribeAudio(false));
-  if (el("btnAudioToTemplate")) el("btnAudioToTemplate").addEventListener("click", () => transcribeAudio(true));
+  // Voice Memo / Audio buttons
+  if (el("btnTranscribeAudio")) el("btnTranscribeAudio").addEventListener("click", () => transcribeAudioToDictation(false));
+  if (el("btnAudioToTemplate")) el("btnAudioToTemplate").addEventListener("click", () => transcribeAudioToDictation(true));
+
   
   el("kinnserPassword").addEventListener("keydown", (e) => {
     if (e.key === "Enter") runAutomation();
