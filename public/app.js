@@ -404,79 +404,120 @@ function extractEvalPmh(dictation = "") {
   return normEvalPmhList(pmh);
 }
 
+
 function buildEvalAssessmentSummaryFromDictation(dictationRaw = "") {
   const d0 = normalizeClinicalTerms(String(dictationRaw || "").replace(/\r\n/g, "\n"));
   const low = d0.toLowerCase();
-  
+
   const { ageSex } = extractEvalDemo(d0);
   const pmh = extractEvalPmh(d0);
-  
-  // Cue detection (no invented numbers)
-  const bedbound = /\bbed\s*bound|bedbound\b/i.test(low);
-  const unableAmb = /\bunable\s+to\s+(ambulat|walk)\b/i.test(low);
-  const fearFall = /\bfear\s+of\s+fall|fearful\s+of\s+fall/i.test(low);
+
+  // --- Key cue extraction (ONLY what is explicitly in dictation; no invented metrics) ---
+  const painLBP = /\b(lbp|low back pain|lower back pain)\b/i.test(low);
+  const chronic = /\bchronic\b/i.test(low);
+  const weakness = /\bweak|weakness|decondition|atrophy\b/i.test(low);
   const unsteady = /\bunsteady\b/i.test(low);
-  const impairedBalance = /\bimpaired\s+balance|poor\s+balance|balance\s+deficit/i.test(low);
-  const weakness = /\bweak|weakness|decondition/i.test(low);
-  const painLBP = /\b(lbp|low back pain)\b/i.test(low);
-  const radic = /\bradicul|radiat(ing|es|ed)?\b|numb|tingl/i.test(low);
-  const transfers = /\btransfer|sit\s*to\s*stand|bed\s*mobility|rolling|sup\s*to\s*sit/i.test(low);
-  const gait = /\bgait|ambulat|walk|fww|walker|cane|ad\b/i.test(low);
-  
-  // Sentence 1: STRICT format (demo + PMH)
-  const s1BaseAge = ageSex ? `${ageSex}` : "";
+  const impairedBalance = /\bimpaired\s+balance|poor\s+balance|balance\s+deficit\b/i.test(low);
+  const fallRisk = /\bhigh\s+fall\s+risk|fall\s+risk\b/i.test(low) || (unsteady && impairedBalance);
+
+  // Assistance level
+  let assist = "";
+  if (/\bstandby\s+assist\b/i.test(low) || /\bsba\b/i.test(low)) assist = "SBA";
+  else if (/\bcontact\s+guard\b/i.test(low) || /\bcga\b/i.test(low)) assist = "CGA";
+  else if (/\bmin(?:imal)?\s+assist\b/i.test(low) || /\bmina\b/i.test(low)) assist = "MinA";
+  else if (/\bmod(?:erate)?\s+assist\b/i.test(low) || /\bmoda\b/i.test(low)) assist = "ModA";
+  else if (/\bmax(?:imal)?\s+assist\b/i.test(low) || /\bmaxa\b/i.test(low)) assist = "MaxA";
+
+  // AD
+  let ad = "";
+  if (/\bspc\b/i.test(low) || /\bsingle\s+point\s+cane\b/i.test(low)) ad = "SPC";
+  else if (/\bfww\b/i.test(low) || /\bfront\s+wheeled\s+walker\b/i.test(low)) ad = "FWW";
+  else if (/\b4ww\b/i.test(low) || /\brollator\b/i.test(low)) ad = "4WW";
+  else if (/\bcane\b/i.test(low)) ad = "cane";
+  else if (/\bwalker\b/i.test(low)) ad = "walker";
+
+  // Distance (ft)
+  let gaitDist = "";
+  const distMatch = d0.match(/\b(\d{1,4})\s*(?:feet|ft)\b/i);
+  if (distMatch) gaitDist = `${distMatch[1]} ft`;
+
+  // Fall / injury context
+  const hasFall = /\b(fall|tripp(?:ed|ing))\b/i.test(low);
+  const weeksMatch = d0.match(/\b(\d+)\s*week(?:s)?\s*ago\b/i);
+  const daysMatch = d0.match(/\b(\d+)\s*day(?:s)?\s*ago\b/i);
+  const xrayNeg = /\bnegative\s+for\s+x-?ray|\bx-?ray\s+negative\b/i.test(low);
+  const agreeable = /\bagreeable\s+to\s+pt\b/i.test(low) || /\bagrees?\s+to\s+pt\b/i.test(low);
+
+  // Sentence 1: STRICT FORMAT (demo + PMH)
+  const s1BaseAge = ageSex ? `${ageSex}` : "adult";
   const s1BasePmh = pmh ? `${pmh}` : "multiple comorbidities";
-  const s1 = `Pt is a ${s1BaseAge || "adult"} presents with PMH consist of ${s1BasePmh}.`
-  .replace(/\s+/g, " ")
-  .replace(/\bPt\s+is\s+a\s+adult\s+presents\b/i, "Pt presents");
-  
-  // Sentence 2: STRICT eval services (your exact line)
+  let s1 = `Pt is a ${s1BaseAge} presents with PMH consist of ${s1BasePmh}.`;
+  s1 = s1.replace(/\s+/g, " ").replace(/\bPt\s+is\s+a\s+adult\s+presents\b/i, "Pt presents");
+
+  // Sentence 2: your required eval services line (keep unchanged)
   const s2 =
-  "Pt is seen for PT initial evaluation, home assessment, DME assessment, HEP training/education, fall safety precautions, fall prevention, proper use of AD, education on pain/edema management, and PT POC/goal planning to return to PLOF.";
-  
-  // Sentence 3: Objective deficits (more “objective-sounding” based on cues, no invented measures)
-  let s3 = "Pt demonstrates gross strength deficit with difficulty with bed mobility, transfers, gait, and balance deficits leading to high fall risk.";
-  if (bedbound || unableAmb) {
-    s3 = "Pt demonstrates gross strength deficit with limited upright tolerance and difficulty with bed mobility and transfers; gait is currently unsafe/limited, contributing to high fall risk once mobility is attempted.";
-  } else if (fearFall && gait) {
-    s3 = "Pt demonstrates gross strength deficit with difficulty with transfers and gait due to fear of falling and impaired balance, contributing to high fall risk.";
-  } else if ((unsteady || impairedBalance) && gait) {
-    s3 = "Pt demonstrates gross strength deficit with difficulty with transfers and gait due to unsteady gait pattern and impaired balance reactions, contributing to high fall risk.";
-  } else if (painLBP && radic) {
-    s3 = "Pt demonstrates gross strength deficit with difficulty with transfers and gait due to chronic LBP with radiating symptoms, contributing to high fall risk.";
+    "Pt is seen for PT initial evaluation, home assessment, DME assessment, HEP training/education, fall safety precautions, fall prevention, proper use of AD, education on pain/edema management, and PT POC/goal planning to return to PLOF.";
+
+  // Sentence 3: Impairments + gait details (use dictation details when present)
+  let gaitDetail = "";
+  if (assist || gaitDist || ad) {
+    const parts = [];
+    if (assist) parts.push(assist);
+    if (gaitDist) parts.push(gaitDist);
+    if (ad) parts.push(`using ${ad}`);
+    gaitDetail = ` with ${parts.join(" ")} for gait/ambulation`;
   }
-  
-  // Sentence 4: Weakness + balance justification (your strict sentence, with slight objective add-ons)
+
+  let s3 = "Pt demonstrates gross strength deficit with difficulty with transfers and gait due to unsteady gait pattern and impaired balance reactions, contributing to high fall risk.";
+  if (painLBP && weakness && (unsteady || impairedBalance)) {
+    s3 = `Pt demonstrates gross strength deficit with ${chronic ? "chronic " : ""}${painLBP ? "LBP" : "pain"} and unsteady gait pattern with impaired balance reactions${gaitDetail}, contributing to high fall risk.`;
+  } else if ((unsteady || impairedBalance) && weakness) {
+    s3 = `Pt demonstrates gross strength deficit with unsteady gait pattern and impaired balance reactions${gaitDetail}, contributing to high fall risk.`;
+  } else if (weakness && gaitDetail) {
+    s3 = `Pt demonstrates gross strength deficit limiting functional mobility${gaitDetail}, contributing to increased fall risk.`;
+  } else if (painLBP && gaitDetail) {
+    s3 = `Pt demonstrates ${chronic ? "chronic " : ""}LBP with difficulty with transfers and gait${gaitDetail}, contributing to increased fall risk.`;
+  }
+
+  // Sentence 4: Problem/benefit line (include fall/injury context if stated)
+  let fallClause = "";
+  if (hasFall) {
+    const when = weeksMatch ? `${weeksMatch[1]} week(s) ago` : (daysMatch ? `${daysMatch[1]} day(s) ago` : "");
+    fallClause = when ? ` Pt reports s/p fall/trip ${when}.` : " Pt reports s/p recent fall/trip.";
+    if (xrayNeg) fallClause += " X-ray is negative.";
+  }
+  if (agreeable) fallClause += " Pt is agreeable to PT treatment.";
+
   let s4 = "Pt presents with weakness and impaired balance and will benefit from skilled HH PT to decrease fall/injury risk.";
-  if (fearFall) s4 = "Pt presents with weakness, impaired balance, and fear of falling and will benefit from skilled HH PT to decrease fall/injury risk.";
-  if (bedbound) s4 = "Pt presents with weakness and impaired balance with limited upright tolerance and will benefit from skilled HH PT to decrease fall/injury risk and reduce risk of further decline.";
-  
-  // Sentence 5: Skilled need (your strict sentence, with objective-sounding skilled elements)
-  let s5 =
-  "Pt is a good candidate and will benefit from skilled HH PT to address limitations and impairments as mentioned in order to improve overall functional mobility status, decrease fall risk, and improve QoL.";
-  // Add skilled qualifiers (still not inventing metrics)
-  const needsVC = (transfers || gait || impairedBalance || fearFall || unsteady);
-  if (needsVC) {
-    s5 =
-    "Pt is a good candidate and will benefit from skilled HH PT to address limitations and impairments as mentioned, including progression of task-specific training with ongoing VC/TC for safety and sequencing, in order to improve overall functional mobility status, decrease fall risk, and improve QoL.";
+  if (painLBP && weakness) {
+    s4 = "Pt presents with chronic LBP with weakness and impaired balance and will benefit from skilled HH PT to decrease fall/injury risk.";
   }
-  
-  // Sentence 6: STRICT medical necessity line (fixes your “Pt Continued…” issue)
+  s4 = s4.replace(/\.\s*$/, ".") + fallClause;
+
+  // Sentence 5: keep your required skilled-need line (VC/TC)
+  const s5 =
+    "Pt is a good candidate and will benefit from skilled HH PT to address limitations and impairments as mentioned, including progression of task-specific training with ongoing VC/TC for safety and sequencing, in order to improve overall functional mobility status, decrease fall risk, and improve QoL.";
+
+  // Sentence 6: medical necessity (required)
   const s6 = "Continued skilled HH PT remains medically necessary.";
-  
-  // Final clean-up
-  const clean = (s) => {
-    let t = String(s || "").trim().replace(/\s+/g, " ");
-    t = t.replace(/\bPt\s+Pt\b/ig, "Pt").replace(/\.\.+/g, ".");
+
+  const clean = (x) => {
+    let t = String(x || "").trim().replace(/\s+/g, " ");
+    // Ensure period
     if (!/[.!?]$/.test(t)) t += ".";
     return t;
   };
-  
-  // IMPORTANT: exactly 6 sentences, in your format.
-  return [clean(s1), clean(s2), clean(s3), clean(s4), clean(s5), clean(s6)].join(" ");
+
+  let out = [clean(s1), clean(s2), clean(s3), clean(s4), clean(s5), clean(s6)].join(" ");
+
+  // Fix common duplication artifacts
+  out = out.replace(/\bconsist\s+of\s+consist\s+of\b/ig, "consist of");
+  out = out.replace(/\bPMH\s+consist\s+of\s+consist\s+of\b/ig, "PMH consist of");
+  out = out.replace(/\bPt\s+Pt\b/g, "Pt");
+
+  return out;
 }
 
-// Replace/patch the "Assessment Summary:" block in eval templates.
 function patchEvalAssessmentSummary(templateTextRaw = "", summaryTextRaw = "") {
   const templateText = String(templateTextRaw || "");
   const summary = String(summaryTextRaw || "").trim();
@@ -1127,11 +1168,17 @@ Effective Date: `
   }
 
   async function fileToBase64(file) {
-    const buf = await file.arrayBuffer();
-    const bytes = new Uint8Array(buf);
-    let bin = "";
-    for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
-    return btoa(bin);
+    // Use FileReader DataURL to avoid btoa() issues with larger binaries (common with .m4a).
+    return await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onerror = () => reject(reader.error || new Error("FileReader failed"));
+      reader.onload = () => {
+        const dataUrl = String(reader.result || "");
+        const b64 = dataUrl.includes(",") ? dataUrl.split(",")[1] : "";
+        resolve(b64);
+      };
+      reader.readAsDataURL(file);
+    });
   }
 
   async function transcribeUploadedAudio() {
@@ -1167,8 +1214,7 @@ Effective Date: `
       setBadge("Transcribed", "ok");
       return text;
     } catch (e) {
-      const msg = (e && (e.body && (e.body.error || e.body.message))) || (e && e.message) || String(e);
-      if (st) st.textContent = `Transcription failed: ${msg}`;
+      if (st) st.textContent = "Transcription failed.";
       setBadge("Transcribe failed", "bad");
       setStatus(`Transcribe failed:\n${e?.message || e}\n${e?.body ? JSON.stringify(e.body, null, 2) : ""}`);
       return "";
