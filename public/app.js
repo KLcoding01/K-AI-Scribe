@@ -726,11 +726,11 @@ function patchEvalAssessmentSummary(templateTextRaw = "", summaryTextRaw = "") {
 Pt reports no new complaints and agrees to PT tx today.
 
 Vital Signs
-Temp: 
+Temp:
 Temp Type: Temporal
-BP:  
-Heart Rate: 
-Respirations: 
+BP:
+Heart Rate:
+Respirations:
 Comments: Pt currently symptom-free with no adverse reactions noted. Cleared to continue with PT as planned.
 
 Pain Assessment
@@ -789,7 +789,7 @@ Patient Goals: To improve mobility, strength, activity tolerance, decrease fall 
 Vital Signs
 Temp: 97.6
 Temp Type: Temporal
-BP:  
+BP: 
 Heart Rate: 
 Respirations: 18
 Comments: Pt is currently symptom-free and demonstrates no adverse reactions. Cleared to continue with physical therapy as planned. 
@@ -797,10 +797,10 @@ Comments: Pt is currently symptom-free and demonstrates no adverse reactions. Cl
 Subjective: Pt agrees to PT evaluation.
 
 Pain: Yes/No
-Primary Location Other: 
-Intensity (0–10): 
-Increased by: 
-Relieved by: 
+Primary Location Other:
+Intensity (0–10):
+Increased by:
+Relieved by:
 Interferes with:
 
 Living Situation
@@ -823,22 +823,22 @@ Endurance: Poor
 Posture: Forward head lean, slouch posture, rounded shoulders, increased mid T-spine kyphosis
 
 Functional Status
-Bed Mobility: 
+Bed Mobility:
 Bed Mobility AD:
-Transfers: 
+Transfers:
 Transfers AD:
 
 Gait
 Level Surfaces
-Gait: Unable
+Gait:
 Gait Distance:
 Gait AD:
 
-Uneven Surfaces: 
+Uneven Surfaces:
 Uneven Surfaces Distance:
 Uneven Surfaces AD:
 
-Stairs: 
+Stairs:
 Stairs Distance:
 Stairs AD:
 
@@ -871,7 +871,7 @@ Effective Date: `
     pt_discharge_default: `Vital Signs
 Temp:
 Temp Type: Temporal
-BP: 
+BP:
 Heart Rate:
 Respirations: 18
 Comments: Pt is currently symptom-free and demonstrates no adverse reactions. Cleared to continue with physical therapy as planned.
@@ -933,7 +933,7 @@ Pt agrees to PT Re-evaluation.
 Vital Signs
 Temp:
 Temp Type: Temporal
-BP: 
+BP:
 Heart Rate:
 Respirations: 18
 Comments: Pt is currently symptom-free and demonstrates no adverse reactions. Cleared to continue with physical therapy as planned.
