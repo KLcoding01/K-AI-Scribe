@@ -245,13 +245,13 @@ const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
 
 function normalizeClinicalTerms(s = "") {
   return String(s || "")
-    .replace(/\bpatient\b/ig, "Pt")
-    .replace(/\blow\s*back\s*pain\b/ig, "LBP")
-    .replace(/\bchronic\s*low\s*back\s*pain\b/ig, "chronic LBP")
-    .replace(/\bprostate\s*cancer\b/ig, "prostate cx")
-    .replace(/\bradiation\s*therapy\b/ig, "radiation tx")
-    .replace(/\s+/g, " ")
-    .trim();
+  .replace(/\bpatient\b/ig, "Pt")
+  .replace(/\blow\s*back\s*pain\b/ig, "LBP")
+  .replace(/\bchronic\s*low\s*back\s*pain\b/ig, "chronic LBP")
+  .replace(/\bprostate\s*cancer\b/ig, "prostate cx")
+  .replace(/\bradiation\s*therapy\b/ig, "radiation tx")
+  .replace(/\s+/g, " ")
+  .trim();
 }
 
 function buildVisitAssessmentFromDictation(dictationRaw = "") {
@@ -267,14 +267,14 @@ function buildVisitAssessmentFromDictation(dictationRaw = "") {
   const hasBalance = /\b(balance|postur|stability)\b/i.test(low);
   const hasPainMgmt = /\b(pain\s*management|pain)\b/i.test(low);
   const hasCancer = /\b(prostate\s*cx|prostate|cancer|radiation)\b/i.test(low);
-
+  
   // --- Sentence 1: Tolerance ---
   const s1 = pick([
     "Pt demonstrates fair tolerance to today’s skilled HH PT visit with intermittent rest breaks required for energy conservation.",
     "Today's skilled session was tolerated fairly well, though rest breaks were utilized to monitor symptoms and conserve energy.",
     "Pt tolerated the PT intervention with fair endurance, requiring periodic seated rest to manage fatigue and monitor vitals."
   ]);
-
+  
   // --- Sentence 2: Treatment Emphasis ---
   const s2 = (() => {
     const parts = [];
@@ -286,13 +286,13 @@ function buildVisitAssessmentFromDictation(dictationRaw = "") {
     
     if (hasGait) parts.push(pick(["gait training to improve ambulation safety", "skilled gait mechanics training"]));
     else parts.push("upright tolerance and mobility training");
-
+    
     const bridge = pick(["Tx focused on", "Session emphasized", "Intervention centered on"]);
     const cueing = pick(["VC/TC provided to improve mechanics", "tactile and verbal cues for better sequencing", "skilled instruction for posture and safety"]);
     
     return `${bridge} ${parts.join(", ")}, with ${cueing}.`;
   })();
-
+  
   // --- Sentence 3: Deficits & Progress ---
   const s3 = (() => {
     const deficits = [];
@@ -305,7 +305,7 @@ function buildVisitAssessmentFromDictation(dictationRaw = "") {
     
     return `${progress}; however, ${defText} continue to limit task carryover and increase fall risk.`;
   })();
-
+  
   // --- Sentence 4: Specific Context (Cancer/Safety) ---
   const s4 = (() => {
     const safetyTools = pick(["pacing and AD management", "environmental scanning and energy conservation"]);
@@ -314,7 +314,7 @@ function buildVisitAssessmentFromDictation(dictationRaw = "") {
     }
     return `Safety training emphasized ${safetyTools} to minimize fall risk within the home environment.`;
   })();
-
+  
   // --- Sentence 5: Skilled Necessity ---
   const s5 = (() => {
     const risk = hasFallRisk ? "high fall risk" : "increased fall risk";
@@ -325,14 +325,14 @@ function buildVisitAssessmentFromDictation(dictationRaw = "") {
     ]);
     return `Pt continues to require skilled PT for ${skillReason} due to ${risk} and variable tolerance.`;
   })();
-
+  
   // --- Sentence 6: Conclusion ---
   const s6 = pick([
     "Continued skilled PT is medically necessary to maximize independence and prevent hospitalization.",
     "Ongoing skilled intervention remains indicated to progress toward goals and prevent functional decline.",
     "Medically necessary PT continues to be indicated for safety and goal attainment."
   ]);
-
+  
   const clean = (s) => String(s || "").trim().replace(/\s+/g, " ");
   
   // Combine all parts
@@ -369,25 +369,54 @@ function normEvalPmhList(pmh = "") {
 
 function extractEvalDemo(dictation = "") {
   const d = String(dictation || "");
-  // Common patterns: "78 y/o male", "78 yo male", "78 y.o. male"
-  const m = d.match(/\b(\d{1,3})\s*(?:y\/?o|yo|y\.o\.)\s*(male|female)\b/i);
-  if (!m) return { ageSex: "" };
-  return { ageSex: `${m[1]} y/o ${m[2].toLowerCase()}` };
+  const hy = "[\\-\\u2010\\u2011\\u2012\\u2013\\u2014\\u2015\\u2212]";
+  // Supports:
+  // - "68 y/o female"
+  // - "68-year-old female" (and iOS hyphen variants)
+  // - "68 year old female"
+  // - "female 68-year-old"
+  let m =
+    d.match(new RegExp(`\\b(\\d{1,3})\\s*(?:y\\/?o|yo|y\\.o\\.)\\s*(male|female)\\b`, "i")) ||
+    d.match(new RegExp(`\\b(\\d{1,3})\\s*(?:${hy}|\\s)?\\s*year\\s*(?:${hy}|\\s)?\\s*old\\s*(male|female|woman|man)\\b`, "i")) ||
+    d.match(new RegExp(`\\b(male|female|woman|man)\\s*(?:,|:)??\\s*(\\d{1,3})\\s*(?:${hy}|\\s)?\\s*year\\s*(?:${hy}|\\s)?\\s*old\\b`, "i"));
+
+  let age = "", gender = "";
+  if (m) {
+    if (/^\\d/.test(m[1])) { age = m[1]; gender = m[2]; }
+    else { gender = m[1]; age = m[2]; }
+  }
+  gender = String(gender || "").toLowerCase();
+  if (gender === "woman") gender = "female";
+  if (gender === "man") gender = "male";
+  age = age ? String(age).trim() : "";
+
+  const ageSex = (age && gender) ? `${age} y/o ${gender}` : "";
+  return { age, gender, ageSex };
 }
 
 function extractEvalPmh(dictation = "") {
   const d = String(dictation || "");
-  
-  // Prefer explicit "PMH ..." line
+
+  // Capture PMH / medical history / history lists up to a period/newline.
   let pmh =
-  (d.match(/\bPMH\s*(?:consists of|include[s]?|significant for)?\s*[:\-]?\s*([^\n\r.]+)/i)?.[1] || "").trim();
-  
-  // If not found, pull from a demographic sentence like "Pt is a 78 y/o male presents with PMH consist of HTN..."
+    (d.match(/\bPMH\b\s*(?:consist(?:s)?\s+of|consists\s+of|include(?:s)?|significant\s+for)?\s*[:\-]?\s*([^\n\r\.]+)/i)?.[1] || "").trim();
+
   if (!pmh) {
-    pmh = (d.match(/\bpresents?\s+with\s+PMH\s*(?:consists of|include[s]?|significant for)?\s*([^\n\r.]+)/i)?.[1] || "").trim();
+    pmh =
+      (d.match(/\bmedical\s+history\b\s*(?:consist(?:s)?\s+of|consists\s+of|include(?:s)?|significant\s+for)?\s*[:\-]?\s*([^\n\r\.]+)/i)?.[1] || "").trim();
   }
-  
-  return normEvalPmhList(pmh);
+
+  if (!pmh) {
+    pmh =
+      (d.match(/\bhistory\b\s*(?:consist(?:s)?\s+of|consists\s+of|include(?:s)?|significant\s+for)?\s*[:\-]?\s*([^\n\r\.]+)/i)?.[1] || "").trim();
+  }
+
+  pmh = normEvalPmhList(pmh)
+    .replace(/\bconsist\s+of\s+consist\s+of\b/ig, "consist of")
+    .replace(/[\s,;]+$/,"")
+    .trim();
+
+  return pmh;
 }
 
 function buildEvalAssessmentSummaryFromDictation(dictationRaw = "") {
@@ -409,13 +438,15 @@ function buildEvalAssessmentSummaryFromDictation(dictationRaw = "") {
   const transfers = /\btransfer|sit\s*to\s*stand|bed\s*mobility|rolling|sup\s*to\s*sit/i.test(low);
   const gait = /\bgait|ambulat|walk|fww|walker|cane|ad\b/i.test(low);
   
-  // Sentence 1: STRICT format (demo + PMH)
-  const s1BaseAge = ageSex ? `${ageSex}` : "";
-  const s1BasePmh = pmh ? `${pmh}` : "multiple comorbidities";
-  const s1 = `Pt is a ${s1BaseAge || "adult"} presents with PMH consist of ${s1BasePmh}.`
-  .replace(/\s+/g, " ")
-  .replace(/\bPt\s+is\s+a\s+adult\s+presents\b/i, "Pt presents");
-  
+  // Sentence 1: STRICT format (age + gender + PMH)
+  const ageTok = ageSex ? ageSex.split(" ")[0] : "__";
+  const genderTok = ageSex ? ageSex.split(" ").slice(-1)[0] : "__";
+  const pmhTok = pmh ? pmh : "__";
+
+  // STRICT opener required by your format:
+  // "Pt is a __ y/o __ who presents with PMH consist of __."
+  const s1 = `Pt is a ${ageTok} y/o ${genderTok} who presents with PMH consist of ${pmhTok}.`;
+
   // Sentence 2: STRICT eval services (your exact line)
   const s2 =
   "Pt is seen for PT initial evaluation, home assessment, DME assessment, HEP training/education, fall safety precautions, fall prevention, proper use of AD, education on pain/edema management, and PT POC/goal planning to return to PLOF.";
@@ -1079,25 +1110,25 @@ Effective Date: `
     } catch {}
   }
   
-
-
+  
+  
   // -------------------------
   // Voice Memo / Audio Upload → Transcribe → Dictation → Convert to Template
   (function ensureVoiceMemoUI() {
     try {
       // If already present, don't duplicate
       if (document.getElementById("voiceMemoBox")) return;
-
+      
       const dictBox = document.getElementById("dictationNotes");
       const mount = dictBox ? (dictBox.closest(".card") || dictBox.parentElement || document.body) : document.body;
-
+      
       const box = document.createElement("div");
       box.id = "voiceMemoBox";
       box.style.margin = "12px 0";
       box.style.padding = "10px";
       box.style.border = "1px solid #ddd";
       box.style.borderRadius = "10px";
-
+      
       box.innerHTML = `
         <div style="font-weight:600;margin-bottom:8px;">Voice Memo / Audio</div>
         <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
@@ -1107,17 +1138,17 @@ Effective Date: `
           <span id="audioMsg" style="opacity:.85;"></span>
         </div>
       `;
-
+      
       // Insert above dictation box if possible
       if (dictBox && dictBox.parentElement) dictBox.parentElement.insertBefore(box, dictBox);
       else mount.prepend(box);
-
+      
     } catch (e) {
       // fail-soft
       console.warn("voice memo UI inject failed", e);
     }
   })();
-
+  
   async function fileToBase64(file) {
     const dataUrl = await new Promise((resolve, reject) => {
       const r = new FileReader();
@@ -1128,7 +1159,7 @@ Effective Date: `
     // strip prefix
     return dataUrl.replace(/^data:.*;base64,/, "");
   }
-
+  
   function inferMimeFromName(file) {
     const name = String(file?.name || "").toLowerCase();
     if (file?.type) return file.type;
@@ -1138,7 +1169,7 @@ Effective Date: `
     if (name.endsWith(".webm")) return "audio/webm";
     return "audio/mp4";
   }
-
+  
   async function transcribeAudioToDictation(alsoConvert = false) {
     const input = document.getElementById("audioUpload");
     const msg = document.getElementById("audioMsg");
@@ -1149,15 +1180,15 @@ Effective Date: `
       if (msg) msg.textContent = "No file selected.";
       return;
     }
-
+    
     try {
       setBadge("Transcribing…", "warn");
       setStatus("Uploading audio for transcription…");
       if (msg) msg.textContent = "Uploading…";
-
+      
       const b64 = await fileToBase64(file);
       const mime = inferMimeFromName(file);
-
+      
       const resp = await httpJson("/transcribe-audio", {
         method: "POST",
         body: JSON.stringify({
@@ -1166,7 +1197,7 @@ Effective Date: `
           filename: file.name || ""
         }),
       });
-
+      
       const text = String(resp?.text || "").trim();
       if (!text) {
         setBadge("Transcribe failed", "bad");
@@ -1174,15 +1205,15 @@ Effective Date: `
         if (msg) msg.textContent = "Empty transcription.";
         return;
       }
-
+      
       // Append to dictation
       const cur = (el("dictationNotes")?.value || "").trim();
       el("dictationNotes").value = cur ? (cur + "\n" + text) : text;
-
+      
       setBadge("Transcribed", "ok");
       setStatus("Transcription inserted into Dictation.");
       if (msg) msg.textContent = "Done.";
-
+      
       if (alsoConvert) {
         await convertDictation();
       }
@@ -1193,7 +1224,7 @@ Effective Date: `
       if (msg) msg.textContent = "Failed.";
     }
   }
-
+  
   initTemplates();
   loadSavedCreds();
   
