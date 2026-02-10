@@ -135,7 +135,7 @@ function isDemographicsOrHistoryLine(s = "") {
           /\bpast\s*medical\b/.test(low) ||
           /\bmedical\s*history\b/.test(low) ||
           /\bmedical\s*(?:dx|diagnosis)\b/.test(low) ||
-          /\bpt\s+is\s+a\b/.test(low) ||\n          /\\bpatient\\s+is\\s+a\\b/.test(low) ||
+          /\bpt\s+is\s+a\b/.test(low) ||
           /\bpresents?\s+with\s+pmh\b/.test(low) ||
           /\bhtn\b|\bhld\b|\bdm2\b|\bdiabetes\b|\bhx\b|\bcancer\b|\bprostate\b/.test(low) && /\bpmh\b|\bhistory\b|\bdiagnosis\b/.test(low)
           );
@@ -331,9 +331,6 @@ function normEvalPmhList(pmh = "") {
   
   // Remove leading labels
   p = p.replace(/^\s*(pmh|past\s*medical\s*history)\s*[:\-]?\s*/i, "");
-  // Remove accidental lead-in phrases from extraction
-  p = p.replace(/^\s*(?:consist(?:s)?\s+of|include[s]?|significant\s+for)\s*[:\-]?\s*/i, "");
-  p = p.replace(/\bconsist\s+of\s+consist\s+of\b/ig, "consist of");
   
   // Normalize common items (light touch)
   p = p
@@ -356,16 +353,16 @@ function extractEvalDemo(dictation = "") {
 
   // Supports:
   // - "78 y/o male", "78 yo male", "78 y.o. male"
-  // - "78-year-old female", "78 year old female"
-  // - "78-year-old woman/man" (maps to female/male)
-  // - "female 78 y/o" (fallback)
+  // - "78-year-old female" (including iOS hyphens: \u2010\u2011\u2012\u2013\u2014\u2015\u2212)
+  // - "78 year old female"
+  // - "female 78 y/o" or "woman 78-year-old" (fallback)
   let age = "";
   let sex = "";
 
   // Pattern A: age then sex
   let m =
     d.match(/\b(\d{1,3})\s*(?:y\/?o|yo|y\.o\.)\s*(male|female)\b/i) ||
-    d.match(/\\b(\\d{1,3})\\s*(?:[\\-\\u2010\\u2011\\u2012\\u2013\\u2014\\u2015\\u2212]|\\s)?\\s*year\\s*(?:[\\-\\u2010\\u2011\\u2012\\u2013\\u2014\\u2015\\u2212]|\\s)?\\s*old\\s*(male|female|woman|man)\\b/i);
+    d.match(/\b(\d{1,3})\s*(?:[\-\u2010\u2011\u2012\u2013\u2014\u2015\u2212]|\s)?\s*year\s*(?:[\-\u2010\u2011\u2012\u2013\u2014\u2015\u2212]|\s)?\s*old\s*(male|female|woman|man)\b/i);
 
   if (m) {
     age = String(m[1] || "").trim();
@@ -374,7 +371,7 @@ function extractEvalDemo(dictation = "") {
     // Pattern B: sex then age
     m =
       d.match(/\b(male|female|woman|man)\s*(?:,|:)?\s*(\d{1,3})\s*(?:y\/?o|yo|y\.o\.)\b/i) ||
-      d.match(/\\b(male|female|woman|man)\\s*(?:,|:)?\\s*(\\d{1,3})\\s*(?:[\\-\\u2010\\u2011\\u2012\\u2013\\u2014\\u2015\\u2212]|\\s)?\\s*year\\s*(?:[\\-\\u2010\\u2011\\u2012\\u2013\\u2014\\u2015\\u2212]|\\s)?\\s*old\\b/i);
+      d.match(/\b(male|female|woman|man)\s*(?:,|:)?\s*(\d{1,3})\s*(?:[\-\u2010\u2011\u2012\u2013\u2014\u2015\u2212]|\s)?\s*year\s*(?:[\-\u2010\u2011\u2012\u2013\u2014\u2015\u2212]|\s)?\s*old\b/i);
 
     if (m) {
       sex = String(m[1] || "").trim().toLowerCase();
@@ -382,11 +379,9 @@ function extractEvalDemo(dictation = "") {
     }
   }
 
-  // Normalize sex tokens
   if (sex === "woman") sex = "female";
   if (sex === "man") sex = "male";
 
-  // Build "70 y/o female" / "70 y/o" / "female"
   const parts = [];
   if (age) parts.push(`${age} y/o`);
   if (sex) parts.push(sex);
@@ -431,9 +426,9 @@ function buildEvalAssessmentSummaryFromDictation(dictationRaw = "") {
   // Sentence 1: STRICT format (demo + PMH)
   const s1BaseAge = ageSex ? `${ageSex}` : "";
   const s1BasePmh = pmh ? `${pmh}` : "multiple comorbidities";
-  const s1 = `Pt is a ${s1BaseAge || "adult"} who presents with PMH consist of ${s1BasePmh}.`
+  const s1 = `Pt is a ${s1BaseAge || "adult"} presents with PMH consist of ${s1BasePmh}.`
   .replace(/\s+/g, " ")
-  .replace(/\bPt\s+is\s+a\s+adult\s+who\s+presents\b/i, "Pt presents");
+  .replace(/\bPt\s+is\s+a\s+adult\s+presents\b/i, "Pt presents");
   
   // Sentence 2: STRICT eval services (your exact line)
   const s2 =
@@ -478,12 +473,7 @@ function buildEvalAssessmentSummaryFromDictation(dictationRaw = "") {
   };
   
   // IMPORTANT: exactly 6 sentences, in your format.
-  let out = [clean(s1), clean(s2), clean(s3), clean(s4), clean(s5), clean(s6)].join(" ");
-  // Fix common duplication artifacts
-  out = out.replace(/\bconsist\s+of\s+consist\s+of\b/ig, "consist of");
-  out = out.replace(/\bPMH\s+consist\s+of\s+consist\s+of\b/ig, "PMH consist of");
-  out = out.replace(/\bPt\s+Pt\b/g, "Pt");
-  return out;
+  return [clean(s1), clean(s2), clean(s3), clean(s4), clean(s5), clean(s6)].join(" ");
 }
 
 // Replace/patch the "Assessment Summary:" block in eval templates.
@@ -508,50 +498,6 @@ function patchEvalAssessmentSummary(templateTextRaw = "", summaryTextRaw = "") {
   
   let pollTimer = null;
   let activeJobId = null;
-  const STORAGE_ACTIVE_JOB = "kinScribeActiveJobId";
-  const STORAGE_ACTIVE_JOB_UPDATED = "kinScribeActiveJobUpdatedAt";
-  
-  function persistActiveJob(jobId) {
-    try {
-      if (!jobId) {
-        localStorage.removeItem(STORAGE_ACTIVE_JOB);
-        localStorage.removeItem(STORAGE_ACTIVE_JOB_UPDATED);
-      } else {
-        localStorage.setItem(STORAGE_ACTIVE_JOB, String(jobId));
-        localStorage.setItem(STORAGE_ACTIVE_JOB_UPDATED, String(Date.now()));
-      }
-    } catch {}
-  }
-  
-  function readPersistedJob() {
-    try {
-      const id = localStorage.getItem(STORAGE_ACTIVE_JOB);
-      return id ? String(id) : "";
-    } catch {
-      return "";
-    }
-  }
-  
-  function ensureStopButton() {
-    let btn = el("btnStopJob");
-    if (!btn) {
-      // Create if index.html doesn't have it yet
-      const runBtn = el("btnRun");
-      if (runBtn && runBtn.parentElement) {
-        btn = document.createElement("button");
-        btn.id = "btnStopJob";
-        btn.type = "button";
-        btn.textContent = "Stop";
-        btn.className = "btn danger";
-        btn.style.marginLeft = "8px";
-        runBtn.parentElement.appendChild(btn);
-      }
-    }
-    if (btn) {
-      btn.onclick = () => stopJob();
-      btn.disabled = !activeJobId;
-    }
-  }
   
   function setBadge(text, kind = "") {
     const b = el("jobBadge");
@@ -607,7 +553,6 @@ function patchEvalAssessmentSummary(templateTextRaw = "", summaryTextRaw = "") {
         
         if (job.status === "completed") setBadge("Completed", "ok");
         else if (job.status === "failed") setBadge("Failed", "bad");
-        else if (job.status === "cancelled") setBadge("Cancelled", "bad");
         else setBadge(job.status || "running", "warn");
         
         const summaryLines = [
@@ -622,12 +567,7 @@ function patchEvalAssessmentSummary(templateTextRaw = "", summaryTextRaw = "") {
         const logText = Array.isArray(job.logs) ? job.logs.join("\n") : (job.log || "");
         setStatus(summaryLines.join("\n") + (logText ? `\n\n${logText}` : ""));
         
-        if (job.status === "completed" || job.status === "failed" || job.status === "cancelled") {
-          stopPolling();
-          activeJobId = null;
-          persistActiveJob("");
-          ensureStopButton();
-        }
+        if (job.status === "completed" || job.status === "failed") stopPolling();
       } catch (e) {
         setBadge("Polling error", "bad");
         setStatus(`Polling failed:\n${e?.message || e}\n\n${JSON.stringify(e?.body || {}, null, 2)}`);
@@ -647,39 +587,7 @@ function patchEvalAssessmentSummary(templateTextRaw = "", summaryTextRaw = "") {
     setBadge("Idle");
     setStatus("No job yet.");
     activeJobId = null;
-    persistActiveJob("");
     stopPolling();
-    ensureStopButton();
-  }
-  
-  
-  async function stopJob() {
-    if (!activeJobId) {
-      setStatus("No active job to stop.");
-      return;
-    }
-    try {
-      ensureStopButton();
-      const btn = el("btnStopJob");
-      if (btn) btn.disabled = true;
-      
-      setBadge("Stopping…", "warn");
-      setStatus(`Requesting stop for jobId: ${activeJobId} ...`);
-      
-      await httpJson(`/stop-job/${encodeURIComponent(activeJobId)}`, {
-        method: "POST",
-        body: JSON.stringify({}),
-      });
-      
-      // Stop polling immediately; server will keep status updated if it can cancel
-      setBadge("Cancelled", "bad");
-      setStatus(`Stop requested for jobId: ${activeJobId}.`);
-    } catch (e) {
-      setBadge("Stop failed", "bad");
-      setStatus(`Stop failed:\n${e?.message || e}\n\n${JSON.stringify(e?.body || {}, null, 2)}`);
-    } finally {
-      ensureStopButton();
-    }
   }
   
   async function runAutomation() {
@@ -726,8 +634,6 @@ function patchEvalAssessmentSummary(templateTextRaw = "", summaryTextRaw = "") {
       });
       
       activeJobId = resp.jobId;
-      persistActiveJob(activeJobId);
-      ensureStopButton();
       setBadge("Running", "warn");
       setStatus(`Job started.\njobId: ${activeJobId}`);
       await pollJob(activeJobId);
@@ -843,258 +749,6 @@ function patchEvalAssessmentSummary(templateTextRaw = "", summaryTextRaw = "") {
     } finally {
       el("btnConvertImage").disabled = false;
     }
-  }
-  
-  
-  // ------------------------------
-  // Voice memo / audio → transcript → template
-  // - Adds controls dynamically (so you don't need to edit index.html)
-  // - Works best on desktop + iOS Safari/Chrome with microphone permission
-  // ------------------------------
-  let _recStream = null;
-  let _recorder = null;
-  let _recChunks = [];
-  let _lastAudioDataUrl = "";
-  
-  function blobToDataUrl(blob) {
-    return new Promise((resolve, reject) => {
-      const r = new FileReader();
-      r.onload = () => resolve(String(r.result || ""));
-      r.onerror = () => reject(r.error || new Error("Audio read failed"));
-      r.readAsDataURL(blob);
-    });
-  }
-  
-  function ensureVoiceControls() {
-    // Attach near dictation box if present
-    const dict = el("dictationNotes");
-    if (!dict) return;
-    
-    let wrap = el("voiceWrap");
-    if (wrap) return;
-    
-    wrap = document.createElement("div");
-    wrap.id = "voiceWrap";
-    wrap.style.margin = "8px 0";
-    wrap.style.padding = "8px";
-    wrap.style.border = "1px solid rgba(255,255,255,0.12)";
-    wrap.style.borderRadius = "10px";
-    
-    const row1 = document.createElement("div");
-    row1.style.display = "flex";
-    row1.style.flexWrap = "wrap";
-    row1.style.gap = "8px";
-    row1.style.alignItems = "center";
-    
-    const btnRec = document.createElement("button");
-    btnRec.id = "btnRec";
-    btnRec.type = "button";
-    btnRec.className = "btn";
-    btnRec.textContent = "Record";
-    
-    const btnRecStop = document.createElement("button");
-    btnRecStop.id = "btnRecStop";
-    btnRecStop.type = "button";
-    btnRecStop.className = "btn";
-    btnRecStop.textContent = "Stop Recording";
-    btnRecStop.disabled = true;
-    
-    const inputAudio = document.createElement("input");
-    inputAudio.id = "audioFile";
-    inputAudio.type = "file";
-    inputAudio.accept = "audio/*";
-    inputAudio.style.maxWidth = "220px";
-    
-    const btnTranscribe = document.createElement("button");
-    btnTranscribe.id = "btnTranscribe";
-    btnTranscribe.type = "button";
-    btnTranscribe.className = "btn";
-    btnTranscribe.textContent = "Transcribe";
-    btnTranscribe.disabled = true;
-    
-    const btnAudioToTemplate = document.createElement("button");
-    btnAudioToTemplate.id = "btnAudioToTemplate";
-    btnAudioToTemplate.type = "button";
-    btnAudioToTemplate.className = "btn";
-    btnAudioToTemplate.textContent = "Audio → Template";
-    btnAudioToTemplate.disabled = true;
-    
-    const btnClearAudio = document.createElement("button");
-    btnClearAudio.id = "btnClearAudio";
-    btnClearAudio.type = "button";
-    btnClearAudio.className = "btn";
-    btnClearAudio.textContent = "Clear Audio";
-    btnClearAudio.disabled = true;
-    
-    const status = document.createElement("span");
-    status.id = "voiceStatus";
-    status.style.opacity = "0.9";
-    status.style.fontSize = "13px";
-    status.textContent = "Voice: idle";
-    
-    row1.appendChild(btnRec);
-    row1.appendChild(btnRecStop);
-    row1.appendChild(inputAudio);
-    row1.appendChild(btnTranscribe);
-    row1.appendChild(btnAudioToTemplate);
-    row1.appendChild(btnClearAudio);
-    row1.appendChild(status);
-    
-    wrap.appendChild(row1);
-    
-    dict.parentElement.insertBefore(wrap, dict);
-    
-    const setV = (t) => { status.textContent = t; };
-    
-    async function startRecording() {
-      try {
-        setV("Voice: requesting mic…");
-        _recStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        _recChunks = [];
-        _lastAudioDataUrl = "";
-        
-        _recorder = new MediaRecorder(_recStream);
-        _recorder.ondataavailable = (e) => { if (e.data && e.data.size > 0) _recChunks.push(e.data); };
-        _recorder.onstop = async () => {
-          try {
-            const blob = new Blob(_recChunks, { type: _recorder && _recorder.mimeType ? _recorder.mimeType : "audio/webm" });
-            _lastAudioDataUrl = await blobToDataUrl(blob);
-            setV("Voice: recorded ✓");
-            btnTranscribe.disabled = false;
-            btnAudioToTemplate.disabled = false;
-            btnClearAudio.disabled = false;
-          } catch (e) {
-            setV("Voice: record failed");
-            setStatus(`Voice recording failed:\n${e?.message || e}`);
-          } finally {
-            try { if (_recStream) _recStream.getTracks().forEach(t => t.stop()); } catch {}
-            _recStream = null;
-            _recorder = null;
-            _recChunks = [];
-          }
-        };
-        
-        _recorder.start(250);
-        btnRec.disabled = true;
-        btnRecStop.disabled = false;
-        setV("Voice: recording…");
-      } catch (e) {
-        setV("Voice: mic denied");
-        setStatus(`Microphone permission failed:\n${e?.message || e}`);
-      }
-    }
-    
-    function stopRecording() {
-      try {
-        if (_recorder && _recorder.state !== "inactive") _recorder.stop();
-      } catch {}
-      btnRec.disabled = false;
-      btnRecStop.disabled = true;
-      setV("Voice: processing…");
-    }
-    
-    async function pickFileAudio() {
-      const f = inputAudio.files && inputAudio.files[0];
-      if (!f) return;
-      try {
-        setV("Voice: loading file…");
-        _lastAudioDataUrl = await fileToDataUrl(f);
-        setV("Voice: file loaded ✓");
-        btnTranscribe.disabled = false;
-        btnAudioToTemplate.disabled = false;
-        btnClearAudio.disabled = false;
-      } catch (e) {
-        setV("Voice: file failed");
-        setStatus(`Audio file load failed:\n${e?.message || e}`);
-      }
-    }
-    
-    async function transcribeOnly() {
-      if (!_lastAudioDataUrl) return;
-      try {
-        btnTranscribe.disabled = true;
-        btnAudioToTemplate.disabled = true;
-        setBadge("Transcribing…", "warn");
-        setV("Voice: transcribing…");
-        
-        const r = await httpJson("/transcribe-audio", {
-          method: "POST",
-          body: JSON.stringify({ audioDataUrl: _lastAudioDataUrl }),
-        });
-        
-        const text = String(r.text || "").trim();
-        if (!text) throw new Error("Empty transcript");
-        
-        // Append transcript into dictation
-        const cur = (dict.value || "").trim();
-        dict.value = (cur ? (cur + "\n") : "") + text;
-        
-        setBadge("Ready", "ok");
-        setV("Voice: transcribed ✓");
-        setStatus("Transcription added to Dictation. Click Convert Dictation (or Audio → Template).");
-      } catch (e) {
-        setBadge("Transcribe failed", "bad");
-        setV("Voice: transcribe failed");
-        setStatus(`Transcription failed:\n${e?.message || e}\n\n${JSON.stringify(e?.body || {}, null, 2)}`);
-      } finally {
-        btnTranscribe.disabled = false;
-        btnAudioToTemplate.disabled = false;
-      }
-    }
-    
-    async function audioToTemplate() {
-      if (!_lastAudioDataUrl) return;
-      try {
-        btnTranscribe.disabled = true;
-        btnAudioToTemplate.disabled = true;
-        setBadge("Converting…", "warn");
-        setV("Voice: audio → template…");
-        
-        const taskType = (el("taskType")?.value || "").trim();
-        const templateKey = (el("templateKey")?.value || "").trim();
-        
-        let templateText = "";
-        if (templateKey && TEMPLATES[templateKey]) templateText = TEMPLATES[templateKey];
-        else if ((taskType || "").toLowerCase().includes("evaluation") && TEMPLATES.pt_eval_default) templateText = TEMPLATES.pt_eval_default;
-        else templateText = TEMPLATES.pt_visit_default || "";
-        
-        const r = await httpJson("/convert-audio", {
-          method: "POST",
-          body: JSON.stringify({ audioDataUrl: _lastAudioDataUrl, taskType, templateText }),
-        });
-        
-        const transcript = String(r.dictation || "").trim();
-        if (transcript) dict.value = transcript;
-        
-        // Reuse the existing client-side post-patch logic by calling convertDictation()
-        await convertDictation();
-        
-        setV("Voice: template ready ✓");
-      } catch (e) {
-        setBadge("Audio convert failed", "bad");
-        setV("Voice: convert failed");
-        setStatus(`Audio conversion failed:\n${e?.message || e}\n\n${JSON.stringify(e?.body || {}, null, 2)}`);
-      } finally {
-        btnTranscribe.disabled = false;
-        btnAudioToTemplate.disabled = false;
-      }
-    }
-    
-    function clearAudio() {
-      _lastAudioDataUrl = "";
-      inputAudio.value = "";
-      btnTranscribe.disabled = true;
-      btnAudioToTemplate.disabled = true;
-      btnClearAudio.disabled = true;
-      setV("Voice: cleared");
-    }
-    
-    btnRec.onclick = startRecording;
-    btnRecStop.onclick = stopRecording;
-    inputAudio.onchange = pickFileAudio;
-    btnTranscribe.onclick = transcribeOnly;
-    btnAudioToTemplate.onclick = audioToTemplate;
-    btnClearAudio.onclick = clearAudio;
   }
   
   // ------------------------------
@@ -1439,20 +1093,103 @@ Effective Date: `
     } catch {}
   }
   
+
+  // -------------------------
+  // Voice Memo / Audio → Dictation (Upload + Transcribe + Convert)
+  // -------------------------
+  function ensureVoiceMemoControls() {
+    const dictEl = el("dictationNotes");
+    if (!dictEl) return;
+    if (document.getElementById("voiceMemoBox")) return;
+
+    const box = document.createElement("div");
+    box.id = "voiceMemoBox";
+    box.style.margin = "10px 0";
+    box.style.padding = "10px";
+    box.style.border = "1px solid #e5e7eb";
+    box.style.borderRadius = "10px";
+    box.style.background = "#fff";
+
+    box.innerHTML = `
+      <div style="font-weight:700;margin-bottom:8px;">Voice Memo / Audio</div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
+        <input id="audioFile" type="file" accept="audio/*" />
+        <button id="btnAudioTranscribe" type="button">Transcribe → Dictation</button>
+        <button id="btnAudioToTemplate" type="button">Upload & Convert → Template</button>
+        <span id="audioMemoStatus" style="opacity:.75;"></span>
+      </div>
+      <div style="margin-top:8px;opacity:.8;font-size:12px;">
+        Tip: On iPhone, export Voice Memo as an audio file and upload it here.
+      </div>
+    `;
+
+    dictEl.parentElement.insertBefore(box, dictEl);
+  }
+
+  async function fileToBase64(file) {
+    const buf = await file.arrayBuffer();
+    const bytes = new Uint8Array(buf);
+    let bin = "";
+    for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+    return btoa(bin);
+  }
+
+  async function transcribeUploadedAudio() {
+    const f = document.getElementById("audioFile")?.files?.[0] || null;
+    const st = document.getElementById("audioMemoStatus");
+    if (!f) {
+      if (st) st.textContent = "Select an audio file first.";
+      return "";
+    }
+
+    try {
+      if (st) st.textContent = "Uploading for transcription…";
+      setBadge("Transcribing…", "warn");
+
+      const b64 = await fileToBase64(f);
+      const resp = await apiFetch("/transcribe-audio", {
+        audio_base64: b64,
+        mime_type: f.type || "audio/mpeg",
+        filename: f.name || "audio"
+      });
+
+      const text = String(resp?.text || "").trim();
+      if (!text) {
+        if (st) st.textContent = "Transcription returned empty text.";
+        setBadge("Transcribe failed", "bad");
+        return "";
+      }
+
+      const cur = (el("dictationNotes").value || "").trim();
+      el("dictationNotes").value = (cur ? (cur + "\n") : "") + text;
+
+      if (st) st.textContent = "Transcribed and inserted into Dictation.";
+      setBadge("Transcribed", "ok");
+      return text;
+    } catch (e) {
+      if (st) st.textContent = "Transcription failed.";
+      setBadge("Transcribe failed", "bad");
+      setStatus(`Transcribe failed:\n${e?.message || e}\n${e?.body ? JSON.stringify(e.body, null, 2) : ""}`);
+      return "";
+    }
+  }
+
+  async function uploadAndConvertAudioToTemplate() {
+    const text = await transcribeUploadedAudio();
+    if (!text) return;
+    await convertDictation();
+  }
+
   initTemplates();
   loadSavedCreds();
-  ensureStopButton();
-  ensureVoiceControls();
-  
-  // Resume polling if a job was already started and the page was closed/refreshed.
-  const persisted = readPersistedJob();
-  if (persisted) {
-    activeJobId = persisted;
-    setBadge("Resuming…", "warn");
-    setStatus(`Resuming existing job…\njobId: ${activeJobId}`);
-    ensureStopButton();
-    pollJob(activeJobId);
-  }
+
+  // Voice memo controls
+  ensureVoiceMemoControls();
+  const _btnAT = document.getElementById("btnAudioTranscribe");
+  const _btnA2T = document.getElementById("btnAudioToTemplate");
+  if (_btnAT) _btnAT.addEventListener("click", transcribeUploadedAudio);
+  if (_btnA2T) _btnA2T.addEventListener("click", uploadAndConvertAudioToTemplate);
+
   
   if (el("btnSaveCreds")) el("btnSaveCreds").addEventListener("click", saveCreds);
   if (el("btnClearCreds")) el("btnClearCreds").addEventListener("click", clearCreds);
