@@ -254,53 +254,73 @@ function normalizeClinicalTerms(s = "") {
 function buildVisitAssessmentFromDictation(dictationRaw = "") {
   const d0 = normalizeClinicalTerms(String(dictationRaw || "").trim());
   const d = d0;
+  function cleanList(x) {
+    let s = normalizeClinicalTerms(String(x || ""));
+    s = s.replace(/\b(go ahead and generate|generate)\b[^,.\n]*/ig, "");
+    s = s.replace(/\b(pt\s*(?:evaluation|eval|visit)\s*summary\s*for)\b/ig, "");
+    s = s.replace(/\b(period)\b/ig, "");
+    s = s.replace(/\bis at\b/ig, "");
+    s = s.replace(/\bhigh fall risk\b/ig, "high fall risk");
+    s = s.replace(/[.]+$/g, "").trim();
+    // Normalize separators
+    s = s.replace(/\s*,\s*/g, ", ");
+    s = s.replace(/\s+and\s+/gi, ", ");
+    s = s.replace(/\s{2,}/g, " ").trim();
+    // Light PMH normalization if available
+    if (typeof normEvalPmhList === "function") s = normEvalPmhList(s);
+    return s || "__";
+  }
 
-  // Age/Gender to ensure user info is carried into Assessment
-  const ageMatch = d.match(/\b(\d{1,3})\s*(?:y\/o|yo|yr\/o|yrs?\/o|year\s*old|years?\s*old|-\s*year\s*old)\b/i);
+  // --- Parse age / gender (supports "68 y/o", "68-year-old", "68 year old")
+  const ageMatch = d.match(/\b(\d{1,3})\s*(?:y\/o|yo|yr\/o|yrs?\/o|-?\s*years?\s*(?:-|\s)*old|-?\s*year\s*(?:-|\s)*old)\b/i);
   const age = ageMatch ? String(ageMatch[1]) : "__";
   const gender = /\bfemale\b/i.test(d) ? "female" : (/\bmale\b/i.test(d) ? "male" : "__");
 
-  // PMH
+  // --- PMH / history list
   let pmh = "__";
-  const pmh1 = d.match(/\b(?:medical\s*history|pmh)\s*(?:,?\s*consists\s*of|consist\s*of|includes|include)\s*([^.\n\r]+)/i);
-  if (pmh1 && pmh1[1]) pmh = pmh1[1].trim();
+  const pmhMatch =
+    d.match(/\bmedical\s*history\s*,?\s*(?:consists\s*of|include[s]?)\s*([^\.]+)/i) ||
+    d.match(/\bpmh\s*(?:consists\s*of|include[s]?)\s*([^\.]+)/i) ||
+    d.match(/\brelevant\s*history\s*(?:consists\s*of|include[s]?)\s*([^\.]+)/i);
+  if (pmhMatch && pmhMatch[1]) pmh = cleanList(pmhMatch[1]);
 
-  pmh = pmh
-    .replace(/\bhypertension\b/ig, "HTN")
-    .replace(/\bhyperlipidemia\b/ig, "HLD")
-    .replace(/\bdiabetes\s*(?:mellitus\s*)?(?:type\s*)?2\b/ig, "DM2")
-    .replace(/\bdiabetes\s*type\s*2\b/ig, "DM2")
-    .replace(/\s+/g, " ")
-    .replace(/\s*,\s*/g, ", ")
-    .trim();
-  if (!pmh) pmh = "__";
+  // --- Visit focus/impairments
+  let focus = "";
+  const focusMatch =
+    d.match(/\bpt\s*visit\s*summary\s*for\s*([^\.]+)/i) ||
+    d.match(/\bvisit\s*summary\s*for\s*([^\.]+)/i) ||
+    d.match(/\bsummary\s*for\s*([^\.]+)/i);
+  if (focusMatch && focusMatch[1]) focus = cleanList(focusMatch[1]);
 
-  // Problems requested for visit summary
-  let problems = "";
-  const prob1 = d.match(/\bpt\s*visit\s*summary\s*for\s+([^.\n\r]+)/i);
-  if (prob1 && prob1[1]) problems = prob1[1].trim();
-  const prob2 = d.match(/\bvisit\s*summary\s*for\s+([^.\n\r]+)/i);
-  if (!problems && prob2 && prob2[1]) problems = prob2[1].trim();
-  problems = problems.replace(/\s+/g, " ").replace(/\s*,\s*/g, ", ").trim();
-
-  // Fall details
-  let fallClause = "";
-  const daysAgo = d.match(/\b(\d+)\s*days?\s*ago\b/i);
-  const hasFall = /\b(s\/p\s*fall|status\s*post[-\s]*fall|fell|falling)\b/i.test(d);
-  const negXR = /\bnegative\s*for\s*(?:x-?ray|xray)\b/i.test(d);
-  if (hasFall) {
-    const when = daysAgo ? `${daysAgo[1]} days ago` : "recently";
-    fallClause = `Pt reports s/p fall ${when}` + (negXR ? " and is negative for x-ray." : ".");
+  // --- Fall history
+  const word2num = { one:1, two:2, three:3, four:4, five:5, six:6, seven:7, eight:8, nine:9, ten:10 };
+  let fallTiming = "";
+  const daysAgo = d.match(/\b(\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s+days?\s+ago\b/i);
+  if (daysAgo) {
+    const v = String(daysAgo[1]).toLowerCase();
+    const n = /^\d+$/.test(v) ? v : String(word2num[v] || v);
+    fallTiming = `${n} day(s) ago`;
+  } else if (/\byesterday\b/i.test(d)) {
+    fallTiming = "yesterday";
+  } else if (/\btoday\b/i.test(d)) {
+    fallTiming = "today";
   }
 
-  const s1 = `Pt demonstrates fair tolerance to skilled HH PT visit today with ${problems || "ongoing muscle weakness, unsteady gait, and limited functional mobility"} impacting safe participation in ADLs.`;
-  const s2 = `Tx emphasized task-specific TherEx and TherAct for strength and activity tolerance, with functional mobility training for safe bed mobility and transfers, and VC/TC provided for technique, pacing, and safety.`;
-  const s3 = `Gait and balance training were completed to improve household ambulation safety, AD management, and balance reactions to reduce fall risk.`;
-  const s4 = fallClause
-    ? `${fallClause} Pt continues to demonstrate impaired balance and unsafe gait mechanics, increasing fall risk with upright mobility within the home.`
-    : `Pt continues to demonstrate impaired balance and unsafe gait mechanics, increasing fall risk with upright mobility within the home.`;
-  const s5 = `Pt is a ${age} y/o ${gender} with PMH of ${pmh} and remains appropriate for continued skilled HH PT due to need for real-time clinical judgment and ongoing VC/TC for safety with mobility progression.`;
-  const s6 = `Continued skilled HH PT remains medically necessary to progress toward goals, maximize functional potential, and improve safety per POC.`;
+  const hasFall = /\b(fall|fell|falling)\b/i.test(d);
+  const negXray = /\bnegative\s+for\s+x-?ray\b/i.test(d) || /\bno\s+x-?ray\b/i.test(d) || /\bx-?ray\s*(?:negative|neg)\b/i.test(d);
+
+  const focusLine = focus ? focus : "current functional mobility deficits";
+  const fallLine = hasFall
+    ? `Pt reports s/p fall${fallTiming ? " " + fallTiming : ""}${negXray ? " and is negative for x-ray" : ""}.`
+    : "";
+
+  // --- 6-sentence visit Assessment (includes user-provided info, no vitals)
+  const s1 = `Pt demonstrates fair tolerance to skilled HH PT tx today. Pt is a ${age} y/o ${gender} with PMH of ${pmh}.`;
+  const s2 = `Pt currently demonstrates ${focusLine}, contributing to limitations with safe functional mobility and ADLs and increased fall risk within the home.`;
+  const s3 = `Tx emphasized task-specific TherEx/TherAct and functional mobility training with VC/TC provided for sequencing, posture, pacing, and safety to improve carryover.`;
+  const s4 = fallLine || `Pt remains at high fall risk with mobility attempts due to weakness and impaired balance reactions, requiring skilled clinical judgment for safe progression.`;
+  const s5 = `Education was provided on HEP carryover, fall prevention strategies, and proper use of AD as indicated to promote safe household mobility.`;
+  const s6 = `Continued skilled HH PT remains medically necessary to progress pt toward goals, maximize functional potential, and improve safety per POC.`;
 
   return [s1, s2, s3, s4, s5, s6].join(" ");
 }
@@ -373,74 +393,70 @@ function extractEvalPmh(dictation = "") {
 function buildEvalAssessmentSummaryFromDictation(dictationRaw = "") {
   const d0 = normalizeClinicalTerms(String(dictationRaw || "").trim());
   const d = d0;
+  function cleanList(x) {
+    let s = normalizeClinicalTerms(String(x || ""));
+    s = s.replace(/\b(go ahead and generate|generate)\b[^,.\n]*/ig, "");
+    s = s.replace(/\b(pt\s*(?:evaluation|eval|visit)\s*summary\s*for)\b/ig, "");
+    s = s.replace(/\b(period)\b/ig, "");
+    s = s.replace(/\bis at\b/ig, "");
+    s = s.replace(/\bhigh fall risk\b/ig, "high fall risk");
+    s = s.replace(/[.]+$/g, "").trim();
+    // Normalize separators
+    s = s.replace(/\s*,\s*/g, ", ");
+    s = s.replace(/\s+and\s+/gi, ", ");
+    s = s.replace(/\s{2,}/g, " ").trim();
+    // Light PMH normalization if available
+    if (typeof normEvalPmhList === "function") s = normEvalPmhList(s);
+    return s || "__";
+  }
 
-  // Age: supports "68 y/o", "68-year-old", "68 year old"
-  const ageMatch = d.match(/\b(\d{1,3})\s*(?:y\/o|yo|yr\/o|yrs?\/o|year\s*old|years?\s*old|-\s*year\s*old)\b/i);
+  // --- Parse age / gender (supports "68 y/o", "68-year-old", "68 year old")
+  const ageMatch = d.match(/\b(\d{1,3})\s*(?:y\/o|yo|yr\/o|yrs?\/o|-?\s*years?\s*(?:-|\s)*old|-?\s*year\s*(?:-|\s)*old)\b/i);
   const age = ageMatch ? String(ageMatch[1]) : "__";
-
   const gender = /\bfemale\b/i.test(d) ? "female" : (/\bmale\b/i.test(d) ? "male" : "__");
 
-  // Medical Diagnosis (HNP) — only if explicitly provided; otherwise "__"
-  let medicalDx = "__";
-  const md1 = d.match(/\bmedical\s*diagnosis\s*[:\-]\s*([^.\n\r]+)/i);
-  if (md1 && md1[1]) medicalDx = md1[1].trim();
-  const md2 = d.match(/\bwith\s+medical\s+dx\s+of\s+([^.\n\r]+)/i);
-  if (medicalDx === "__" && md2 && md2[1]) medicalDx = md2[1].trim();
-
-  // PMH — capture "medical history, consists of ..." OR "PMH consist(s) of ..."
+  // --- Pull PMH list
   let pmh = "__";
-  const pmh1 = d.match(/\b(?:medical\s*history|pmh)\s*(?:,?\s*consists\s*of|consist\s*of|includes|include)\s*([^.\n\r]+)/i);
-  if (pmh1 && pmh1[1]) {
-    pmh = pmh1[1].trim();
-    // cleanup common trailing phrases
-    pmh = pmh.replace(/\bwho\s+presents\s+with\b.*$/i, "").trim();
+  const pmhMatch =
+    d.match(/\bmedical\s*history\s*,?\s*(?:consists\s*of|include[s]?)\s*([^\.]+)/i) ||
+    d.match(/\bpmh\s*(?:consists\s*of|include[s]?)\s*([^\.]+)/i) ||
+    d.match(/\brelevant\s*history\s*(?:consists\s*of|include[s]?)\s*([^\.]+)/i);
+  if (pmhMatch && pmhMatch[1]) pmh = cleanList(pmhMatch[1]);
+
+  // --- Medical Dx / HNP (prefer instruction "PT evaluation summary for ...")
+  let medicalDx = "__";
+  const dxMatch =
+    d.match(/\bpt\s*(?:evaluation|eval)\s*summary\s*for\s*([^\.]+)/i) ||
+    d.match(/\bpt\s*(?:evaluation|eval)\s*for\s*([^\.]+)/i) ||
+    d.match(/\bevaluation\s*summary\s*for\s*([^\.]+)/i);
+  if (dxMatch && dxMatch[1]) medicalDx = cleanList(dxMatch[1]);
+
+  // --- Fall history
+  const word2num = { one:1, two:2, three:3, four:4, five:5, six:6, seven:7, eight:8, nine:9, ten:10 };
+  let fallTiming = "";
+  const daysAgo = d.match(/\b(\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s+days?\s+ago\b/i);
+  if (daysAgo) {
+    const v = String(daysAgo[1]).toLowerCase();
+    const n = /^\d+$/.test(v) ? v : String(word2num[v] || v);
+    fallTiming = `${n} day(s) ago`;
+  } else if (/\byesterday\b/i.test(d)) {
+    fallTiming = "yesterday";
+  } else if (/\btoday\b/i.test(d)) {
+    fallTiming = "today";
   }
 
-  // Normalize PMH terms to your preferred abbreviations
-  pmh = pmh
-    .replace(/\bhypertension\b/ig, "HTN")
-    .replace(/\bhyperlipidemia\b/ig, "HLD")
-    .replace(/\bdiabetes\s*(?:mellitus\s*)?(?:type\s*)?2\b/ig, "DM2")
-    .replace(/\bdiabetes\s*type\s*2\b/ig, "DM2")
-    .replace(/\s+/g, " ")
-    .replace(/\s*,\s*/g, ", ")
-    .trim();
-  if (!pmh) pmh = "__";
+  const hasFall = /\b(fall|fell|falling)\b/i.test(d);
+  const negXray = /\bnegative\s+for\s+x-?ray\b/i.test(d) || /\bno\s+x-?ray\b/i.test(d) || /\bx-?ray\s*(?:negative|neg)\b/i.test(d);
 
-  // Problem list (from the "summary for ..." request) to ensure we include user-requested info
-  let problems = "";
-  const prob1 = d.match(/\b(?:pt\s*(?:evaluation|eval)\s*summary|pt\s*evaluation\s*summary|pt\s*eval\s*summary|pt\s*visit\s*summary|pt\s*visit\s*assessment)\s*for\s+([^.\n\r]+)/i);
-  if (prob1 && prob1[1]) problems = prob1[1].trim();
-  // fallback: "generate six sentences ... summary for ..."
-  const prob2 = d.match(/\bsummary\s*for\s+([^.\n\r]+)/i);
-  if (!problems && prob2 && prob2[1]) problems = prob2[1].trim();
+  const fallSentence = hasFall
+    ? `Pt reports s/p fall${fallTiming ? " " + fallTiming : ""}${negXray ? " and is negative for x-ray" : ""}.`
+    : `Pt reports recent decline in functional mobility with increased fall risk once mobility is attempted.`;
 
-  problems = problems
-    .replace(/\s+/g, " ")
-    .replace(/\s*,\s*/g, ", ")
-    .trim();
-
-  // Fall details: "s/p fall ... two days ago" + negative x-ray
-  let fallClause = "";
-  const daysAgo = d.match(/\b(\d+)\s*days?\s*ago\b/i);
-  const hasFall = /\b(s\/p\s*fall|status\s*post[-\s]*fall|fell|falling)\b/i.test(d);
-  const negXR = /\bnegative\s*for\s*(?:x-?ray|xray)\b/i.test(d);
-  if (hasFall) {
-    const when = daysAgo ? `${daysAgo[1]} days ago` : "recently";
-    fallClause = `Pt reports s/p fall ${when}` + (negXR ? " and is negative for x-ray." : ".");
-  }
-
-  const impairmentsLine = problems
-    ? `Objective findings are consistent with ${problems}, limiting safe participation in ADLs and household mobility.`
-    : `Objective findings are consistent with muscle weakness and impaired functional mobility, limiting safe participation in ADLs and household mobility.`;
-
-  // REQUIRED 6-sentence format (your style)
+  // --- Strict 6-sentence Assessment Summary in YOUR format (no vitals; no "objective findings")
   const s1 = `Pt is a ${age} y/o ${gender} who presents with HNP of ${medicalDx} which consists of PMH of ${pmh}.`;
   const s2 = `Pt underwent PT initial evaluation with completion of home safety assessment, DME assessment, and initiation of HEP education, with education provided on fall prevention strategies, proper use of AD, pain and edema management as indicated, and establishment of PT POC and functional goals to progress pt toward PLOF.`;
-  const s3 = impairmentsLine;
-  const s4 = fallClause
-    ? `${fallClause} Current deficits contribute to difficulty with transfers, upright tolerance, and initiation of mobility tasks, increasing overall fall risk once mobility is attempted.`
-    : `Pain, weakness, and decreased activity tolerance contribute to difficulty with functional transfers, upright tolerance, and initiation of mobility tasks, increasing overall fall risk once mobility is attempted.`;
+  const s3 = `Pt currently demonstrates ${medicalDx}, limiting safe participation in ADLs and household mobility and increasing overall fall risk within the home environment.`;
+  const s4 = `${fallSentence} Current deficits contribute to difficulty with functional transfers, upright tolerance, and initiation of mobility tasks.`;
   const s5 = `Skilled HH PT is required to address pain management as indicated, improve strength, initiate safe bed mobility and transfer training, progress gait and balance training, and provide caregiver education to reduce complications and promote functional recovery.`;
   const s6 = `Continued skilled HH PT remains medically necessary to maximize functional potential, improve safety, and support progression toward the highest achievable level of independence within the home setting.`;
 
