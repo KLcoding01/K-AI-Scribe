@@ -262,13 +262,17 @@ function buildVisitAssessmentFromDictation(dictationRaw = "") {
     s = s.replace(/\bis at\b/ig, "");
     s = s.replace(/\bhigh fall risk\b/ig, "high fall risk");
     s = s.replace(/[.]+$/g, "").trim();
-    // Normalize separators
-    s = s.replace(/\s*,\s*/g, ", ");
+    // Normalize separators and whitespace
     s = s.replace(/\s+and\s+/gi, ", ");
+    s = s.replace(/\s*,\s*/g, ",");
     s = s.replace(/\s{2,}/g, " ").trim();
     // Light PMH normalization if available
     if (typeof normEvalPmhList === "function") s = normEvalPmhList(s);
-    return s || "__";
+    // Split, trim, drop empties, and de-dupe to prevent ",,"
+    const parts = String(s || "").split(",").map(p => p.trim()).filter(Boolean);
+    const uniq = [];
+    for (const p of parts) { if (!uniq.includes(p)) uniq.push(p); }
+    return uniq.length ? uniq.join(", ") : "__";
   }
 
   // --- Parse age / gender (supports "68 y/o", "68-year-old", "68 year old")
@@ -299,7 +303,8 @@ function buildVisitAssessmentFromDictation(dictationRaw = "") {
   if (daysAgo) {
     const v = String(daysAgo[1]).toLowerCase();
     const n = /^\d+$/.test(v) ? v : String(word2num[v] || v);
-    fallTiming = `${n} day(s) ago`;
+        const ni = parseInt(n, 10);
+    fallTiming = `${n} ${(!isNaN(ni) && ni === 1) ? "day" : "days"} ago`;
   } else if (/\byesterday\b/i.test(d)) {
     fallTiming = "yesterday";
   } else if (/\btoday\b/i.test(d)) {
@@ -310,8 +315,8 @@ function buildVisitAssessmentFromDictation(dictationRaw = "") {
   const negXray = /\bnegative\s+for\s+x-?ray\b/i.test(d) || /\bno\s+x-?ray\b/i.test(d) || /\bx-?ray\s*(?:negative|neg)\b/i.test(d);
 
   const focusLine = focus ? focus : "current functional mobility deficits";
-  const fallLine = hasFall
-    ? `Pt reports s/p fall${fallTiming ? " " + fallTiming : ""}${negXray ? " and is negative for x-ray" : ""}.`
+    const fallLine = hasFall
+    ? `Pt had a fall${fallTiming ? " " + fallTiming : " recently"}${negXray ? " and x-ray indicates negative for fx" : ""}.`
     : "";
 
   // --- 6-sentence visit Assessment (includes user-provided info, no vitals)
@@ -401,13 +406,17 @@ function buildEvalAssessmentSummaryFromDictation(dictationRaw = "") {
     s = s.replace(/\bis at\b/ig, "");
     s = s.replace(/\bhigh fall risk\b/ig, "high fall risk");
     s = s.replace(/[.]+$/g, "").trim();
-    // Normalize separators
-    s = s.replace(/\s*,\s*/g, ", ");
+    // Normalize separators and whitespace
     s = s.replace(/\s+and\s+/gi, ", ");
+    s = s.replace(/\s*,\s*/g, ",");
     s = s.replace(/\s{2,}/g, " ").trim();
     // Light PMH normalization if available
     if (typeof normEvalPmhList === "function") s = normEvalPmhList(s);
-    return s || "__";
+    // Split, trim, drop empties, and de-dupe to prevent ",,"
+    const parts = String(s || "").split(",").map(p => p.trim()).filter(Boolean);
+    const uniq = [];
+    for (const p of parts) { if (!uniq.includes(p)) uniq.push(p); }
+    return uniq.length ? uniq.join(", ") : "__";
   }
 
   // --- Parse age / gender (supports "68 y/o", "68-year-old", "68 year old")
@@ -438,7 +447,8 @@ function buildEvalAssessmentSummaryFromDictation(dictationRaw = "") {
   if (daysAgo) {
     const v = String(daysAgo[1]).toLowerCase();
     const n = /^\d+$/.test(v) ? v : String(word2num[v] || v);
-    fallTiming = `${n} day(s) ago`;
+        const ni = parseInt(n, 10);
+    fallTiming = `${n} ${(!isNaN(ni) && ni === 1) ? "day" : "days"} ago`;
   } else if (/\byesterday\b/i.test(d)) {
     fallTiming = "yesterday";
   } else if (/\btoday\b/i.test(d)) {
@@ -448,9 +458,9 @@ function buildEvalAssessmentSummaryFromDictation(dictationRaw = "") {
   const hasFall = /\b(fall|fell|falling)\b/i.test(d);
   const negXray = /\bnegative\s+for\s+x-?ray\b/i.test(d) || /\bno\s+x-?ray\b/i.test(d) || /\bx-?ray\s*(?:negative|neg)\b/i.test(d);
 
-  const fallSentence = hasFall
-    ? `Pt reports s/p fall${fallTiming ? " " + fallTiming : ""}${negXray ? " and is negative for x-ray" : ""}.`
-    : `Pt reports recent decline in functional mobility with increased fall risk once mobility is attempted.`;
+    const fallSentence = hasFall
+    ? `Pt had a fall${fallTiming ? " " + fallTiming : " recently"}${negXray ? " and x-ray indicates negative for fx" : ""}.`
+    : `Pt demonstrates increased fall risk once mobility is attempted.`;
 
   // --- Strict 6-sentence Assessment Summary in YOUR format (no vitals; no "objective findings")
   const s1 = `Pt is a ${age} y/o ${gender} who presents with HNP of ${medicalDx} which consists of PMH of ${pmh}.`;
