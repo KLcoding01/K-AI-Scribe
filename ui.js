@@ -8,9 +8,8 @@ global.logErr = global.logErr || ((...args) => { try { console.error(...args); }
 // - Captures per-job logs from bots via logCb (no need to scrape Render logs)
 
 const express = require("express");
-const fs = require("fs"); // required for audio temp files
-
 const path = require("path");
+const fs = require("fs"); // FIX: required for /transcribe-audio temp file
 const { runKinnserBot } = require("./index.js");
 
 
@@ -284,6 +283,9 @@ const PORT = process.env.PORT || 3000;
 app.use(express.json({ limit: "12mb" }));
 app.use(express.urlencoded({ extended: true }));
 
+// Serve UI assets
+app.use(express.static(path.join(__dirname, "public")));
+
 // -------------------------
 // Audio transcription endpoint
 // -------------------------
@@ -292,13 +294,13 @@ app.post("/transcribe-audio", async (req, res) => {
     const audio_base64 = String(req.body?.audio_base64 || "");
     const mime_type = String(req.body?.mime_type || "");
     const filename = String(req.body?.filename || "");
-    
+
     if (!audio_base64) return res.status(400).json({ error: "Missing audio_base64" });
     if (!process.env.OPENAI_API_KEY) return res.status(500).json({ error: "OPENAI_API_KEY is not set" });
     if (!OpenAI) return res.status(500).json({ error: "openai package not installed (npm i openai)" });
-    
+
     const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-    
+
     // Determine extension (prefer filename; iOS often sends blank mime)
     let ext = "";
     const lowerName = filename.toLowerCase();
@@ -310,29 +312,26 @@ app.post("/transcribe-audio", async (req, res) => {
     else if (mime_type.includes("mpeg")) ext = "mp3";
     else if (mime_type.includes("wav")) ext = "wav";
     else ext = "webm";
-    
+
     const tmpPath = `/tmp/audio_${Date.now()}.${ext}`;
-    
+
     // Strip dataURL prefix if present
     const b64 = audio_base64.replace(/^data:.*;base64,/, "");
     fs.writeFileSync(tmpPath, Buffer.from(b64, "base64"));
-    
+
     const tr = await client.audio.transcriptions.create({
       file: fs.createReadStream(tmpPath),
       model: process.env.TRANSCRIBE_MODEL || "whisper-1",
     });
-    
+
     try { fs.unlinkSync(tmpPath); } catch {}
-    
+
     res.json({ ok: true, text: String(tr?.text || "").trim() });
   } catch (e) {
     console.error("[/transcribe-audio] error:", e);
     res.status(500).json({ error: e?.message || "Transcription failed" });
   }
 });
-
-// Serve UI assets
-app.use(express.static(path.join(__dirname, "public")));
 
 
 function loadPublicTemplates() {
