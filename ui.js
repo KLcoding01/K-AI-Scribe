@@ -211,6 +211,52 @@ function replaceAssessmentSummaryBlock(templateText="", summary="") {
   return t + `\n\nAssessment Summary: ${summary}\n`;
 }
 
+// -------------------------
+// Audio transcription endpoint
+// -------------------------
+app.post("/transcribe-audio", async (req, res) => {
+  try {
+    const audio_base64 = String(req.body?.audio_base64 || "");
+    const mime_type = String(req.body?.mime_type || "");
+    const filename = String(req.body?.filename || "");
+    
+    if (!audio_base64) return res.status(400).json({ error: "Missing audio_base64" });
+    if (!process.env.OPENAI_API_KEY) return res.status(500).json({ error: "OPENAI_API_KEY is not set" });
+    if (!OpenAI) return res.status(500).json({ error: "openai package not installed (npm i openai)" });
+    
+    const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    
+    // Determine extension (prefer filename; iOS often sends blank mime)
+    let ext = "";
+    const lowerName = filename.toLowerCase();
+    if (lowerName.endsWith(".m4a")) ext = "m4a";
+    else if (lowerName.endsWith(".mp3")) ext = "mp3";
+    else if (lowerName.endsWith(".wav")) ext = "wav";
+    else if (lowerName.endsWith(".webm")) ext = "webm";
+    else if (mime_type.includes("mp4")) ext = "m4a";
+    else if (mime_type.includes("mpeg")) ext = "mp3";
+    else if (mime_type.includes("wav")) ext = "wav";
+    else ext = "webm";
+    
+    const tmpPath = `/tmp/audio_${Date.now()}.${ext}`;
+    
+    // Strip dataURL prefix if present
+    const b64 = audio_base64.replace(/^data:.*;base64,/, "");
+    fs.writeFileSync(tmpPath, Buffer.from(b64, "base64"));
+    
+    const tr = await client.audio.transcriptions.create({
+      file: fs.createReadStream(tmpPath),
+      model: process.env.TRANSCRIBE_MODEL || "whisper-1",
+    });
+    
+    try { fs.unlinkSync(tmpPath); } catch {}
+    
+    res.json({ ok: true, text: String(tr?.text || "").trim() });
+  } catch (e) {
+    console.error("[/transcribe-audio] error:", e);
+    res.status(500).json({ error: e?.message || "Transcription failed" });
+  }
+});
 
 
 
@@ -284,54 +330,6 @@ app.use(express.urlencoded({ extended: true }));
 
 // Serve UI assets
 app.use(express.static(path.join(__dirname, "public")));
-
-// -------------------------
-// Audio transcription endpoint
-// -------------------------
-app.post("/transcribe-audio", async (req, res) => {
-  try {
-    const audio_base64 = String(req.body?.audio_base64 || "");
-    const mime_type = String(req.body?.mime_type || "");
-    const filename = String(req.body?.filename || "");
-    
-    if (!audio_base64) return res.status(400).json({ error: "Missing audio_base64" });
-    if (!process.env.OPENAI_API_KEY) return res.status(500).json({ error: "OPENAI_API_KEY is not set" });
-    if (!OpenAI) return res.status(500).json({ error: "openai package not installed (npm i openai)" });
-    
-    const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-    
-    // Determine extension (prefer filename; iOS often sends blank mime)
-    let ext = "";
-    const lowerName = filename.toLowerCase();
-    if (lowerName.endsWith(".m4a")) ext = "m4a";
-    else if (lowerName.endsWith(".mp3")) ext = "mp3";
-    else if (lowerName.endsWith(".wav")) ext = "wav";
-    else if (lowerName.endsWith(".webm")) ext = "webm";
-    else if (mime_type.includes("mp4")) ext = "m4a";
-    else if (mime_type.includes("mpeg")) ext = "mp3";
-    else if (mime_type.includes("wav")) ext = "wav";
-    else ext = "webm";
-    
-    const tmpPath = `/tmp/audio_${Date.now()}.${ext}`;
-    
-    // Strip dataURL prefix if present
-    const b64 = audio_base64.replace(/^data:.*;base64,/, "");
-    fs.writeFileSync(tmpPath, Buffer.from(b64, "base64"));
-    
-    const tr = await client.audio.transcriptions.create({
-      file: fs.createReadStream(tmpPath),
-      model: process.env.TRANSCRIBE_MODEL || "whisper-1",
-    });
-    
-    try { fs.unlinkSync(tmpPath); } catch {}
-    
-    res.json({ ok: true, text: String(tr?.text || "").trim() });
-  } catch (e) {
-    console.error("[/transcribe-audio] error:", e);
-    res.status(500).json({ error: e?.message || "Transcription failed" });
-  }
-});
-
 
 
 function loadPublicTemplates() {
