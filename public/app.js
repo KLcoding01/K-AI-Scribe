@@ -369,62 +369,24 @@ function normEvalPmhList(pmh = "") {
 
 function extractEvalDemo(dictation = "") {
   const d = String(dictation || "");
-
-  // Supports:
-  // - "68 y/o female", "68 yo female", "68 y.o. female"
-  // - "68-year-old female" (including iOS unicode hyphens)
-  // - "female 68-year-old" (sex-first variants)
-  let age = "";
-  let sex = "";
-
-  // Age then sex
-  let m =
-    d.match(/\b(\d{1,3})\s*(?:y\/?o|yo|y\.o\.)\s*(male|female)\b/i) ||
-    d.match(/\b(\d{1,3})\s*(?:[\-\u2010\u2011\u2012\u2013\u2014\u2015\u2212]|\s)?\s*year\s*(?:[\-\u2010\u2011\u2012\u2013\u2014\u2015\u2212]|\s)?\s*old\s*(male|female|woman|man)\b/i);
-
-  if (m) {
-    age = String(m[1] || "").trim();
-    sex = String(m[2] || "").trim().toLowerCase();
-  } else {
-    // Sex then age
-    m =
-      d.match(/\b(male|female|woman|man)\s*(?:,|:)?\s*(\d{1,3})\s*(?:y\/?o|yo|y\.o\.)\b/i) ||
-      d.match(/\b(male|female|woman|man)\s*(?:,|:)?\s*(\d{1,3})\s*(?:[\-\u2010\u2011\u2012\u2013\u2014\u2015\u2212]|\s)?\s*year\s*(?:[\-\u2010\u2011\u2012\u2013\u2014\u2015\u2212]|\s)?\s*old\b/i);
-
-    if (m) {
-      sex = String(m[1] || "").trim().toLowerCase();
-      age = String(m[2] || "").trim();
-    }
-  }
-
-  if (sex === "woman") sex = "female";
-  if (sex === "man") sex = "male";
-
-  const parts = [];
-  if (age) parts.push(`${age} y/o`);
-  if (sex) parts.push(sex);
-
-  return { ageSex: parts.join(" ").trim() };
+  // Common patterns: "78 y/o male", "78 yo male", "78 y.o. male"
+  const m = d.match(/\b(\d{1,3})\s*(?:y\/?o|yo|y\.o\.)\s*(male|female)\b/i);
+  if (!m) return { ageSex: "" };
+  return { ageSex: `${m[1]} y/o ${m[2].toLowerCase()}` };
 }
 
 function extractEvalPmh(dictation = "") {
   const d = String(dictation || "");
-
-  // Prefer explicit PMH or medical history patterns
+  
+  // Prefer explicit "PMH ..." line
   let pmh =
-    (d.match(/\bPMH\s*(?:consists of|consist of|include[s]?|significant for)?\s*[:\-]?\s*([^\n\r.]+)/i)?.[1] || "").trim();
-
+  (d.match(/\bPMH\s*(?:consists of|include[s]?|significant for)?\s*[:\-]?\s*([^\n\r.]+)/i)?.[1] || "").trim();
+  
+  // If not found, pull from a demographic sentence like "Pt is a 78 y/o male presents with PMH consist of HTN..."
   if (!pmh) {
-    pmh =
-      (d.match(/\b(?:medical\s+history|history)\s*(?:consists of|consist of|include[s]?)\s*[:\-]?\s*([^\n\r.]+)/i)?.[1] || "").trim();
+    pmh = (d.match(/\bpresents?\s+with\s+PMH\s*(?:consists of|include[s]?|significant for)?\s*([^\n\r.]+)/i)?.[1] || "").trim();
   }
-
-  // If not found, pull from demographic sentence
-  if (!pmh) {
-    pmh =
-      (d.match(/\bpresents?\s+with\s+PMH\s*(?:consists of|consist of|include[s]?|significant for)?\s*([^\n\r.]+)/i)?.[1] || "").trim();
-  }
-
+  
   return normEvalPmhList(pmh);
 }
 
@@ -1244,6 +1206,10 @@ Effective Date: `
   
   if (el("btnConvert")) el("btnConvert").addEventListener("click", convertDictation);
   if (el("btnConvertImage")) el("btnConvertImage").addEventListener("click", convertImage);
+
+  // Voice memo/audio buttons
+  if (el("btnTranscribeAudio")) el("btnTranscribeAudio").addEventListener("click", () => transcribeAudio(false));
+  if (el("btnAudioToTemplate")) el("btnAudioToTemplate").addEventListener("click", () => transcribeAudio(true));
   
   el("kinnserPassword").addEventListener("keydown", (e) => {
     if (e.key === "Enter") runAutomation();
