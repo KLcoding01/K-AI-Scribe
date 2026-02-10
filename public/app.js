@@ -1092,6 +1092,116 @@ Effective Date: `
     } catch {}
   }
   
+
+
+  // ------------------------------
+  // Voice memo / audio upload -> Transcribe -> Dictation
+  // ------------------------------
+  function _getAudioEls() {
+    const input = document.getElementById("audioUpload") || document.getElementById("audioFile");
+    const btnTx = document.getElementById("btnTranscribeAudio");
+    const btnTxConvert = document.getElementById("btnAudioToTemplate");
+    const dict = document.getElementById("dictationNotes");
+    return { input, btnTx, btnTxConvert, dict };
+  }
+
+  function _guessMime(file) {
+    if (!file) return "audio/webm";
+    const name = String(file.name || "").toLowerCase();
+    const t = String(file.type || "").toLowerCase();
+    if (t) return t;
+    if (name.endsWith(".m4a")) return "audio/mp4";
+    if (name.endsWith(".mp3")) return "audio/mpeg";
+    if (name.endsWith(".wav")) return "audio/wav";
+    if (name.endsWith(".webm")) return "audio/webm";
+    if (name.endsWith(".mp4")) return "audio/mp4";
+    return "audio/webm";
+  }
+
+  function _fileToBase64(file) {
+    return new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onerror = () => reject(new Error("Failed to read audio file"));
+      r.onload = () => {
+        const result = String(r.result || "");
+        // result is data:*/*;base64,....
+        const idx = result.indexOf("base64,");
+        resolve(idx >= 0 ? result.slice(idx + 7) : result);
+      };
+      r.readAsDataURL(file);
+    });
+  }
+
+  async function transcribeAudioAndMaybeConvert(autoConvert) {
+    const { input, dict } = _getAudioEls();
+    const file = input && input.files && input.files[0] ? input.files[0] : null;
+
+    if (!file) {
+      setBadge("Transcribe failed", "bad");
+      setStatus("Transcribe failed:\nPlease upload an audio file first.");
+      return;
+    }
+
+    try {
+      setBadge("Transcribing…", "warn");
+      setStatus("Uploading audio for transcription…");
+
+      const base64 = await _fileToBase64(file);
+      const mime = _guessMime(file);
+
+      const resp = await fetch("/transcribe-audio", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          audio_base64: base64,
+          mime_type: mime,
+          filename: file.name || ""
+        })
+      });
+
+      const textRaw = await resp.text();
+      let data = null;
+      try { data = JSON.parse(textRaw); } catch { data = { raw: textRaw }; }
+
+      if (!resp.ok) {
+        const msg = data && (data.error || data.message) ? (data.error || data.message) : `HTTP ${resp.status}`;
+        throw new Error(msg);
+      }
+
+      const tx = String(data.text || "").trim();
+      if (!tx) throw new Error("Transcription returned empty text.");
+
+      // Insert into Dictation
+      if (dict) {
+        const cur = String(dict.value || "").trim();
+        dict.value = cur ? (cur + "\n" + tx) : tx;
+      }
+
+      setBadge("Transcribed", "ok");
+      setStatus("Transcription completed. Text inserted into Dictation.");
+
+      if (autoConvert) {
+        await convertDictation();
+      }
+    } catch (e) {
+      setBadge("Transcribe failed", "bad");
+      setStatus(`Transcribe failed:\n${e && e.message ? e.message : e}`);
+    }
+  }
+
+  function wireVoiceButtons() {
+    const { btnTx, btnTxConvert } = _getAudioEls();
+    if (btnTx) {
+      btnTx.addEventListener("click", () => transcribeAudioAndMaybeConvert(false));
+    }
+    if (btnTxConvert) {
+      btnTxConvert.addEventListener("click", () => transcribeAudioAndMaybeConvert(true));
+    }
+  }
+
+
+  wireVoiceButtons();
+
   initTemplates();
   loadSavedCreds();
   
