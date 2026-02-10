@@ -12,6 +12,9 @@ const path = require("path");
 const { runKinnserBot } = require("./index.js");
 
 
+let OpenAI = null;
+try { OpenAI = require("openai"); } catch (e) { OpenAI = null; }
+
 const { callOpenAIText, callOpenAIImageJSON } = require("./bots/openaiClient");
 
 // OpenAI JSON helper: prefer root openaiClient if present, else use bots/openaiClient.
@@ -48,64 +51,6 @@ async function callOpenAIJSONSafe(prompt, timeoutMs = 12000) {
   }
 }
 
-// ------------------------------------------------------------
-// Audio transcription (voice memo / sound) using OpenAI
-// - Accepts audio as data URL (base64) from the browser.
-// - Returns plain text transcript.
-// ------------------------------------------------------------
-function parseDataUrl(dataUrl) {
-  const s = String(dataUrl || "");
-  const m = s.match(/^data:([^;]+);base64,(.*)$/);
-  if (!m) return null;
-  return { mime: m[1], b64: m[2] };
-}
-
-async function transcribeAudioOpenAI({ audioDataUrl, language = "" }) {
-  const parsed = parseDataUrl(audioDataUrl);
-  if (!parsed) throw new Error("Invalid audioDataUrl (expected data:<mime>;base64,...)");
-
-  const buf = Buffer.from(parsed.b64, "base64");
-  const mime = parsed.mime || "audio/webm";
-  const ext = (mime.includes("wav")) ? "wav"
-    : (mime.includes("mpeg") || mime.includes("mp3")) ? "mp3"
-    : (mime.includes("ogg")) ? "ogg"
-    : (mime.includes("m4a") || mime.includes("mp4")) ? "m4a"
-    : (mime.includes("webm")) ? "webm"
-    : "webm";
-
-  const modelsToTry = ["gpt-4o-mini-transcribe", "whisper-1"];
-
-  let lastErr = null;
-  for (const model of modelsToTry) {
-    try {
-      const form = new FormData();
-      const file = new File([buf], `audio.${ext}`, { type: mime });
-      form.append("file", file);
-      form.append("model", model);
-      if (language) form.append("language", String(language));
-
-      const r = await fetch("https://api.openai.com/v1/audio/transcriptions", {
-        method: "POST",
-        headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` },
-        body: form,
-      });
-
-      const j = await r.json().catch(() => ({}));
-      if (!r.ok) {
-        throw new Error(`OpenAI transcription failed (${r.status}): ${j?.error?.message || r.statusText}`);
-      }
-
-      const text = String(j?.text || "").trim();
-      return text;
-    } catch (e) {
-      lastErr = e;
-    }
-  }
-
-  throw lastErr || new Error("Transcription failed");
-}
-
-
 
 //
 // EXPIRATION CHECK – blocks use after Mar 1, 2026
@@ -122,8 +67,6 @@ const app = express();
 // ---- Job status store ----
 const JOBS = new Map(); // jobId -> { status, message, startedAt, finishedAt, updatedAt, logs[] }
 let ACTIVE_JOB_ID = null; // prevents overlapping automations
-let ACTIVE_ABORT_CONTROLLER = null; // AbortController for the currently running bot (best-effort)
-let ACTIVE_CANCEL_REQUESTED = false; // set true when user requests stop
 const JOB_TTL_MS = 1000 * 60 * 30; // 30 minutes
 const JOB_LOG_MAX = 600; // max log lines stored per job
 
@@ -174,11 +117,69 @@ setInterval(() => {
 
 const PORT = process.env.PORT || 3000;
 
-app.use(express.json({ limit: "32mb" }));
+app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ extended: true }));
 
 // Serve UI assets
 app.use(express.static(path.join(__dirname, "public")));
+
+// -------------------------
+// Voice memo / audio transcription
+// POST /transcribe-audio  { audio_base64, mime_type, filename? } -> { ok, text }
+// -------------------------
+function getOpenAIClient() {
+  const key = process.env.OPENAI_API_KEY || "";
+  if (!key) throw new Error("OPENAI_API_KEY is not set");
+  if (!OpenAI) throw new Error('openai package not installed. Add it to package.json: "openai"');
+  // OpenAI v4 SDK: module export may be { OpenAI } or a function depending on bundler
+  const Ctor = OpenAI.OpenAI || OpenAI;
+  return new Ctor({ apiKey: key });
+}
+
+function bufferFromBase64(b64) {
+  return Buffer.from(String(b64 || ""), "base64");
+}
+
+app.post("/transcribe-audio", async (req, res) => {
+  try {
+    const audio_base64 = req.body?.audio_base64 || "";
+    const mime_type = req.body?.mime_type || "audio/mpeg";
+    const filename = req.body?.filename || "audio";
+
+    if (!audio_base64) return res.status(400).json({ error: "missing audio_base64" });
+
+    const client = getOpenAIClient();
+    const buf = bufferFromBase64(audio_base64);
+
+    // Write a temp file to /tmp
+    const ext =
+      /wav/i.test(mime_type) ? "wav" :
+      /(m4a|mp4)/i.test(mime_type) ? "m4a" :
+      /(webm)/i.test(mime_type) ? "webm" :
+      /(ogg)/i.test(mime_type) ? "ogg" :
+      "mp3";
+
+    const tmpPath = path.join("/tmp", `${filename.replace(/[^a-z0-9_\-\.]/gi, "_")}_${Date.now()}.${ext}`);
+    fs.writeFileSync(tmpPath, buf);
+
+    const fileStream = fs.createReadStream(tmpPath);
+
+    // Whisper transcription (widely supported)
+    const tr = await client.audio.transcriptions.create({
+      file: fileStream,
+      model: "whisper-1",
+    });
+
+    try { fs.unlinkSync(tmpPath); } catch {}
+
+    const text = String(tr?.text || "").trim();
+    return res.json({ ok: true, text });
+  } catch (err) {
+    global.logErr("[/transcribe-audio] error:", err);
+    return res.status(500).json({ error: err?.message || String(err) });
+  }
+});
+
 
 
 function loadPublicTemplates() {
@@ -217,30 +218,6 @@ app.get("/job-status/:jobId", (req, res) => {
   res.json({ jobId, ...job });
 });
 
-
-// Stop / cancel the currently running automation (best-effort).
-// NOTE: Cancellation requires bot cooperation (checking abortSignal or a shared flag).
-app.post("/stop-job/:jobId", (req, res) => {
-  const jobId = String(req.params.jobId || "");
-  const job = JOBS.get(jobId);
-  if (!job) return res.status(404).json({ error: "Job not found", jobId });
-
-  // Only the active job can be stopped.
-  if (!ACTIVE_JOB_ID || ACTIVE_JOB_ID !== jobId) {
-    return res.status(409).json({ error: "Job is not currently running", jobId, activeJobId: ACTIVE_JOB_ID });
-  }
-
-  ACTIVE_CANCEL_REQUESTED = true;
-  setJob(jobId, { status: "cancelled", message: "Cancellation requested" });
-  appendJobLog(jobId, "🛑 Stop requested by user. Attempting to cancel...");
-
-  try {
-    if (ACTIVE_ABORT_CONTROLLER) ACTIVE_ABORT_CONTROLLER.abort(new Error("User cancelled"));
-  } catch {}
-
-  return res.json({ ok: true, jobId, status: "cancelled" });
-});
-
 // Root: serve UI
 app.get("/", (req, res) => {
   res.sendFile(path.join(__dirname, "public", "index.html"));
@@ -258,8 +235,6 @@ app.post("/run-automation", async (req, res) => {
   }
   
   ACTIVE_JOB_ID = jobId;
-  ACTIVE_ABORT_CONTROLLER = new AbortController();
-  ACTIVE_CANCEL_REQUESTED = false;
   setJob(jobId, {
     status: "running",
     message: "Started",
@@ -280,9 +255,6 @@ app.post("/run-automation", async (req, res) => {
         kinnserPassword: req.body.kinnserPassword || process.env.KINNSER_PASSWORD,
         jobId,
         statusCb: (status, message) => setJob(jobId, { status, message }),
-        abortSignal: ACTIVE_ABORT_CONTROLLER ? ACTIVE_ABORT_CONTROLLER.signal : undefined,
-        shouldAbort: () => !!ACTIVE_CANCEL_REQUESTED,
-
       };
       
       if (!merged.patientName || !merged.visitDate || !merged.taskType) {
@@ -315,32 +287,18 @@ app.post("/run-automation", async (req, res) => {
       };
       
       await runKinnserBot(merged);
-
-      // If user requested stop, keep cancelled status.
-      const j = JOBS.get(jobId);
-      if (ACTIVE_CANCEL_REQUESTED || (j && j.status === "cancelled")) {
-        appendJobLog(jobId, "🛑 Job ended after cancellation request.");
-      } else {
-        setJob(jobId, { status: "completed", message: "Autofill completed" });
-      }
+      
+      setJob(jobId, { status: "completed", message: "Autofill completed" });
       appendJobLog(jobId, "✅ Completed: Autofill completed");
     } catch (e) {
-      const msg = e?.message ? String(e.message) : "Job failed";
-      if (ACTIVE_CANCEL_REQUESTED || (ACTIVE_ABORT_CONTROLLER && ACTIVE_ABORT_CONTROLLER.signal && ACTIVE_ABORT_CONTROLLER.signal.aborted)) {
-        setJob(jobId, { status: "cancelled", message: "Cancelled" });
-        appendJobLog(jobId, `🛑 Cancelled: ${msg}`);
-      } else {
-        setJob(jobId, { status: "failed", message: msg });
-        appendJobLog(jobId, `❌ Failed: ${msg}`);
-      }
+      setJob(jobId, { status: "failed", message: e?.message ? String(e.message) : "Job failed" });
+      appendJobLog(jobId, `❌ Failed: ${e?.message ? String(e.message) : "Job failed"}`);
     } finally {
       try { console.log = _origLog; console.error = _origErr; } catch {}
       try {
         if (globalThis.__KINNSER_LOG_CB) delete globalThis.__KINNSER_LOG_CB;
       } catch {}
       ACTIVE_JOB_ID = null;
-      ACTIVE_ABORT_CONTROLLER = null;
-      ACTIVE_CANCEL_REQUESTED = false;
     }
   })();
 });
@@ -690,84 +648,6 @@ ${cs}`.trim();
   return cs;
 }
 
-
-
-// ------------------------------------------------------------
-// Convert Voice Memo / Audio → Transcript (OpenAI)
-// Expects: { audioDataUrl, language? }
-// Returns: { text }
-// ------------------------------------------------------------
-app.post("/transcribe-audio", async (req, res) => {
-  try {
-    if (!process.env.OPENAI_API_KEY) return res.status(400).json({ error: "OPENAI_API_KEY not configured on server" });
-    const audioDataUrl = String(req.body?.audioDataUrl || "");
-    const language = String(req.body?.language || "");
-    if (!audioDataUrl) return res.status(400).json({ error: "Missing audioDataUrl" });
-
-    const text = await transcribeAudioOpenAI({ audioDataUrl, language });
-    return res.json({ text });
-  } catch (e) {
-    return res.status(500).json({ error: e?.message ? String(e.message) : "Transcription failed" });
-  }
-});
-
-// ------------------------------------------------------------
-// Convert Voice Memo / Audio → Selected Template
-// Expects: { audioDataUrl, taskType, templateText, language? }
-// Returns: { dictation, templateText }
-// NOTE: This endpoint intentionally keeps the conversion simple.
-// Your client-side app.js still applies the stricter Subjective / Assessment patches.
-// ------------------------------------------------------------
-app.post("/convert-audio", async (req, res) => {
-  try {
-    const audioDataUrl = String(req.body?.audioDataUrl || "");
-    const taskType = String(req.body?.taskType || "").trim();
-    const templateText = String(req.body?.templateText || "").trim();
-    const language = String(req.body?.language || "");
-
-    if (!audioDataUrl) return res.status(400).json({ error: "Missing audioDataUrl" });
-    if (!templateText) return res.status(400).json({ error: "Missing templateText" });
-    if (!process.env.OPENAI_API_KEY) return res.status(400).json({ error: "OPENAI_API_KEY not configured on server" });
-
-    const dictation = await transcribeAudioOpenAI({ audioDataUrl, language });
-
-    // Convert transcript into template (same preserve-heading rules as dictation convert)
-    const prompt = `
-You are converting messy PT dictation into the provided WellSky/Kinnser note template.
-
-RULES:
-- Output MUST be the template text filled in.
-- Preserve ALL headings and section order exactly as shown.
-- Preserve ALL whitespace and blank lines exactly as shown in the TEMPLATE. Do NOT remove spacing or indentation.
-- Do NOT rename, reword, or add headings/labels. Use the TEMPLATE text verbatim and only fill in blanks.
-- Fill in values using ONLY the dictation. If unknown, leave the placeholder blank (keep ___ or empty after colon).
-- Do NOT add new headings. Do NOT add extra commentary outside the template.
-- Keep Exercises lines as one exercise per line if present.
-- Keep style professional and Medicare-appropriate.
-
-TASK TYPE: ${taskType || "PT Visit"}
-
-TEMPLATE:
-${templateText}
-
-DICTATION:
-${dictation}
-`.trim();
-
-    const out = await callOpenAIText(prompt, 60000).catch(() => "");
-    const candidate = String(out || "");
-    let finalText = candidate || simpleFillTemplate(dictation, templateText) || templateText;
-
-    if (candidate && templateText && !templateLooksPreserved(candidate, templateText)) {
-      appendLog("⚠️ Model output did not preserve template headings; using deterministic template fill.");
-      finalText = simpleFillTemplate(dictation, templateText) || templateText;
-    }
-
-    return res.json({ dictation, templateText: finalText });
-  } catch (e) {
-    return res.status(500).json({ error: e?.message ? String(e.message) : "Audio conversion failed" });
-  }
-});
 
 // ------------------------------------------------------------
 // Convert Dictation → Selected Template (PT Visit / PT Eval)
