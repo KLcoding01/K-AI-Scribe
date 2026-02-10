@@ -254,81 +254,55 @@ function normalizeClinicalTerms(s = "") {
 function buildVisitAssessmentFromDictation(dictationRaw = "") {
   const d0 = normalizeClinicalTerms(String(dictationRaw || "").replace(/\r\n/g, "\n"));
   const low = d0.toLowerCase();
-
-  // Detect explicit "must include" list (preferred signal)
-  // Example: "must include the following: muscle weakness, unsteady gait, chronic low back pain, ..."
-  const mustIncludeMatch = d0.match(/must\s+include[^:]*:\s*([^.\n\r]+)/i);
-  const mustIncludeRaw = mustIncludeMatch ? mustIncludeMatch[1] : "";
-
-  const want = {
-    muscleWeakness: /\bmuscle\s+weakness\b/i.test(d0) || /\bweakness\b/i.test(low),
-    unsteadyGait: /\bunsteady\s+gait\b/i.test(d0) || (/\bunsteady\b/i.test(low) && /\bgait\b/i.test(low)),
-    chronicLBP: /\b(chronic\s+)?(low\s+back\s+pain|lower\s+back\s+pain|lbp)\b/i.test(d0),
-    muscleAtrophy: /\bmuscle\s+atrophy\b/i.test(d0) || /\batrophy\b/i.test(low),
-    highFallRisk: /\bhigh\s+fall\s+risk\b/i.test(d0) || /\bfall\s*risk\b/i.test(low) || /\bhigh\s+fall\b/i.test(low),
-  };
-
-  // If they provided a "must include" list, enforce those terms even if regex misses variants.
-  if (mustIncludeRaw) {
-    const items = mustIncludeRaw.split(/[,;]+/).map(s => s.trim().toLowerCase()).filter(Boolean);
-    for (const it of items) {
-      if (it.includes("weak")) want.muscleWeakness = true;
-      if (it.includes("unsteady") || it.includes("gait")) want.unsteadyGait = true;
-      if (it.includes("low back") || it.includes("lower back") || it.includes("lbp")) want.chronicLBP = true;
-      if (it.includes("atrophy")) want.muscleAtrophy = true;
-      if (it.includes("fall")) want.highFallRisk = true;
-    }
-  }
-
-  // Additional clinical cues
-  const hasAD = /\b(spc|cane|fww|4ww|walker|ad)\b/i.test(low);
-  const hasDistance = /\b\d+\s*(ft|feet)\b/i.test(low);
-  const assistMatch = d0.match(/\b(sba|cga|min\s*a|mod\s*a|max\s*a|supervision)\b/i);
-  const assist = assistMatch ? assistMatch[1].toUpperCase().replace(/\s+/g, "") : "";
-
+  
+  const hasLBP = /\b(lbp|low back pain)\b/i.test(d0) || /\bchronic\b/i.test(low);
+  const hasGait = /\b(gait|ambulat|walk|fww|walker|cane|ad)\b/i.test(low);
+  const hasTransfers = /\b(transfer|sit\s*to\s*stand|bed\s*mobility|sup\s*to\s*sit|rolling)\b/i.test(low);
+  const hasFallRisk = /\b(fall\s*risk|unsteady|unsafe|loss\s*of\s*balance|lob|fear\s*of\s*fall)\b/i.test(low);
+  const hasWeak = /\b(weak|weakness|decondition|strength)\b/i.test(low);
+  const hasBalance = /\b(balance|postur|stability)\b/i.test(low);
+  const hasPainMgmt = /\b(pain\s*management|pain)\b/i.test(low);
+  const hasCancer = /\b(prostate\s*cx|prostate|cancer|radiation)\b/i.test(low);
+  
   const s1 = "Pt demonstrates fair tolerance to today’s skilled HH PT visit with intermittent rest breaks required for energy conservation and symptom monitoring.";
-
-  // Sentence 2: MUST reflect dictation content (conditions + mobility focus)
-  const cond = [];
-  if (want.muscleWeakness) cond.push("muscle weakness");
-  if (want.unsteadyGait) cond.push("unsteady gait");
-  if (want.chronicLBP) cond.push("chronic LBP");
-  if (want.muscleAtrophy) cond.push("limited functional mobility due to muscle atrophy");
-  const condText = cond.length ? cond.join(", ") : "functional mobility deficits";
-
-  const s2 = `Tx emphasized task-specific mobility training addressing ${condText}, including TherEx and TherAct with VC/TC for safe sequencing, posture, and body mechanics.`;
-
-  // Sentence 3: objective functional impact / safety
-  let gaitClause = "";
-  if (hasDistance || hasAD || assist) {
-    const dist = hasDistance ? (d0.match(/\b(\d+)\s*(ft|feet)\b/i)?.[0] || "") : "";
-    const ad = d0.match(/\b(SPC|cane|FWW|4WW|walker)\b/i)?.[0] || "";
+  const s2 = (() => {
     const parts = [];
-    if (assist) parts.push(assist);
-    if (dist) parts.push(dist);
-    if (ad) parts.push(ad.toUpperCase());
-    if (parts.length) gaitClause = ` Current mobility requires ${parts.join(" ")} with gait/ambulation.`;
-  }
-
-  const risk = want.highFallRisk ? "high fall risk" : "increased fall risk";
-  const s3 = `Pt continues to demonstrate deficits in strength, balance, and activity tolerance with impaired gait mechanics, contributing to ${risk} during household mobility.${gaitClause}`;
-
-  // Sentence 4: safety training / AD management
-  const s4 = "Session incorporated gait mechanics, pacing, and AD management training with environmental scanning to reduce fall and injury risk within the home.";
-
-  // Sentence 5: skilled need / justification
-  const s5 = `Skilled PT is required to progress HEP and functional training with ongoing VC/TC for safety due to ${risk} and limited carryover with independent practice.`;
-
-  // Sentence 6: medical necessity
-  const s6 = "Continued skilled HH PT remains medically necessary to maximize functional independence, improve safety with ADLs, and prevent decline/hospitalization.";
-
+    if (hasPainMgmt && hasLBP) parts.push("pain management for chronic LBP");
+    else if (hasPainMgmt) parts.push("pain management strategies");
+    if (hasTransfers) parts.push("functional mobility training for bed mobility and transfers");
+    else parts.push("functional mobility training for safe transfers");
+    if (hasGait) parts.push("gait training to improve household ambulation safety");
+    else parts.push("upright tolerance training to improve mobility safety");
+    return `Tx emphasized ${parts.join(", ")}, with VC/TC provided to improve sequencing, posture, and body mechanics.`;
+  })();
+  const s3 = (() => {
+    const deficits = [];
+    if (hasWeak) deficits.push("LE weakness");
+    if (hasBalance) deficits.push("impaired balance reactions");
+    deficits.push("reduced activity tolerance");
+    const defText = deficits.length ? deficits.join(", ") : "ongoing strength and balance deficits";
+    return `Pt demonstrates gradual functional improvement; however, ${defText} continue to limit task carryover and increase fall risk during mobility.`;
+  })();
+  const s4 = (() => {
+    if (hasCancer) {
+      return "Gait and safety training incorporated pacing, AD management, and environmental scanning due to medical complexity and fatigue/safety concerns associated with prostate cx and radiation tx.";
+    }
+    return "Gait and safety training incorporated pacing, AD management, and environmental scanning to reduce fall/injury risk during mobility within the home.";
+  })();
+  const s5 = (() => {
+    const risk = hasFallRisk ? "high fall risk" : "increased fall risk";
+    const painClause = (hasLBP || hasPainMgmt) ? "manage pain flare-ups, " : "";
+    return `Pt continues to require skilled PT for real-time clinical judgment to ${painClause}progress exercise dosing, and provide ongoing VC/TC for safety due to ${risk} and variable tolerance.`;
+  })();
+  const s6 = "Continued skilled HH PT remains medically necessary to progress toward goals, maximize functional independence, and prevent decline/hospitalization.";
+  
   const clean = (s) => {
     let t = String(s || "").trim().replace(/\s+/g, " ");
     t = t.replace(/\bPt\s+Pt\b/ig, "Pt").replace(/\.\.+/g, ".");
     if (!/[.!?]$/.test(t)) t += ".";
     return t;
   };
-
+  
   return [clean(s1), clean(s2), clean(s3), clean(s4), clean(s5), clean(s6)].join(" ");
 }
 
@@ -336,18 +310,12 @@ function patchVisitAssessmentInTemplate(templateTextRaw = "", assessmentTextRaw 
   const templateText = String(templateTextRaw || "");
   const assess = String(assessmentTextRaw || "").trim();
   if (!templateText || !assess) return templateText;
-
-  // Prefer "Assessment Summary:" if present, else "Assessment:"
-  const reSummary = /(^\s*Assessment\s*Summary\s*:\s*)([\s\S]*?)(?=\n\s*(?:Plan|Goals|Frequency|Effective\s*Date|Procedures|Interventions)\b|$)/im;
-  if (reSummary.test(templateText)) {
-    return templateText.replace(reSummary, `$1${assess}\n`);
+  
+  const re = /(^\s*Assessment\s*:\s*)([\s\S]*?)(?=\n\s*(?:Plan|Goals|Frequency|Effective\s*Date)\b|$)/im;
+  if (re.test(templateText)) {
+    return templateText.replace(re, `$1${assess}\n`);
   }
-
-  const reAssess = /(^\s*Assessment\s*:\s*)([\s\S]*?)(?=\n\s*(?:Plan|Goals|Frequency|Effective\s*Date|Procedures|Interventions)\b|$)/im;
-  if (reAssess.test(templateText)) {
-    return templateText.replace(reAssess, `$1${assess}\n`);
-  }
-
+  
   return templateText + `\n\nAssessment:\n${assess}\n`;
 }
 
@@ -498,6 +466,19 @@ function patchEvalAssessmentSummary(templateTextRaw = "", summaryTextRaw = "") {
   let pollTimer = null;
   let activeJobId = null;
   
+  const ACTIVE_JOB_STORAGE_KEY = "kinscribe_activeJobId";
+
+  function persistActiveJobId(jobId) {
+    try {
+      if (jobId) localStorage.setItem(ACTIVE_JOB_STORAGE_KEY, String(jobId));
+      else localStorage.removeItem(ACTIVE_JOB_STORAGE_KEY);
+    } catch {}
+  }
+
+  function getPersistedJobId() {
+    try { return localStorage.getItem(ACTIVE_JOB_STORAGE_KEY) || ""; } catch { return ""; }
+  }
+
   function setBadge(text, kind = "") {
     const b = el("jobBadge");
     b.textContent = text;
@@ -566,8 +547,11 @@ function patchEvalAssessmentSummary(templateTextRaw = "", summaryTextRaw = "") {
         const logText = Array.isArray(job.logs) ? job.logs.join("\n") : (job.log || "");
         setStatus(summaryLines.join("\n") + (logText ? `\n\n${logText}` : ""));
         
-        if (job.status === "completed" || job.status === "failed") stopPolling();
-      } catch (e) {
+        if (job.status === "completed" || job.status === "failed" || job.status === "canceled") {
+          persistActiveJobId(null);
+          stopPolling();
+        }
+        } catch (e) {
         setBadge("Polling error", "bad");
         setStatus(`Polling failed:\n${e?.message || e}\n\n${JSON.stringify(e?.body || {}, null, 2)}`);
         stopPolling();
@@ -586,8 +570,9 @@ function patchEvalAssessmentSummary(templateTextRaw = "", summaryTextRaw = "") {
     setBadge("Idle");
     setStatus("No job yet.");
     activeJobId = null;
+    persistActiveJobId(null);
     stopPolling();
-  }
+    }
   
   async function runAutomation() {
     const kinnserUsername = el("kinnserUsername").value.trim();
@@ -605,6 +590,26 @@ function patchEvalAssessmentSummary(templateTextRaw = "", summaryTextRaw = "") {
       return;
     }
     
+
+
+  async function stopJob() {
+    if (!activeJobId) {
+      setBadge("No active job", "warn");
+      setStatus("Stop requested, but there is no active job.");
+      return;
+    }
+    try {
+      setBadge("Stopping…", "warn");
+      setStatus(`Requesting stop…\njobId: ${activeJobId}`);
+      await httpJson(`/cancel-job/${encodeURIComponent(activeJobId)}`, { method: "POST" });
+      setBadge("Cancel requested", "warn");
+      setStatus(`Cancel requested.\njobId: ${activeJobId}\n\nThe server will stop the job if possible. You can keep this page closed; the job state is stored and can be checked later.`);
+    } catch (e) {
+      setBadge("Stop failed", "bad");
+      setStatus(`Stop failed:\n${e?.message || e}\n\n${JSON.stringify(e?.body || {}, null, 2)}`);
+    }
+  }
+
     if (!kinnserUsername || !kinnserPassword) {
       setBadge("Missing login", "bad");
       setStatus("Please enter Kinnser username and password.");
@@ -633,6 +638,7 @@ function patchEvalAssessmentSummary(templateTextRaw = "", summaryTextRaw = "") {
       });
       
       activeJobId = resp.jobId;
+      persistActiveJobId(activeJobId);
       setBadge("Running", "warn");
       setStatus(`Job started.\njobId: ${activeJobId}`);
       await pollJob(activeJobId);
@@ -719,6 +725,126 @@ function patchEvalAssessmentSummary(templateTextRaw = "", summaryTextRaw = "") {
       return;
     }
     
+
+
+  async function convertAudio() {
+    const file = el("audioFile")?.files?.[0];
+    if (!file) {
+      setBadge("Audio convert failed", "bad");
+      setStatus("Audio convert failed:\nPlease choose an .m4a audio file first.");
+      return;
+    }
+
+    try {
+      el("btnConvertAudio").disabled = true;
+      setBadge("Transcribing…", "warn");
+      setStatus("Uploading audio and transcribing → selected template…");
+
+      const audioDataUrl = await fileToDataUrl(file);
+
+      const taskType = (el("taskType")?.value || "").trim();
+      const templateKey = (el("templateKey")?.value || "").trim();
+
+      let templateText = "";
+      if (templateKey && TEMPLATES[templateKey]) templateText = TEMPLATES[templateKey];
+      else if ((taskType || "").toLowerCase().includes("evaluation") && TEMPLATES.pt_eval_default) templateText = TEMPLATES.pt_eval_default;
+      else templateText = TEMPLATES.pt_visit_default || "";
+
+      const tResp = await httpJson("/transcribe-audio", {
+        method: "POST",
+        body: JSON.stringify({ audioDataUrl }),
+      });
+
+      const transcript = String(tResp.transcript || "").trim();
+      if (!transcript) throw new Error("Transcription returned empty text");
+      if (el("dictationNotes")) el("dictationNotes").value = transcript;
+
+      const resp = await httpJson("/convert-dictation", {
+        method: "POST",
+        body: JSON.stringify({ dictation: transcript, taskType, templateText }),
+      });
+
+      let outText = String(resp.templateText || "");
+
+      // Keep client-side patches consistent with Convert Dictation
+      if (transcript) {
+        const subjFromDictation = extractSubjectiveFromDictation(transcript);
+        outText = patchSubjectiveInTemplate(outText, subjFromDictation);
+
+        if ((taskType || "").toLowerCase().includes("visit")) {
+          const visitAssess = buildVisitAssessmentFromDictation(transcript);
+          outText = patchVisitAssessmentInTemplate(outText, visitAssess);
+        }
+
+        if ((taskType || "").toLowerCase().includes("evaluation")) {
+          const vitals = extractVitalsFromText(transcript);
+          outText = patchVitalsInTemplate(outText, vitals);
+
+          const evalSummary = buildEvalAssessmentSummaryFromDictation(transcript);
+          outText = patchEvalAssessmentSummary(outText, evalSummary);
+        }
+      }
+
+      el("aiNotes").value = sanitizeNotes(outText);
+      setBadge("Ready", "ok");
+      setStatus("Audio transcription + conversion completed. Review AI Notes, then click Run Automation.");
+    } catch (e) {
+      setBadge("Audio convert failed", "bad");
+      setStatus(`Audio convert failed:\n${e?.message || e}\n\n${JSON.stringify(e?.body || {}, null, 2)}`);
+    } finally {
+      el("btnConvertAudio").disabled = false;
+    }
+  }
+
+  function ensureAudioAndStopControls() {
+    // Try to place controls near existing dictation controls (best-effort).
+    const anchor =
+      el("dictationNotes")?.closest(".card") ||
+      el("dictationNotes")?.parentElement ||
+      el("btnConvert")?.parentElement ||
+      document.body;
+
+    // Audio input + button
+    if (!el("audioFile")) {
+      const wrap = document.createElement("div");
+      wrap.style.marginTop = "10px";
+
+      const label = document.createElement("div");
+      label.textContent = "Voice memo (.m4a) → Template:";
+      label.style.fontWeight = "600";
+      label.style.marginBottom = "6px";
+
+      const input = document.createElement("input");
+      input.type = "file";
+      input.id = "audioFile";
+      input.accept = "audio/*,.m4a";
+
+      const btn = document.createElement("button");
+      btn.id = "btnConvertAudio";
+      btn.type = "button";
+      btn.textContent = "Convert Audio";
+      btn.style.marginLeft = "8px";
+
+      wrap.appendChild(label);
+      wrap.appendChild(input);
+      wrap.appendChild(btn);
+
+      anchor.appendChild(wrap);
+    }
+
+    // Stop button
+    if (!el("btnStop")) {
+      const btnRun = el("btnRun");
+      const btn = document.createElement("button");
+      btn.id = "btnStop";
+      btn.type = "button";
+      btn.textContent = "Stop";
+      btn.style.marginLeft = "8px";
+      if (btnRun && btnRun.parentElement) btnRun.parentElement.appendChild(btn);
+      else anchor.appendChild(btn);
+    }
+  }
+
     try {
       el("btnConvertImage").disabled = true;
       setBadge("Converting…", "warn");
@@ -1092,116 +1218,6 @@ Effective Date: `
     } catch {}
   }
   
-
-
-  // ------------------------------
-  // Voice memo / audio upload -> Transcribe -> Dictation
-  // ------------------------------
-  function _getAudioEls() {
-    const input = document.getElementById("audioUpload") || document.getElementById("audioFile");
-    const btnTx = document.getElementById("btnTranscribeAudio");
-    const btnTxConvert = document.getElementById("btnAudioToTemplate");
-    const dict = document.getElementById("dictationNotes");
-    return { input, btnTx, btnTxConvert, dict };
-  }
-
-  function _guessMime(file) {
-    if (!file) return "audio/webm";
-    const name = String(file.name || "").toLowerCase();
-    const t = String(file.type || "").toLowerCase();
-    if (t) return t;
-    if (name.endsWith(".m4a")) return "audio/mp4";
-    if (name.endsWith(".mp3")) return "audio/mpeg";
-    if (name.endsWith(".wav")) return "audio/wav";
-    if (name.endsWith(".webm")) return "audio/webm";
-    if (name.endsWith(".mp4")) return "audio/mp4";
-    return "audio/webm";
-  }
-
-  function _fileToBase64(file) {
-    return new Promise((resolve, reject) => {
-      const r = new FileReader();
-      r.onerror = () => reject(new Error("Failed to read audio file"));
-      r.onload = () => {
-        const result = String(r.result || "");
-        // result is data:*/*;base64,....
-        const idx = result.indexOf("base64,");
-        resolve(idx >= 0 ? result.slice(idx + 7) : result);
-      };
-      r.readAsDataURL(file);
-    });
-  }
-
-  async function transcribeAudioAndMaybeConvert(autoConvert) {
-    const { input, dict } = _getAudioEls();
-    const file = input && input.files && input.files[0] ? input.files[0] : null;
-
-    if (!file) {
-      setBadge("Transcribe failed", "bad");
-      setStatus("Transcribe failed:\nPlease upload an audio file first.");
-      return;
-    }
-
-    try {
-      setBadge("Transcribing…", "warn");
-      setStatus("Uploading audio for transcription…");
-
-      const base64 = await _fileToBase64(file);
-      const mime = _guessMime(file);
-
-      const resp = await fetch("/transcribe-audio", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          audio_base64: base64,
-          mime_type: mime,
-          filename: file.name || ""
-        })
-      });
-
-      const textRaw = await resp.text();
-      let data = null;
-      try { data = JSON.parse(textRaw); } catch { data = { raw: textRaw }; }
-
-      if (!resp.ok) {
-        const msg = data && (data.error || data.message) ? (data.error || data.message) : `HTTP ${resp.status}`;
-        throw new Error(msg);
-      }
-
-      const tx = String(data.text || "").trim();
-      if (!tx) throw new Error("Transcription returned empty text.");
-
-      // Insert into Dictation
-      if (dict) {
-        const cur = String(dict.value || "").trim();
-        dict.value = cur ? (cur + "\n" + tx) : tx;
-      }
-
-      setBadge("Transcribed", "ok");
-      setStatus("Transcription completed. Text inserted into Dictation.");
-
-      if (autoConvert) {
-        await convertDictation();
-      }
-    } catch (e) {
-      setBadge("Transcribe failed", "bad");
-      setStatus(`Transcribe failed:\n${e && e.message ? e.message : e}`);
-    }
-  }
-
-  function wireVoiceButtons() {
-    const { btnTx, btnTxConvert } = _getAudioEls();
-    if (btnTx) {
-      btnTx.addEventListener("click", () => transcribeAudioAndMaybeConvert(false));
-    }
-    if (btnTxConvert) {
-      btnTxConvert.addEventListener("click", () => transcribeAudioAndMaybeConvert(true));
-    }
-  }
-
-
-  wireVoiceButtons();
-
   initTemplates();
   loadSavedCreds();
   
@@ -1209,13 +1225,25 @@ Effective Date: `
   if (el("btnClearCreds")) el("btnClearCreds").addEventListener("click", clearCreds);
   
   el("btnHealth").addEventListener("click", testHealth);
+  // Resume polling after navigation / phone sleep
+  (function resumePersistedJob() {
+    const stored = getPersistedJobId();
+    if (!stored) return;
+    activeJobId = stored;
+    setBadge("Resuming…", "warn");
+    setStatus(`Resuming job polling...\njobId: ${activeJobId}`);
+    pollJob(activeJobId);
+  })();
+
   el("btnRun").addEventListener("click", runAutomation);
   el("btnClear").addEventListener("click", clearForm);
   
   if (el("btnConvert")) el("btnConvert").addEventListener("click", convertDictation);
   if (el("btnConvertImage")) el("btnConvertImage").addEventListener("click", convertImage);
-  
-  el("kinnserPassword").addEventListener("keydown", (e) => {
+  ensureAudioAndStopControls();
+  if (el("btnConvertAudio")) el("btnConvertAudio").addEventListener("click", convertAudio);
+  if (el("btnStop")) el("btnStop").addEventListener("click", stopJob);
+el("kinnserPassword").addEventListener("keydown", (e) => {
     if (e.key === "Enter") runAutomation();
   });
 })();
