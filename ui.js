@@ -63,10 +63,10 @@ function extractAgeGenderFromText(text="") {
   // Supports: "68-year-old female", "68 year old female", "68 y/o female", "female 68-year-old", iOS hyphen variants
   const hy = "[\-\u2010\u2011\u2012\u2013\u2014\u2015\u2212]";
   let m =
-    t.match(new RegExp(`\\b(\\d{1,3})\\s*(?:y\\/?o|yo|y\\.o\\.)\\s*(male|female)\\b`, "i")) ||
-    t.match(new RegExp(`\\b(\\d{1,3})\\s*(?:${hy}|\\s)?\\s*year\\s*(?:${hy}|\\s)?\\s*old\\s*(male|female|woman|man)\\b`, "i")) ||
-    t.match(new RegExp(`\\b(male|female|woman|man)\\s*(?:,|:)??\\s*(\\d{1,3})\\s*(?:${hy}|\\s)?\\s*year\\s*(?:${hy}|\\s)?\\s*old\\b`, "i"));
-
+  t.match(new RegExp(`\\b(\\d{1,3})\\s*(?:y\\/?o|yo|y\\.o\\.)\\s*(male|female)\\b`, "i")) ||
+  t.match(new RegExp(`\\b(\\d{1,3})\\s*(?:${hy}|\\s)?\\s*year\\s*(?:${hy}|\\s)?\\s*old\\s*(male|female|woman|man)\\b`, "i")) ||
+  t.match(new RegExp(`\\b(male|female|woman|man)\\s*(?:,|:)??\\s*(\\d{1,3})\\s*(?:${hy}|\\s)?\\s*year\\s*(?:${hy}|\\s)?\\s*old\\b`, "i"));
+  
   let age="", gender="";
   if (m) {
     if (/^\d/.test(m[1])) { age = m[1]; gender = m[2]; }
@@ -81,20 +81,20 @@ function extractAgeGenderFromText(text="") {
 function extractPMHFromText(text="") {
   const t = String(text||"");
   let pmh =
-    (t.match(/\bPMH\b\s*(?:consist(?:s)?\s+of|consists\s+of|include(?:s)?|significant\s+for)?\s*[:\-]?\s*([^\n\r\.]+)/i)?.[1]||"").trim();
+  (t.match(/\bPMH\b\s*(?:consist(?:s)?\s+of|consists\s+of|include(?:s)?|significant\s+for)?\s*[:\-]?\s*([^\n\r\.]+)/i)?.[1]||"").trim();
   if (!pmh) {
     pmh =
-      (t.match(/\bmedical\s+history\b\s*(?:consist(?:s)?\s+of|consists\s+of|include(?:s)?|significant\s+for)?\s*[:\-]?\s*([^\n\r\.]+)/i)?.[1]||"").trim();
+    (t.match(/\bmedical\s+history\b\s*(?:consist(?:s)?\s+of|consists\s+of|include(?:s)?|significant\s+for)?\s*[:\-]?\s*([^\n\r\.]+)/i)?.[1]||"").trim();
   }
   if (!pmh) {
     pmh =
-      (t.match(/\bhistory\b\s*(?:consist(?:s)?\s+of|consists\s+of|include(?:s)?|significant\s+for)?\s*[:\-]?\s*([^\n\r\.]+)/i)?.[1]||"").trim();
+    (t.match(/\bhistory\b\s*(?:consist(?:s)?\s+of|consists\s+of|include(?:s)?|significant\s+for)?\s*[:\-]?\s*([^\n\r\.]+)/i)?.[1]||"").trim();
   }
   pmh = pmh
-    .replace(/hypertension/ig,"HTN")
-    .replace(/hyperlipidemia/ig,"HLD")
-    .replace(/diabetes\s*(type\s*2|ii|2)/ig,"DM2")
-    .replace(/\bconsist\s+of\s+consist\s+of\b/ig,"consist of");
+  .replace(/hypertension/ig,"HTN")
+  .replace(/hyperlipidemia/ig,"HLD")
+  .replace(/diabetes\s*(type\s*2|ii|2)/ig,"DM2")
+  .replace(/\bconsist\s+of\s+consist\s+of\b/ig,"consist of");
   pmh = pmh.replace(/[\s,;]+$/,"").trim();
   return pmh;
 }
@@ -112,23 +112,23 @@ function extractChiefIssues(text="") {
 function extractMobilityDetails(text="") {
   const t = String(text||"");
   const low = t.toLowerCase();
-
+  
   // Assist level (SBA/CGA/MinA/etc)
   let assist = "";
   const am = t.match(/\b(SBA|CGA|MIN\s*A|MOD\s*A|MAX\s*A)\b/i);
   if (am) assist = am[1].toUpperCase().replace(/\s+/g,"");
-
+  
   // Gait distance
   let dist = "";
   const dm = t.match(/\b(\d{1,4})\s*(?:ft|feet)\b/i);
   if (dm) dist = dm[1];
-
+  
   // Assistive device
   let ad = "";
   if (/\bSPC\b|\bsingle\s*point\s*cane\b/i.test(low)) ad = "SPC";
   else if (/\bFWW\b|\bfront\s*wheeled\s*walker\b/i.test(low)) ad = "FWW";
   else if (/\b4WW\b|\b4\s*wheeled\s*walker\b|\brollator\b/i.test(low)) ad = "4WW";
-
+  
   return { assist, dist, ad };
 }
 
@@ -143,23 +143,23 @@ function extractFallImaging(text="") {
 
 function buildEvalAssessmentSummary6(dictation="") {
   const d = String(dictation||"");
-
+  
   const { age, gender } = extractAgeGenderFromText(d);
   const pmh = extractPMHFromText(d);
   const issues = extractChiefIssues(d);
   const mob = extractMobilityDetails(d);
   const fall = extractFallImaging(d);
-
+  
   const ageStr = age ? age : "__";
   const genderStr = gender ? gender : "__";
   const pmhStr = pmh ? pmh : "__";
-
+  
   // Sentence 1 (STRICT format required by you)
   const s1 = `Pt is a ${ageStr} y/o ${genderStr} who presents with PMH consist of ${pmhStr}.`;
-
+  
   // Sentence 2 (your exact services line)
   const s2 = "Pt is seen for PT initial evaluation, home assessment, DME assessment, HEP training/education, fall safety precautions, fall prevention, proper use of AD, education on pain/edema management, and PT POC/goal planning to return to PLOF.";
-
+  
   // Sentence 3 (include mobility details if present)
   let s3 = "Pt demonstrates gross strength deficit with difficulty with transfers and gait due to unsteady gait pattern and impaired balance reactions, contributing to high fall risk.";
   if (mob.assist || mob.dist || mob.ad) {
@@ -170,7 +170,7 @@ function buildEvalAssessmentSummary6(dictation="") {
     const detail = parts.length ? ` requiring ${parts.join(" ")} for gait/ambulation.` : "";
     s3 = `Pt demonstrates gross strength deficit with difficulty with transfers and gait due to unsteady gait pattern and impaired balance reactions, contributing to high fall risk${detail}`;
   }
-
+  
   // Sentence 4 (objective only; NO "Pt reports", NO agreeable)
   let s4 = "Pt presents with weakness and impaired balance and will benefit from skilled HH PT to decrease fall and injury risk.";
   if (issues.painLBP && (issues.weakness || issues.unsteady || issues.fallRisk)) {
@@ -179,20 +179,20 @@ function buildEvalAssessmentSummary6(dictation="") {
   if (issues.atrophy) {
     s4 = s4.replace("weakness", "weakness with muscle atrophy");
   }
-
+  
   // Append fall/imaging context objectively
   if (fall.hasFall) {
     const when = fall.weeksMatch ? `${fall.weeksMatch[1]} week(s) ago` : (fall.daysMatch ? `${fall.daysMatch[1]} day(s) ago` : "recently");
     s4 += ` History of fall/trip ${when}.`;
     if (fall.xrayNeg) s4 += " Imaging negative for acute fracture.";
   }
-
+  
   // Sentence 5 (your required skilled needs line)
   const s5 = "Pt is a good candidate and will benefit from skilled HH PT to address limitations and impairments as mentioned, including progression of task-specific training with ongoing VC/TC for safety and sequencing, in order to improve overall functional mobility status, decrease fall risk, and improve QoL.";
-
+  
   // Sentence 6
   const s6 = "Continued skilled HH PT remains medically necessary.";
-
+  
   // Ensure clean spacing and exactly 6 sentences
   const out = [s1,s2,s3,s4,s5,s6].map(_normSpaces).join(" ");
   return out.replace(/\bPt\s+Pt\b/g,"Pt").replace(/\bconsist\s+of\s+consist\s+of\b/ig,"consist of");
@@ -201,62 +201,16 @@ function buildEvalAssessmentSummary6(dictation="") {
 function replaceAssessmentSummaryBlock(templateText="", summary="") {
   let t = String(templateText||"");
   if (!t) return t;
-
+  
   const re = /(^\s*Assessment\s*Summary\s*:\s*)([\s\S]*?)(?=\n\s*(?:Plan|Goals|Frequency|Effective\s*Date|Procedures|Interventions)\b|$)/im;
   if (re.test(t)) return t.replace(re, `$1${summary}\n`);
-
+  
   const re2 = /(^\s*Assessment\s*:\s*)([\s\S]*?)(?=\n\s*(?:Plan|Goals|Frequency|Effective\s*Date|Procedures|Interventions)\b|$)/im;
   if (re2.test(t)) return t.replace(re2, `$1${summary}\n`);
-
+  
   return t + `\n\nAssessment Summary: ${summary}\n`;
 }
 
-// -------------------------
-// Audio transcription endpoint
-// -------------------------
-app.post("/transcribe-audio", async (req, res) => {
-  try {
-    const audio_base64 = String(req.body?.audio_base64 || "");
-    const mime_type = String(req.body?.mime_type || "");
-    const filename = String(req.body?.filename || "");
-
-    if (!audio_base64) return res.status(400).json({ error: "Missing audio_base64" });
-    if (!process.env.OPENAI_API_KEY) return res.status(500).json({ error: "OPENAI_API_KEY is not set" });
-    if (!OpenAI) return res.status(500).json({ error: "openai package not installed (npm i openai)" });
-
-    const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-
-    // Determine extension (prefer filename; iOS often sends blank mime)
-    let ext = "";
-    const lowerName = filename.toLowerCase();
-    if (lowerName.endsWith(".m4a")) ext = "m4a";
-    else if (lowerName.endsWith(".mp3")) ext = "mp3";
-    else if (lowerName.endsWith(".wav")) ext = "wav";
-    else if (lowerName.endsWith(".webm")) ext = "webm";
-    else if (mime_type.includes("mp4")) ext = "m4a";
-    else if (mime_type.includes("mpeg")) ext = "mp3";
-    else if (mime_type.includes("wav")) ext = "wav";
-    else ext = "webm";
-
-    const tmpPath = `/tmp/audio_${Date.now()}.${ext}`;
-
-    // Strip dataURL prefix if present
-    const b64 = audio_base64.replace(/^data:.*;base64,/, "");
-    fs.writeFileSync(tmpPath, Buffer.from(b64, "base64"));
-
-    const tr = await client.audio.transcriptions.create({
-      file: fs.createReadStream(tmpPath),
-      model: process.env.TRANSCRIBE_MODEL || "whisper-1",
-    });
-
-    try { fs.unlinkSync(tmpPath); } catch {}
-
-    res.json({ ok: true, text: String(tr?.text || "").trim() });
-  } catch (e) {
-    console.error("[/transcribe-audio] error:", e);
-    res.status(500).json({ error: e?.message || "Transcription failed" });
-  }
-});
 
 
 
@@ -330,6 +284,54 @@ app.use(express.urlencoded({ extended: true }));
 
 // Serve UI assets
 app.use(express.static(path.join(__dirname, "public")));
+
+// -------------------------
+// Audio transcription endpoint
+// -------------------------
+app.post("/transcribe-audio", async (req, res) => {
+  try {
+    const audio_base64 = String(req.body?.audio_base64 || "");
+    const mime_type = String(req.body?.mime_type || "");
+    const filename = String(req.body?.filename || "");
+    
+    if (!audio_base64) return res.status(400).json({ error: "Missing audio_base64" });
+    if (!process.env.OPENAI_API_KEY) return res.status(500).json({ error: "OPENAI_API_KEY is not set" });
+    if (!OpenAI) return res.status(500).json({ error: "openai package not installed (npm i openai)" });
+    
+    const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    
+    // Determine extension (prefer filename; iOS often sends blank mime)
+    let ext = "";
+    const lowerName = filename.toLowerCase();
+    if (lowerName.endsWith(".m4a")) ext = "m4a";
+    else if (lowerName.endsWith(".mp3")) ext = "mp3";
+    else if (lowerName.endsWith(".wav")) ext = "wav";
+    else if (lowerName.endsWith(".webm")) ext = "webm";
+    else if (mime_type.includes("mp4")) ext = "m4a";
+    else if (mime_type.includes("mpeg")) ext = "mp3";
+    else if (mime_type.includes("wav")) ext = "wav";
+    else ext = "webm";
+    
+    const tmpPath = `/tmp/audio_${Date.now()}.${ext}`;
+    
+    // Strip dataURL prefix if present
+    const b64 = audio_base64.replace(/^data:.*;base64,/, "");
+    fs.writeFileSync(tmpPath, Buffer.from(b64, "base64"));
+    
+    const tr = await client.audio.transcriptions.create({
+      file: fs.createReadStream(tmpPath),
+      model: process.env.TRANSCRIBE_MODEL || "whisper-1",
+    });
+    
+    try { fs.unlinkSync(tmpPath); } catch {}
+    
+    res.json({ ok: true, text: String(tr?.text || "").trim() });
+  } catch (e) {
+    console.error("[/transcribe-audio] error:", e);
+    res.status(500).json({ error: e?.message || "Transcription failed" });
+  }
+});
+
 
 
 function loadPublicTemplates() {
@@ -826,7 +828,7 @@ app.post("/convert-dictation", async (req, res) => {
     
     // Deterministic vars used for evaluation Assessment Summary enforcement
     const __evalSummary = (/eval|evaluation/i.test(taskType)) ? buildEvalAssessmentSummary6(dictation) : "";
-
+    
     const prompt = `
 You are converting messy PT dictation into the provided WellSky/Kinnser note template.
 
@@ -957,7 +959,7 @@ ${dictation}
     if (/eval|evaluation/i.test(taskType) && __evalSummary) {
       patchedText = replaceAssessmentSummaryBlock(patchedText, __evalSummary);
     }
-
+    
     return res.json({ templateText: patchedText });
   } catch (e) {
     return res.status(500).json({ error: e?.message || "convert-dictation failed" });
