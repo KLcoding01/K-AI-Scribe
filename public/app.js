@@ -30,13 +30,13 @@ function sanitizeNotes(text) {
 // -------------------------
 function extractVitalsFromText(raw = "") {
   const t = String(raw || "");
-
+  
   // BP: 126/67 or blood pressure 126/67
   const bp = t.match(/\b(?:bp|blood\s*pressure)\s*[:=]?\s*(\d{2,3})\s*\/\s*(\d{2,3})\b/i);
   const hr = t.match(/\b(?:heart\s*rate|hr)\s*[:=]?\s*(\d{2,3})\b/i);
   const rr = t.match(/\b(?:resp(?:irations?)?|rr)\s*[:=]?\s*(\d{1,2})\b/i);
   const temp = t.match(/\b(?:temp(?:erature)?)\s*[:=]?\s*(\d{2,3}(?:\.\d)?)\b/i);
-
+  
   return {
     bpSys: bp ? String(bp[1]) : "",
     bpDia: bp ? String(bp[2]) : "",
@@ -49,26 +49,26 @@ function extractVitalsFromText(raw = "") {
 function stripVitalsPhrases(raw = "") {
   // Remove common vitals phrases/sentences so they don't end up in Subjective.
   let s = String(raw || "");
-
+  
   // Remove comma-separated vitals clusters
   s = s.replace(/\b(?:bp|blood\s*pressure)\s*[:=]?\s*\d{2,3}\s*\/\s*\d{2,3}\s*,?\s*/ig, "");
   s = s.replace(/\b(?:heart\s*rate|hr)\s*[:=]?\s*\d{2,3}\s*,?\s*/ig, "");
   s = s.replace(/\b(?:resp(?:irations?)?|rr)\s*[:=]?\s*\d{1,2}\s*,?\s*/ig, "");
   s = s.replace(/\b(?:temp(?:erature)?)\s*[:=]?\s*\d{2,3}(?:\.\d)?\s*,?\s*/ig, "");
-
+  
   // If a line is basically only vitals, drop the whole line
   s = s
-    .split(/\r?\n/)
-    .filter(line => {
-      const l = line.trim();
-      if (!l) return true;
-      const hasVitals = /\b(bp|blood\s*pressure|heart\s*rate|\bhr\b|resp|respirations|\brr\b|temp|temperature)\b\s*[:=]/i.test(l);
-      const hasWords = /[a-z]{3,}/i.test(l.replace(/\d|\/|\.|:|,/g, ""));
-      // keep line if it has non-vitals narrative words
-      return !(hasVitals && !hasWords);
-    })
-    .join("\n");
-
+  .split(/\r?\n/)
+  .filter(line => {
+    const l = line.trim();
+    if (!l) return true;
+    const hasVitals = /\b(bp|blood\s*pressure|heart\s*rate|\bhr\b|resp|respirations|\brr\b|temp|temperature)\b\s*[:=]/i.test(l);
+    const hasWords = /[a-z]{3,}/i.test(l.replace(/\d|\/|\.|:|,/g, ""));
+    // keep line if it has non-vitals narrative words
+    return !(hasVitals && !hasWords);
+  })
+  .join("\n");
+  
   // normalize spaces
   return s.replace(/\s+/g, " ").trim();
 }
@@ -77,7 +77,7 @@ function stripVitalsPhrases(raw = "") {
 function patchVitalsInTemplate(templateTextRaw = "", vitals = {}) {
   let t = String(templateTextRaw || "");
   if (!t) return t;
-
+  
   const v = vitals || {};
   // Replace fields if present; do not invent if missing.
   if (v.temperature) t = t.replace(/(\bTemp\s*:\s*)([^\n\r]*)/i, `$1${v.temperature}`);
@@ -87,93 +87,92 @@ function patchVitalsInTemplate(templateTextRaw = "", vitals = {}) {
   }
   if (v.heartRate) t = t.replace(/(\bHeart\s*Rate\s*:\s*)([^\n\r]*)/i, `$1${v.heartRate}`);
   if (v.respirations) t = t.replace(/(\bRespirations\s*:\s*)([^\n\r]*)/i, `$1${v.respirations}`);
-
+  
   return t;
 }
 
 // Generate a strict 6-sentence HH PT Eval Assessment Summary from dictation only (no hallucination).
-// Generate a strict 6-sentence HH PT Eval Assessment Summary from dictation only (no hallucination).
 function buildEvalAssessmentSummaryFromDictation(dictationRaw = "") {
   const dRaw = String(dictationRaw || "");
   const d = dRaw.replace(/\r\n/g, "\n");
-
+  
   // Pull vitals (used for Vital Signs section only; NEVER insert into Assessment Summary)
   const v = extractVitalsFromText(d);
-
+  
   // Age/sex
   const demo = d.match(/\b(\d{1,3})\s*y\/?o\s*(male|female)\b/i);
   const age = demo ? demo[1] : "";
   const sex = demo ? demo[2].toLowerCase() : "";
-
+  
   // Helpers
   const norm = (s) => String(s || "")
-    .replace(/prostate\s*cancer/ig, "prostate cx")
-    .replace(/\bprostate\s*cx\b/ig, "prostate cx")
-    .replace(/diabetes\s*type\s*2/ig, "DM2")
-    .replace(/diabetes\s*2/ig, "DM2")
-    .replace(/hypertension/ig, "HTN")
-    .replace(/degenerative\s*disc\s*disease/ig, "DDD")
-    .replace(/lumbar\s*spine/ig, "L-spine")
-    .replace(/low\s*back\s*pain/ig, "LBP")
-    .replace(/\s+/g, " ")
-    .trim();
-
+  .replace(/prostate\s*cancer/ig, "prostate cx")
+  .replace(/\bprostate\s*cx\b/ig, "prostate cx")
+  .replace(/diabetes\s*type\s*2/ig, "DM2")
+  .replace(/diabetes\s*2/ig, "DM2")
+  .replace(/hypertension/ig, "HTN")
+  .replace(/degenerative\s*disc\s*disease/ig, "DDD")
+  .replace(/lumbar\s*spine/ig, "L-spine")
+  .replace(/low\s*back\s*pain/ig, "LBP")
+  .replace(/\s+/g, " ")
+  .trim();
+  
   // PMH (strip anything after an embedded Medical Dx label)
   let pmh = "";
   const pmhMatch =
-    d.match(/\bPMH\s*:\s*([^\n\r]+)/i) ||
-    d.match(/\bPast\s*medical\s*history\s*:\s*([^\n\r]+)/i) ||
-    d.match(/\bPMH\s*(?:includes|include|significant\s*for|consists\s*of)\s*:\s*([^\n\r]+)/i) ||
-    d.match(/\bPMH\s*(?:includes|include|significant\s*for|consists\s*of)\s*([^\n\r]+)/i);
+  d.match(/\bPMH\s*:\s*([^\n\r]+)/i) ||
+  d.match(/\bPast\s*medical\s*history\s*:\s*([^\n\r]+)/i) ||
+  d.match(/\bPMH\s*(?:includes|include|significant\s*for|consists\s*of)\s*:\s*([^\n\r]+)/i) ||
+  d.match(/\bPMH\s*(?:includes|include|significant\s*for|consists\s*of)\s*([^\n\r]+)/i);
   if (pmhMatch) pmh = String(pmhMatch[1] || "").trim();
   pmh = pmh.split(/\bmedical\s*(?:diagnosis|dx)\b/i)[0].trim();
   pmh = pmh.replace(/\b(bp|blood\s*pressure|heart\s*rate|hr|resp(?:iration|irations)?|rr|temp(?:erature)?)\b\s*[:=][^,.\n\r]*/ig, "").trim();
   pmh = norm(pmh);
-
+  
   // Medical dx
   let mdx = "";
   const mdxMatch =
-    d.match(/\bMedical\s*diagnosis\s*:\s*([^\n\r]+)/i) ||
-    d.match(/\bMedical\s*dx\s*:\s*([^\n\r]+)/i) ||
-    d.match(/\bMD\s*dx\s*:\s*([^\n\r]+)/i);
+  d.match(/\bMedical\s*diagnosis\s*:\s*([^\n\r]+)/i) ||
+  d.match(/\bMedical\s*dx\s*:\s*([^\n\r]+)/i) ||
+  d.match(/\bMD\s*dx\s*:\s*([^\n\r]+)/i);
   if (mdxMatch) mdx = String(mdxMatch[1] || "").trim();
   mdx = mdx.replace(/\bPMH\b[^,.\n\r]*/ig, "").trim();
   mdx = norm(mdx);
-
+  
   const demoLine = `Pt is a${age ? " " + age + " y/o" : ""}${sex ? " " + sex : ""}`.trim();
-
+  
   // Sentence 1: demo + PMH + med dx (no duplicates)
   let s1 = demoLine;
   if (pmh) s1 += ` who presents with PMH consists of ${pmh}`;
   if (mdx) s1 += ` with medical dx of ${mdx}`;
   s1 = s1.replace(/\bPt\s+Pt\b/ig, "Pt").replace(/\.\.+/g, ".").trim();
   if (!/[.!?]$/.test(s1)) s1 += ".";
-
+  
   // Sentence 2: fixed Medicare eval services
   const s2 =
-    "Pt is seen for PT initial evaluation, home assessment, DME assessment, HEP training/education, fall safety precautions, fall prevention, proper use of AD, education on pain/edema management, and PT POC/goal planning to return to PLOF.";
-
+  "Pt is seen for PT initial evaluation, home assessment, DME assessment, HEP training/education, fall safety precautions, fall prevention, proper use of AD, education on pain/edema management, and PT POC/goal planning to return to PLOF.";
+  
   // Sentence 3: objective deficits ONLY if dictated; otherwise generic (no invented specifics)
   const low = d.toLowerCase();
   const mentionsObj =
-    /\b(bed\s*mobility|transfers?|gait|ambulat|balance|strength|weakness|fall\s*risk)\b/i.test(low);
+  /\b(bed\s*mobility|transfers?|gait|ambulat|balance|strength|weakness|fall\s*risk)\b/i.test(low);
   const s3 = mentionsObj
-    ? "Pt demonstrates gross strength deficit with difficulty with bed mobility, transfers, gait, and balance deficits leading to high fall risk."
-    : "Pt demonstrates functional limitations impacting safe mobility within the home environment, contributing to increased fall risk.";
-
+  ? "Pt demonstrates gross strength deficit with difficulty with bed mobility, transfers, gait, and balance deficits leading to high fall risk."
+  : "Pt demonstrates functional limitations impacting safe mobility within the home environment, contributing to increased fall risk.";
+  
   // Sentence 4: safety awareness / fall risk justification (general)
   const mentionsSafety = /\b(safety\s*awareness|poor\s*safety|decreased\s*safety)\b/i.test(low);
   const s4 = mentionsSafety
-    ? "Pt presents with decreased safety awareness, weakness, and impaired balance and will benefit from skilled HH PT to decrease fall/injury risk."
-    : "Pt presents with weakness and impaired balance and will benefit from skilled HH PT to decrease fall/injury risk.";
-
+  ? "Pt presents with decreased safety awareness, weakness, and impaired balance and will benefit from skilled HH PT to decrease fall/injury risk."
+  : "Pt presents with weakness and impaired balance and will benefit from skilled HH PT to decrease fall/injury risk.";
+  
   // Sentence 5: skilled need statement (Medicare-justifiable, no hallucination)
   const s5 =
-    "Pt is a good candidate and will benefit from skilled HH PT to address limitations and impairments as mentioned in order to improve overall functional mobility status, decrease fall risk, and improve QoL.";
-
+  "Pt is a good candidate and will benefit from skilled HH PT to address limitations and impairments as mentioned in order to improve overall functional mobility status, decrease fall risk, and improve QoL.";
+  
   // Sentence 6: required medical necessity line (exactly as you want)
   const s6 = "Continued skilled HH PT remains medically necessary.";
-
+  
   // Clean duplicates and ensure each sentence starts with Pt
   const enforcePt = (s) => {
     let out = String(s || "").trim();
@@ -183,7 +182,7 @@ function buildEvalAssessmentSummaryFromDictation(dictationRaw = "") {
     if (!/[.!?]$/.test(out)) out += ".";
     return out;
   };
-
+  
   return [enforcePt(s1), enforcePt(s2), enforcePt(s3), enforcePt(s4), enforcePt(s5), enforcePt(s6)].join(" ");
 }
 
@@ -193,116 +192,224 @@ function patchEvalAssessmentSummary(templateTextRaw = "", summaryTextRaw = "") {
   const templateText = String(templateTextRaw || "");
   const summary = String(summaryTextRaw || "").trim();
   if (!templateText || !summary) return templateText;
-
+  
   // Matches "Assessment Summary:" and replaces until next heading or end.
   const re = /(^\s*Assessment\s*Summary\s*:\s*)([\s\S]*?)(?=\n\s*(?:Goals|Plan|Frequency|Short-Term\s*Goals|Long-Term\s*Goals)\b|$)/im;
   if (re.test(templateText)) {
     return templateText.replace(re, `$1${summary}\n`);
   }
-
+  
   // If label not found, append at end
   return templateText + `\n\nAssessment Summary: ${summary}\n`;
 }
+
+
 // -------------------------
-// Subjective capture (dictation -> Subjective block, verbatim)
+// Subjective capture (ELITE)
 // -------------------------
 
-function looksGenericSubjective(line = "") {
-  const t = String(line || "").trim().toLowerCase();
+function looksGenericSubjective(text = "") {
+  const t = String(text || "").trim().toLowerCase();
   if (!t) return true;
-  
+
+  // If it's extremely short or placeholder-y, treat as generic
+  if (t.length < 10) return true;
+  if (t === "." || t === "-" || t === "n/a" || t === "na") return true;
+
   // Common generic model outputs we want to override
   const genericPhrases = [
-    "no new complaints",
+    "pt agrees to pt evaluation",
+    "pt agrees to pt re-evaluation",
+    "pt agrees to pt tx",
+    "pt agrees to therapy",
     "agrees to pt",
-    "agrees to pt tx",
     "agrees to therapy",
+    "no new complaints",
+    "denies pain today",
     "tolerated tx well",
+    "tolerated treatment well",
     "no adverse reactions",
+    "no adverse reaction",
+    "no change since last visit",
+    "no changes since last visit",
+    "subjective:",
   ];
-  
+
   return genericPhrases.some(p => t.includes(p));
 }
 
-// Extract a good Subjective sentence(s) from dictation, preferring caregiver/family report.
-// Extract Subjective ONLY when explicitly stated (Pt reports / states / verbalized / noted / denies / c/o).
-// If none found, default to "Pt agrees to PT evaluation and treatment."
+function normalizeSubjectTokens(s = "") {
+  let t = String(s || "");
+
+  // Normalize Patient -> Pt (your preferred style)
+  t = t.replace(/\bpatient\b/ig, "Pt");
+
+  // Normalize "c/o" variants
+  t = t.replace(/\bcomplains of\b/ig, "c/o");
+  t = t.replace(/\bc\/o\b/ig, "c/o");
+
+  // Clean repeated Pt
+  t = t.replace(/\bPt\s+Pt\b/ig, "Pt");
+
+  // Space normalize
+  t = t.replace(/\s+/g, " ").trim();
+
+  // Ensure ends with a period
+  if (t && !/[.!?]$/.test(t)) t += ".";
+
+  return t;
+}
+
+function stripJunkFromDictation(raw = "") {
+  const text = String(raw || "").replace(/\r\n/g, "\n");
+
+  // Remove obvious instruction/prompt lines
+  const lines = text
+    .split("\n")
+    .map(l => String(l || "").trim())
+    .filter(Boolean)
+    .filter(l => !/^\s*(generate|write|create|revise|condense|make|fix)\b/i.test(l));
+
+  let joined = lines.join(" ");
+
+  // Strip vitals fragments (keep subjective clean)
+  joined = joined
+    .replace(/\b(?:bp|blood\s*pressure)\s*[:=]?\s*\d{2,3}\s*\/\s*\d{2,3}\b/ig, "")
+    .replace(/\b(?:heart\s*rate|hr)\s*[:=]?\s*\d{2,3}\b/ig, "")
+    .replace(/\b(?:resp(?:irations?)?|rr)\s*[:=]?\s*\d{1,2}\b/ig, "")
+    .replace(/\b(?:temp(?:erature)?)\s*[:=]?\s*\d{2,3}(?:\.\d)?\b/ig, "");
+
+  // Remove obvious template headings that sometimes get dictated/pasted
+  joined = joined.replace(/\b(subjective|assessment summary|assessment|plan|goals|vital signs|pain assessment)\s*[:\-]?\b/ig, " ");
+
+  // Collapse whitespace
+  return joined.replace(/\s+/g, " ").trim();
+}
+
+function splitSentencesSmart(text = "") {
+  const t = String(text || "").trim();
+  if (!t) return [];
+  // Split on punctuation boundaries; if no punctuation, keep as one
+  const parts = t.split(/(?<=[.!?])\s+/).map(s => s.trim()).filter(Boolean);
+  return parts.length ? parts : [t];
+}
+
+function scoreSubjectiveSentence(s = "") {
+  const t = String(s || "").trim();
+  const low = t.toLowerCase();
+
+  // Hard exclusions (objective-ish or non-subjective)
+  const exclude = [
+    "therex", "theract", "gait training", "transfer training", "bed mobility",
+    "vc", "tc", "mmt", "mmts", "rom", "tinetti", "poma", "stairs", "ambulat",
+    "educated", "education", "instructed", "assessment", "plan",
+    "skilled", "medically necessary", "vital signs", "bp", "hr", "rr", "temp"
+  ];
+  if (exclude.some(k => low.includes(k))) return -999;
+
+  let score = 0;
+
+  // Strong subjective verbs/phrases
+  const strong = [
+    "pt reports", "pt states", "pt verbalized", "pt noted", "pt denies", "pt c/o",
+    "caregiver reports", "cg reports", "family reports", "daughter reports", "son reports",
+    "wife reports", "husband reports"
+  ];
+  if (strong.some(k => low.includes(k))) score += 8;
+
+  // Weaker but still often subjective (symptom/goal statements)
+  const medium = ["pain", "soreness", "stiff", "dizzy", "fatigue", "tired", "weak", "numb", "tingl", "radicul", "fear of falling", "falls", "balance"];
+  if (medium.some(k => low.includes(k))) score += 3;
+
+  // If sentence starts like a subjective statement, boost
+  if (/^(pt|caregiver|cg|family|daughter|son|wife|husband)\b/i.test(t)) score += 2;
+
+  // Penalize generic consent lines
+  if (/(agrees to (pt|therapy)|no new complaints|tolerated)/i.test(t)) score -= 6;
+
+  // Penalize very short / fragment
+  if (t.length < 20) score -= 2;
+
+  return score;
+}
+
+// ELITE extractor: returns 1–2 sentences max, HH-safe.
 function extractSubjectiveFromDictation(dictationRaw = "") {
   const raw = String(dictationRaw || "").trim();
   if (!raw) return "Pt agrees to PT evaluation and treatment.";
 
-  // Remove vitals-style fragments and any instruction-like lines (e.g., "Generate 6 sentences ...")
-  const cleaned = raw
-    .replace(/\r\n/g, "\n")
-    .split("\n")
-    .filter(line => {
-      const l = String(line || "").trim();
-      if (!l) return false;
-      if (/^\s*(generate|write|create)\b/i.test(l)) return false;
-      // Drop lines that look like vitals
-      if (/\b(bp|blood\s*pressure|heart\s*rate|hr|resp(?:iration|irations)?|rr|temp(?:erature)?)\b\s*[:=]/i.test(l)) return false;
-      return true;
-    })
-    .join(" ")
-    .replace(/\s+/g, " ")
-    .trim();
-
+  const cleaned = stripJunkFromDictation(raw);
   if (!cleaned) return "Pt agrees to PT evaluation and treatment.";
 
-  // Prefer sentences that contain explicit subjective verbs
-  const sentences = cleaned.split(/(?<=[.!?])\s+/).filter(Boolean);
+  // Normalize Patient -> Pt etc.
+  const norm = normalizeSubjectTokens(cleaned);
 
-  const verbRe = /\b(Pt|pt)\b[^.!?]*\b(reports|report|states|state|verbalized|notes|noted|denies|c\/o|complains|complained|endorses)\b[^.!?]*[.!?]?/i;
-  const hit = sentences.find(s => verbRe.test(s));
-  if (hit) {
-    const out = hit.trim().replace(/\s+/g, " ");
-    // Ensure it starts with "Pt"
-    return out.replace(/^\s*pt\b/i, "Pt").replace(/[.?!]?$/,".") ;
+  const sentences = splitSentencesSmart(norm);
+
+  // Score + pick best candidates
+  const scored = sentences
+    .map(s => ({ s: s.trim(), score: scoreSubjectiveSentence(s) }))
+    .filter(x => x.s && x.score > -500) // drop hard exclusions
+    .sort((a, b) => b.score - a.score);
+
+  const best = scored[0]?.s || "";
+
+  // Strong hit: use it (+ optionally add one supportive sentence)
+  if (best && scored[0].score >= 4) {
+    const second = scored.find(x => x.s !== best && x.score >= 2)?.s || "";
+    const out = second ? `${best} ${second}` : best;
+    return normalizeSubjectTokens(out);
   }
 
-  // Caregiver/family reported subjective (allowed)
-  const cgRe = /\b(daughter|son|wife|husband|caregiver|cg|family)\b[^.!?]*\b(reports|states|noted|indicates)\b[^.!?]*[.!?]?/i;
-  const cgHit = sentences.find(s => cgRe.test(s));
-  if (cgHit) {
-    const out = cgHit.trim().replace(/\s+/g, " ");
-    return out.replace(/[.?!]?$/,".");
+  // No strong hit: accept symptom statement even if not "Pt reports"
+  const fallbackCandidate = scored.find(x => x.score >= 1)?.s || "";
+  if (fallbackCandidate) {
+    let out = fallbackCandidate.trim();
+    if (
+      !/^pt\b/i.test(out) &&
+      !/^(caregiver|cg|family|daughter|son|wife|husband)\b/i.test(out)
+    ) {
+      out = "Pt " + out;
+    }
+    return normalizeSubjectTokens(out);
   }
 
   return "Pt agrees to PT evaluation and treatment.";
 }
 
-
-// Replace Subjective block content inside templateText.
-// Expected format in your templates: "Subjective:" on its own line then content until next heading.
+// Patch Subjective in template robustly:
+// - Supports "Subjective:" OR "Subjective" (no colon) headers
+// - Replaces content until next heading-like line
+// - Only overwrites if existing Subjective looks generic/placeholder
 function patchSubjectiveInTemplate(templateTextRaw = "", subjectiveTextRaw = "") {
   const templateText = String(templateTextRaw || "");
   const subj = String(subjectiveTextRaw || "").trim();
   if (!templateText || !subj) return templateText;
-  
-  // Capture existing Subjective block
-  const re = /(^\s*Subjective\s*:\s*\n)([\s\S]*?)(\n\s*(?:Vital Signs|Pain Assessment|Functional Status|Response to Treatment|Exercises:|Teaching Tools|Assessment:|Goals|Plan)\s*[:\n])/im;
-  
+
+  // Match Subjective header line with optional colon
+  const re = /(^\s*Subjective\s*:?\s*\n)([\s\S]*?)(?=\n\s*(?:Vital\s*Signs|Pain\s*Assessment|Pain|Functional\s*Status|Functional\s*Assessment|Response\s*to\s*Treatment|Exercises|Teaching\s*Tools|Education|Assessment\s*Summary|Assessment|Goals|Plan|Frequency)\b|\s*$)/im;
+
   const m = templateText.match(re);
+
+  // If no multiline Subjective block, try inline "Subjective: blah"
   if (!m) {
-    // If template has "Subjective:" inline (some eval templates do), do an alternate replace
-    const reInline = /(^\s*Subjective\s*:\s*)(.*)$/im;
+    const reInline = /(^\s*Subjective\s*:?\s*)(.*)$/im;
     if (reInline.test(templateText)) {
+      const existing = (templateText.match(reInline)?.[2] || "").trim();
+      const firstLine = existing.split("\n").map(x => x.trim()).filter(Boolean)[0] || "";
+      if (existing && !looksGenericSubjective(firstLine)) return templateText;
       return templateText.replace(reInline, `$1${subj}`);
     }
     return templateText;
   }
-  
+
   const existingBlock = (m[2] || "").trim();
-  const firstLine = existingBlock.split("\n").map(s => s.trim()).filter(Boolean)[0] || "";
-  
-  // Only override if the current Subjective looks generic/placeholder
-  // (If user already edited the Subjective, we leave it alone.)
-  if (existingBlock && !looksGenericSubjective(firstLine)) {
-    return templateText;
-  }
-  
-  const replacement = `${m[1]}${subj}\n${m[3]}`;
-  return templateText.replace(re, replacement);
+  const firstLine = existingBlock.split("\n").map(x => x.trim()).filter(Boolean)[0] || "";
+
+  // Only override if placeholder/generic
+  if (existingBlock && !looksGenericSubjective(firstLine)) return templateText;
+
+  return templateText.replace(re, `${m[1]}${subj}\n`);
 }
 
 (() => {
@@ -490,22 +597,22 @@ function patchSubjectiveInTemplate(templateTextRaw = "", subjectiveTextRaw = "")
         body: JSON.stringify({ dictation, taskType, templateText }),
       });
       
-      // Apply Subjective patch (verbatim from dictation) if Subjective in AI output is generic/placeholder
+      // Apply Subjective patch (from dictation) if Subjective in AI output is generic/placeholder
       let outText = String(resp.templateText || "");
       const subjFromDictation = extractSubjectiveFromDictation(dictation);
       outText = patchSubjectiveInTemplate(outText, subjFromDictation);
       
-
       // --- Evaluation-specific hygiene ---
       if ((taskType || "").toLowerCase().includes("evaluation")) {
         // 1) Ensure vitals from dictation land in Vital Signs (and never in Subjective)
         const vitals = extractVitalsFromText(dictation);
         outText = patchVitalsInTemplate(outText, vitals);
-
+        
         // 2) Force Assessment Summary to your 6-sentence Medicare format (dictation-only, no hallucination)
         const evalSummary = buildEvalAssessmentSummaryFromDictation(dictation);
         outText = patchEvalAssessmentSummary(outText, evalSummary);
       }
+
       el("aiNotes").value = sanitizeNotes(outText);
       setBadge("Ready", "ok");
       setStatus("Conversion completed. Review AI Notes, then click Run Automation.");
@@ -573,11 +680,11 @@ function patchSubjectiveInTemplate(templateTextRaw = "", subjectiveTextRaw = "")
 Pt reports no new complaints and agrees to PT tx today.
 
 Vital Signs
-Temp: ___
+Temp: 
 Temp Type: Temporal
-BP: ___ / ___
-Heart Rate: ___
-Respirations: ___
+BP: 
+Heart Rate: 
+Respirations: 
 Comments: Pt currently symptom-free with no adverse reactions noted. Cleared to continue with PT as planned.
 
 Pain Assessment
@@ -718,7 +825,7 @@ Effective Date: `
     pt_discharge_default: `Vital Signs
 Temp:
 Temp Type: Temporal
-BP:  /
+BP:  
 Heart Rate:
 Respirations: 18
 Comments: Pt is currently symptom-free and demonstrates no adverse reactions. Cleared to continue with physical therapy as planned.
