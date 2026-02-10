@@ -49,54 +49,6 @@ async function callOpenAIJSONSafe(prompt, timeoutMs = 12000) {
 }
 
 
-// ------------------------------------------------------------
-// Audio transcription (m4a/voice memo) -> text
-// Accepts base64 data URLs from the browser and uses OpenAI Audio Transcriptions.
-// Runs server-side so it continues even if the browser tab closes / phone sleeps.
-// ------------------------------------------------------------
-function decodeDataUrlToBuffer(dataUrl) {
-  const s = String(dataUrl || "");
-  const m = s.match(/^data:([^;]+);base64,(.*)$/);
-  if (!m) throw new Error("Invalid data URL (expected base64 data:...;base64,...)");
-  const mime = m[1] || "application/octet-stream";
-  const b64 = m[2] || "";
-  const buf = Buffer.from(b64, "base64");
-  return { mime, buf };
-}
-
-async function transcribeAudioBufferOpenAI({ buf, mime = "audio/m4a", filename = "audio.m4a", timeoutMs = 120000 }) {
-  if (!process.env.OPENAI_API_KEY) throw new Error("Missing OPENAI_API_KEY");
-  // Node 18+ provides fetch/FormData/Blob
-  const fd = new FormData();
-  fd.append("model", "whisper-1");
-  fd.append("file", new Blob([buf], { type: mime }), filename);
-
-  const controller = new AbortController();
-  const t = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const resp = await fetch("https://api.openai.com/v1/audio/transcriptions", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` },
-      body: fd,
-      signal: controller.signal,
-    });
-
-    const txt = await resp.text();
-    let json;
-    try { json = txt ? JSON.parse(txt) : {}; } catch { json = { raw: txt }; }
-    if (!resp.ok) {
-      const msg = json?.error?.message || json?.message || `OpenAI transcription failed (HTTP ${resp.status})`;
-      throw new Error(msg);
-    }
-    const out = String(json?.text || "").trim();
-    if (!out) throw new Error("Transcription returned empty text");
-    return out;
-  } finally {
-    clearTimeout(t);
-  }
-}
-
-
 //
 // EXPIRATION CHECK – blocks use after Mar 1, 2026
 //
@@ -115,11 +67,6 @@ let ACTIVE_JOB_ID = null; // prevents overlapping automations
 const JOB_TTL_MS = 1000 * 60 * 30; // 30 minutes
 const JOB_LOG_MAX = 600; // max log lines stored per job
 
-function isJobCanceled(jobId) {
-  const j = JOBS.get(jobId);
-  return !!(j && (j.canceled || j.status === "canceled"));
-}
-
 function setJob(jobId, patch) {
   const prev = JOBS.get(jobId) || {
     status: "queued",
@@ -128,7 +75,7 @@ function setJob(jobId, patch) {
     finishedAt: null,
     updatedAt: Date.now(),
     logs: [],
-    canceled: false,
+    cancelRequested: false,
   };
   
   const next = {
@@ -138,7 +85,7 @@ function setJob(jobId, patch) {
   };
   
   // Auto-finish timestamps for terminal states
-  if ((next.status === "completed" || next.status === "failed") && !next.finishedAt) {
+  if ((next.status === "completed" || next.status === "failed" || next.status === "canceled" || next.status === "cancelled") && !next.finishedAt) {
     next.finishedAt = Date.now();
   }
   
@@ -202,6 +149,56 @@ function loadPublicTemplates() {
 app.get("/health", (req, res) => res.status(200).send("ok"));
 app.get("/status", (req, res) => res.status(200).json({ status: "ok" }));
 
+
+
+// ------------------------------------------------------------
+// Audio transcription (m4a) → text
+// Expects: { audioDataUrl, filename }
+// Returns: { text }
+// ------------------------------------------------------------
+async function transcribeAudioDataUrl(audioDataUrl, filename = "voice.m4a") {
+  if (!process.env.OPENAI_API_KEY) throw new Error("OPENAI_API_KEY not configured");
+
+  const m = String(audioDataUrl || "").match(/^data:([^;]+);base64,(.+)$/);
+  if (!m) throw new Error("Invalid audioDataUrl (expected data:<mime>;base64,...)");
+
+  const mime = m[1] || "audio/mp4";
+  const b64 = m[2] || "";
+  const buf = Buffer.from(b64, "base64");
+
+  const form = new FormData();
+  const blob = new Blob([buf], { type: mime });
+  form.append("file", blob, filename);
+  form.append("model", "whisper-1");
+
+  const resp = await fetch("https://api.openai.com/v1/audio/transcriptions", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` },
+    body: form,
+  });
+
+  if (!resp.ok) {
+    const errText = await resp.text().catch(() => "");
+    throw new Error(`OpenAI transcription failed (HTTP ${resp.status}): ${errText.slice(0, 600)}`);
+  }
+
+  const data = await resp.json();
+  return String(data?.text || "").trim();
+}
+
+app.post("/transcribe-audio", async (req, res) => {
+  try {
+    const audioDataUrl = String(req.body?.audioDataUrl || "").trim();
+    const filename = String(req.body?.filename || "voice.m4a").trim() || "voice.m4a";
+    if (!audioDataUrl) return res.status(400).json({ error: "Missing audioDataUrl" });
+
+    const text = await transcribeAudioDataUrl(audioDataUrl, filename);
+    return res.json({ text });
+  } catch (e) {
+    return res.status(500).json({ error: e?.message || "transcribe-audio failed" });
+  }
+});
+
 app.get("/job-status/:jobId", (req, res) => {
   const jobId = req.params.jobId;
   const job = JOBS.get(jobId);
@@ -212,15 +209,22 @@ app.get("/job-status/:jobId", (req, res) => {
 });
 
 
+
 app.post("/cancel-job/:jobId", (req, res) => {
   const jobId = String(req.params.jobId || "");
   const job = JOBS.get(jobId);
-  if (!job) return res.status(404).json({ jobId, status: "unknown", message: "Job not found" });
+  if (!job) return res.status(404).json({ error: "Job not found", jobId });
 
-  // Mark canceled; bots may honor shouldStop/throwIfCanceled.
-  setJob(jobId, { status: "canceled", message: "Canceled by user", canceled: true, finishedAt: Date.now() });
-  appendJobLog(jobId, "🛑 Canceled by user request.");
-  res.json({ jobId, status: "canceled", message: "Canceled" });
+  JOBS.set(jobId, { ...job, cancelRequested: true, updatedAt: Date.now() });
+
+  if (job.status !== "completed" && job.status !== "failed" && job.status !== "canceled" && job.status !== "cancelled") {
+    setJob(jobId, { status: "canceled", message: "Cancel requested" });
+    appendJobLog(jobId, "🛑 Cancel requested by user.");
+  }
+
+  if (ACTIVE_JOB_ID === jobId) ACTIVE_JOB_ID = null;
+
+  return res.json({ ok: true, jobId });
 });
 
 // Root: serve UI
@@ -260,6 +264,17 @@ app.post("/run-automation", async (req, res) => {
         kinnserPassword: req.body.kinnserPassword || process.env.KINNSER_PASSWORD,
         jobId,
         statusCb: (status, message) => setJob(jobId, { status, message }),
+        shouldStop: () => {
+          try { return !!(JOBS.get(jobId)?.cancelRequested); } catch { return false; }
+        },
+        throwIfCanceled: () => {
+          const j = JOBS.get(jobId);
+          if (j && j.cancelRequested) {
+            const err = new Error("Canceled");
+            err.code = "CANCELED";
+            throw err;
+          }
+        },
       };
       
       if (!merged.patientName || !merged.visitDate || !merged.taskType) {
@@ -291,25 +306,28 @@ app.post("/run-automation", async (req, res) => {
         _origErr(...args);
       };
       
-      if (isJobCanceled(jobId)) throw new Error("Canceled by user");
-      merged.shouldStop = () => isJobCanceled(jobId);
-      merged.throwIfCanceled = () => { if (isJobCanceled(jobId)) throw new Error("Canceled by user"); };
+      // If user canceled before start
+      if (typeof merged.throwIfCanceled === "function") merged.throwIfCanceled();
 
       await runKinnserBot(merged);
-      if (isJobCanceled(jobId)) throw new Error("Canceled by user");
-      setJob(jobId, { status: "completed", message: "Autofill completed" });
-      appendJobLog(jobId, "✅ Completed: Autofill completed");
+
+      if (JOBS.get(jobId)?.cancelRequested) {
+        setJob(jobId, { status: "canceled", message: "Canceled" });
+        appendJobLog(jobId, "🛑 Canceled");
+      } else {
+        setJob(jobId, { status: "completed", message: "Autofill completed" });
+        appendJobLog(jobId, "✅ Completed: Autofill completed");
+      }
     } catch (e) {
-      if (isJobCanceled(jobId) || String(e?.message || "").toLowerCase().includes("canceled")) {
-      setJob(jobId, { status: "canceled", message: "Canceled by user", canceled: true });
-    } else {
-      setJob(jobId, { status: "failed", message: e?.message ? String(e.message) : "Job failed" });
-    }
-      if (isJobCanceled(jobId) || String(e?.message || "").toLowerCase().includes("canceled")) {
-      appendJobLog(jobId, "🛑 Canceled: Job canceled by user.");
-    } else {
-      appendJobLog(jobId, `❌ Failed: ${e?.message ? String(e.message) : "Job failed"}`);
-    }
+      const msg = e?.message ? String(e.message) : "Job failed";
+      const code = e?.code ? String(e.code) : "";
+      if (code === "CANCELED" || /canceled|cancelled/i.test(msg)) {
+        setJob(jobId, { status: "canceled", message: "Canceled" });
+        appendJobLog(jobId, `🛑 Canceled: ${msg}`);
+      } else {
+        setJob(jobId, { status: "failed", message: msg });
+        appendJobLog(jobId, `❌ Failed: ${msg}`);
+      }
     } finally {
       try { console.log = _origLog; console.error = _origErr; } catch {}
       try {
@@ -671,31 +689,6 @@ ${cs}`.trim();
 // Expects: { dictation, taskType, templateText }
 // Returns: { templateText }
 // ------------------------------------------------------------
-
-// ------------------------------------------------------------
-// Transcribe Audio (m4a/voice memo) → text
-// Expects: { audioDataUrl }
-// Returns: { transcript }
-// ------------------------------------------------------------
-app.post("/transcribe-audio", async (req, res) => {
-  try {
-    const audioDataUrl = String(req.body?.audioDataUrl || "").trim();
-    if (!audioDataUrl) return res.status(400).json({ error: "Missing audioDataUrl" });
-
-    const { mime, buf } = decodeDataUrlToBuffer(audioDataUrl);
-    const transcript = await transcribeAudioBufferOpenAI({
-      buf,
-      mime,
-      filename: mime.includes("mp4") || mime.includes("m4a") ? "voice.m4a" : "voice.audio",
-      timeoutMs: 180000,
-    });
-
-    res.json({ transcript });
-  } catch (e) {
-    res.status(500).json({ error: e?.message ? String(e.message) : "transcribe-audio failed" });
-  }
-});
-
 app.post("/convert-dictation", async (req, res) => {
   try {
     const dictation = String(req.body?.dictation || "").trim();
