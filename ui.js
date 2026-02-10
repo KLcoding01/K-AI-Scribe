@@ -8,6 +8,7 @@ global.logErr = global.logErr || ((...args) => { try { console.error(...args); }
 // - Captures per-job logs from bots via logCb (no need to scrape Render logs)
 
 const express = require("express");
+const fs = require("fs"); // FIX: needed for audio temp files
 const path = require("path");
 const { runKinnserBot } = require("./index.js");
 
@@ -212,19 +213,15 @@ function replaceAssessmentSummaryBlock(templateText="", summary="") {
 }
 
 // -------------------------
-// Audio transcription endpoint
-// -------------------------
 
-// ---- Express App Init (must be before any routes) ----
+// ---- Express app init (moved above routes) ----
 const app = express();
-
-// Middleware (must be before routes)
 app.use(express.json({ limit: "12mb" }));
 app.use(express.urlencoded({ extended: true }));
 app.use(express.static(path.join(__dirname, "public")));
 
-
-
+// Audio transcription endpoint
+// -------------------------
 app.post("/transcribe-audio", async (req, res) => {
   try {
     const audio_base64 = String(req.body?.audio_base64 || "");
@@ -335,6 +332,8 @@ setInterval(() => {
 
 const PORT = process.env.PORT || 3000;
 
+
+// Serve UI assets
 
 
 function loadPublicTemplates() {
