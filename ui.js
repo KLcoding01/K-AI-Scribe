@@ -137,7 +137,10 @@ function getOpenAIClient() {
 }
 
 function bufferFromBase64(b64) {
-  return Buffer.from(String(b64 || ""), "base64");
+  // Accept raw base64 OR data URLs like "data:audio/m4a;base64,AAAA..."
+  const s = String(b64 || "");
+  const raw = s.includes(",") && s.trim().toLowerCase().startsWith("data:") ? s.split(",")[1] : s;
+  return Buffer.from(raw, "base64");
 }
 
 app.post("/transcribe-audio", async (req, res) => {
@@ -152,14 +155,29 @@ app.post("/transcribe-audio", async (req, res) => {
     const buf = bufferFromBase64(audio_base64);
 
     // Write a temp file to /tmp
-    const ext =
+    const safeName = String(filename || "audio").replace(/[^a-z0-9_\-\.]/gi, "_");
+    const nameExt = (path.extname(safeName || "") || "").replace(".", "").toLowerCase();
+
+    // Derive extension robustly:
+    // - Prefer mime_type when present
+    // - Otherwise fall back to filename extension (common on iOS where file.type may be empty)
+    let ext =
       /wav/i.test(mime_type) ? "wav" :
-      /(m4a|mp4)/i.test(mime_type) ? "m4a" :
+      /(m4a|x-m4a|mp4)/i.test(mime_type) ? "m4a" :
       /(webm)/i.test(mime_type) ? "webm" :
       /(ogg)/i.test(mime_type) ? "ogg" :
-      "mp3";
+      /(mpeg|mp3)/i.test(mime_type) ? "mp3" :
+      "";
 
-    const tmpPath = path.join("/tmp", `${filename.replace(/[^a-z0-9_\-\.]/gi, "_")}_${Date.now()}.${ext}`);
+    if (!ext) {
+      if (["m4a","mp3","wav","webm","ogg","mp4","aac"].includes(nameExt)) {
+        ext = (nameExt === "mp4" ? "m4a" : nameExt);
+      } else {
+        ext = "mp3";
+      }
+    }
+
+    const tmpPath = path.join("/tmp", `${safeName}_${Date.now()}.${ext}`);
     fs.writeFileSync(tmpPath, buf);
 
     const fileStream = fs.createReadStream(tmpPath);
@@ -167,7 +185,7 @@ app.post("/transcribe-audio", async (req, res) => {
     // Whisper transcription (widely supported)
     const tr = await client.audio.transcriptions.create({
       file: fileStream,
-      model: "whisper-1",
+      model: process.env.TRANSCRIBE_MODEL || "whisper-1",
     });
 
     try { fs.unlinkSync(tmpPath); } catch {}
