@@ -1167,7 +1167,8 @@ Effective Date: `
       setBadge("Transcribed", "ok");
       return text;
     } catch (e) {
-      if (st) st.textContent = "Transcription failed.";
+      const msg = (e && (e.body && (e.body.error || e.body.message))) || (e && e.message) || String(e);
+      if (st) st.textContent = `Transcription failed: ${msg}`;
       setBadge("Transcribe failed", "bad");
       setStatus(`Transcribe failed:\n${e?.message || e}\n${e?.body ? JSON.stringify(e.body, null, 2) : ""}`);
       return "";
