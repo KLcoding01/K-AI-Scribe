@@ -240,9 +240,6 @@ function patchSubjectiveInTemplate(templateTextRaw = "", subjectiveTextRaw = "")
 // -------------------------
 // Pt Visit ONLY — Medicare-justifiable Assessment generator + patch
 // -------------------------
-// Helper to pick a random item from an array
-const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
-
 function normalizeClinicalTerms(s = "") {
   return String(s || "")
   .replace(/\bpatient\b/ig, "Pt")
@@ -257,106 +254,101 @@ function normalizeClinicalTerms(s = "") {
 function buildVisitAssessmentFromDictation(dictationRaw = "") {
   const d0 = normalizeClinicalTerms(String(dictationRaw || "").replace(/\r\n/g, "\n"));
   const low = d0.toLowerCase();
-  
-  // Logic Flags
-  const hasLBP = /\b(lbp|low back pain)\b/i.test(d0) || /\bchronic\b/i.test(low);
-  const hasGait = /\b(gait|ambulat|walk|fww|walker|cane|ad)\b/i.test(low);
-  const hasTransfers = /\b(transfer|sit\s*to\s*stand|bed\s*mobility|sup\s*to\s*sit|rolling)\b/i.test(low);
-  const hasFallRisk = /\b(fall\s*risk|unsteady|unsafe|loss\s*of\s*balance|lob|fear\s*of\s*fall)\b/i.test(low);
-  const hasWeak = /\b(weak|weakness|decondition|strength)\b/i.test(low);
-  const hasBalance = /\b(balance|postur|stability)\b/i.test(low);
-  const hasPainMgmt = /\b(pain\s*management|pain)\b/i.test(low);
-  const hasCancer = /\b(prostate\s*cx|prostate|cancer|radiation)\b/i.test(low);
-  
-  // --- Sentence 1: Tolerance ---
-  const s1 = pick([
-    "Pt demonstrates fair tolerance to today’s skilled HH PT visit with intermittent rest breaks required for energy conservation.",
-    "Today's skilled session was tolerated fairly well, though rest breaks were utilized to monitor symptoms and conserve energy.",
-    "Pt tolerated the PT intervention with fair endurance, requiring periodic seated rest to manage fatigue and monitor vitals."
-  ]);
-  
-  // --- Sentence 2: Treatment Emphasis ---
-  const s2 = (() => {
-    const parts = [];
-    if (hasPainMgmt && hasLBP) parts.push(pick(["pain management for chronic LBP", "LBP mitigation strategies"]));
-    else if (hasPainMgmt) parts.push("pain management techniques");
-    
-    if (hasTransfers) parts.push(pick(["functional mobility training involving transfers", "safety training for bed and chair transfers"]));
-    else parts.push("functional mobility training for safe transitions");
-    
-    if (hasGait) parts.push(pick(["gait training to improve ambulation safety", "skilled gait mechanics training"]));
-    else parts.push("upright tolerance and mobility training");
-    
-    const bridge = pick(["Tx focused on", "Session emphasized", "Intervention centered on"]);
-    const cueing = pick(["VC/TC provided to improve mechanics", "tactile and verbal cues for better sequencing", "skilled instruction for posture and safety"]);
-    
-    return `${bridge} ${parts.join(", ")}, with ${cueing}.`;
-  })();
-  
-  // --- Sentence 3: Deficits & Progress ---
-  const s3 = (() => {
-    const deficits = [];
-    if (hasWeak) deficits.push("LE weakness");
-    if (hasBalance) deficits.push("impaired postural stability");
-    deficits.push("reduced activity tolerance");
-    
-    const defText = deficits.join(" and ");
-    const progress = pick(["Pt shows steady functional gains", "Pt is making gradual progress toward goals", "Functional improvements are noted"]);
-    
-    return `${progress}; however, ${defText} continue to limit task carryover and increase fall risk.`;
-  })();
-  
-  // --- Sentence 4: Specific Context (Cancer/Safety) ---
-  const s4 = (() => {
-    const safetyTools = pick(["pacing and AD management", "environmental scanning and energy conservation"]);
-    if (hasCancer) {
-      return `Due to medical complexity and fatigue related to prostate cx/radiation tx, training incorporated ${safetyTools}.`;
+
+  // Detect explicit "must include" list (preferred signal)
+  // Example: "must include the following: muscle weakness, unsteady gait, chronic low back pain, ..."
+  const mustIncludeMatch = d0.match(/must\s+include[^:]*:\s*([^.\n\r]+)/i);
+  const mustIncludeRaw = mustIncludeMatch ? mustIncludeMatch[1] : "";
+
+  const want = {
+    muscleWeakness: /\bmuscle\s+weakness\b/i.test(d0) || /\bweakness\b/i.test(low),
+    unsteadyGait: /\bunsteady\s+gait\b/i.test(d0) || (/\bunsteady\b/i.test(low) && /\bgait\b/i.test(low)),
+    chronicLBP: /\b(chronic\s+)?(low\s+back\s+pain|lower\s+back\s+pain|lbp)\b/i.test(d0),
+    muscleAtrophy: /\bmuscle\s+atrophy\b/i.test(d0) || /\batrophy\b/i.test(low),
+    highFallRisk: /\bhigh\s+fall\s+risk\b/i.test(d0) || /\bfall\s*risk\b/i.test(low) || /\bhigh\s+fall\b/i.test(low),
+  };
+
+  // If they provided a "must include" list, enforce those terms even if regex misses variants.
+  if (mustIncludeRaw) {
+    const items = mustIncludeRaw.split(/[,;]+/).map(s => s.trim().toLowerCase()).filter(Boolean);
+    for (const it of items) {
+      if (it.includes("weak")) want.muscleWeakness = true;
+      if (it.includes("unsteady") || it.includes("gait")) want.unsteadyGait = true;
+      if (it.includes("low back") || it.includes("lower back") || it.includes("lbp")) want.chronicLBP = true;
+      if (it.includes("atrophy")) want.muscleAtrophy = true;
+      if (it.includes("fall")) want.highFallRisk = true;
     }
-    return `Safety training emphasized ${safetyTools} to minimize fall risk within the home environment.`;
-  })();
-  
-  // --- Sentence 5: Skilled Necessity ---
-  const s5 = (() => {
-    const risk = hasFallRisk ? "high fall risk" : "increased fall risk";
-    const skillReason = pick([
-      "skilled clinical judgment to progress dosing",
-      "ongoing assessment of physiological response",
-      "specialized instruction to ensure safety"
-    ]);
-    return `Pt continues to require skilled PT for ${skillReason} due to ${risk} and variable tolerance.`;
-  })();
-  
-  // --- Sentence 6: Conclusion ---
-  const s6 = pick([
-    "Continued skilled PT is medically necessary to maximize independence and prevent hospitalization.",
-    "Ongoing skilled intervention remains indicated to progress toward goals and prevent functional decline.",
-    "Medically necessary PT continues to be indicated for safety and goal attainment."
-  ]);
-  
-  const clean = (s) => String(s || "").trim().replace(/\s+/g, " ");
-  
-  // Combine all parts
-  return [s1, s2, s3, s4, s5, s6].map(clean).join(" ");
+  }
+
+  // Additional clinical cues
+  const hasAD = /\b(spc|cane|fww|4ww|walker|ad)\b/i.test(low);
+  const hasDistance = /\b\d+\s*(ft|feet)\b/i.test(low);
+  const assistMatch = d0.match(/\b(sba|cga|min\s*a|mod\s*a|max\s*a|supervision)\b/i);
+  const assist = assistMatch ? assistMatch[1].toUpperCase().replace(/\s+/g, "") : "";
+
+  const s1 = "Pt demonstrates fair tolerance to today’s skilled HH PT visit with intermittent rest breaks required for energy conservation and symptom monitoring.";
+
+  // Sentence 2: MUST reflect dictation content (conditions + mobility focus)
+  const cond = [];
+  if (want.muscleWeakness) cond.push("muscle weakness");
+  if (want.unsteadyGait) cond.push("unsteady gait");
+  if (want.chronicLBP) cond.push("chronic LBP");
+  if (want.muscleAtrophy) cond.push("limited functional mobility due to muscle atrophy");
+  const condText = cond.length ? cond.join(", ") : "functional mobility deficits";
+
+  const s2 = `Tx emphasized task-specific mobility training addressing ${condText}, including TherEx and TherAct with VC/TC for safe sequencing, posture, and body mechanics.`;
+
+  // Sentence 3: objective functional impact / safety
+  let gaitClause = "";
+  if (hasDistance || hasAD || assist) {
+    const dist = hasDistance ? (d0.match(/\b(\d+)\s*(ft|feet)\b/i)?.[0] || "") : "";
+    const ad = d0.match(/\b(SPC|cane|FWW|4WW|walker)\b/i)?.[0] || "";
+    const parts = [];
+    if (assist) parts.push(assist);
+    if (dist) parts.push(dist);
+    if (ad) parts.push(ad.toUpperCase());
+    if (parts.length) gaitClause = ` Current mobility requires ${parts.join(" ")} with gait/ambulation.`;
+  }
+
+  const risk = want.highFallRisk ? "high fall risk" : "increased fall risk";
+  const s3 = `Pt continues to demonstrate deficits in strength, balance, and activity tolerance with impaired gait mechanics, contributing to ${risk} during household mobility.${gaitClause}`;
+
+  // Sentence 4: safety training / AD management
+  const s4 = "Session incorporated gait mechanics, pacing, and AD management training with environmental scanning to reduce fall and injury risk within the home.";
+
+  // Sentence 5: skilled need / justification
+  const s5 = `Skilled PT is required to progress HEP and functional training with ongoing VC/TC for safety due to ${risk} and limited carryover with independent practice.`;
+
+  // Sentence 6: medical necessity
+  const s6 = "Continued skilled HH PT remains medically necessary to maximize functional independence, improve safety with ADLs, and prevent decline/hospitalization.";
+
+  const clean = (s) => {
+    let t = String(s || "").trim().replace(/\s+/g, " ");
+    t = t.replace(/\bPt\s+Pt\b/ig, "Pt").replace(/\.\.+/g, ".");
+    if (!/[.!?]$/.test(t)) t += ".";
+    return t;
+  };
+
+  return [clean(s1), clean(s2), clean(s3), clean(s4), clean(s5), clean(s6)].join(" ");
 }
 
-function patchVisitAssessmentInTemplate(templateTextRaw = "", assess = "") {
-  let t = String(templateTextRaw || "");
-  if (!t) return t;
+function patchVisitAssessmentInTemplate(templateTextRaw = "", assessmentTextRaw = "") {
+  const templateText = String(templateTextRaw || "");
+  const assess = String(assessmentTextRaw || "").trim();
+  if (!templateText || !assess) return templateText;
 
-  // Preferred: "Assessment Summary:"
-  let re = /(^\s*Assessment\s*Summary\s*:\s*)([\s\S]*?)(?=\n\s*(?:Plan|Goals|Frequency|Effective\s*Date|Procedures|Interventions)\b|$)/im;
-  if (re.test(t)) return t.replace(re, `$1${assess}\n`);
+  // Prefer "Assessment Summary:" if present, else "Assessment:"
+  const reSummary = /(^\s*Assessment\s*Summary\s*:\s*)([\s\S]*?)(?=\n\s*(?:Plan|Goals|Frequency|Effective\s*Date|Procedures|Interventions)\b|$)/im;
+  if (reSummary.test(templateText)) {
+    return templateText.replace(reSummary, `$1${assess}\n`);
+  }
 
-  // Fallback: "Assessment:"
-  re = /(^\s*Assessment\s*:\s*)([\s\S]*?)(?=\n\s*(?:Plan|Goals|Frequency|Effective\s*Date|Procedures|Interventions)\b|$)/im;
-  if (re.test(t)) return t.replace(re, `$1${assess}\n`);
+  const reAssess = /(^\s*Assessment\s*:\s*)([\s\S]*?)(?=\n\s*(?:Plan|Goals|Frequency|Effective\s*Date|Procedures|Interventions)\b|$)/im;
+  if (reAssess.test(templateText)) {
+    return templateText.replace(reAssess, `$1${assess}\n`);
+  }
 
-  // Fallback: "Summary:"
-  re = /(^\s*Summary\s*:\s*)([\s\S]*?)(?=\n\s*(?:Plan|Goals|Frequency|Effective\s*Date|Procedures|Interventions)\b|$)/im;
-  if (re.test(t)) return t.replace(re, `$1${assess}\n`);
-
-  // Otherwise append
-  return t + `\n\nAssessment Summary:\n${assess}\n`;
+  return templateText + `\n\nAssessment:\n${assess}\n`;
 }
 
 
@@ -368,31 +360,23 @@ function patchVisitAssessmentInTemplate(templateTextRaw = "", assess = "") {
 // -------------------------
 function normEvalPmhList(pmh = "") {
   let p = String(pmh || "").trim();
-
-  // Remove leading labels / preambles
+  
+  // Remove leading labels
   p = p.replace(/^\s*(pmh|past\s*medical\s*history)\s*[:\-]?\s*/i, "");
-  p = p.replace(/^\s*(medical\s+history|history)\s*(?:,\s*)?(?:consists\s+of|consist\s+of|include[s]?|significant\s+for)?\s*[:\-]?\s*/i, "");
-  p = p.replace(/^\s*(?:consists\s+of|consist\s+of|include[s]?)\s*[:\-]?\s*/i, "");
-  p = p.replace(/^\s*[,;:\-]+\s*/g, "");
-
+  
   // Normalize common items (light touch)
   p = p
-    .replace(/hypertension/ig, "HTN")
-    .replace(/hyperlipidemia/ig, "HLD")
-    .replace(/diabetes\s*(type\s*2|ii|2)/ig, "DM2")
-    .replace(/prostate\s*cancer/ig, "prostate cx");
-
-  // Fix duplicate phrases
-  p = p.replace(/\bconsist\s+of\s+consist\s+of\b/ig, "consist of");
-  p = p.replace(/\s+,/g, ",");
-  p = p.replace(/,+/g, ",");
-
+  .replace(/hypertension/ig, "HTN")
+  .replace(/hyperlipidemia/ig, "HLD")
+  .replace(/diabetes\s*(type\s*2|ii|2)/ig, "DM2")
+  .replace(/prostate\s*cancer/ig, "prostate cx");
+  
   // Strip trailing punctuation
   p = p.replace(/[.]+$/g, "").trim();
-
+  
   // Collapse whitespace
   p = p.replace(/\s+/g, " ").trim();
-
+  
   return p;
 }
 
@@ -1106,121 +1090,6 @@ Effective Date: `
       setBadge("Cleared", "ok");
       setStatus("Cleared saved Kinnser credentials.");
     } catch {}
-  }
-  
-  
-  
-  // -------------------------
-  // Voice Memo / Audio Upload → Transcribe → Dictation → Convert to Template
-  (function ensureVoiceMemoUI() {
-    try {
-      // If already present, don't duplicate
-      if (document.getElementById("voiceMemoBox")) return;
-      
-      const dictBox = document.getElementById("dictationNotes");
-      const mount = dictBox ? (dictBox.closest(".card") || dictBox.parentElement || document.body) : document.body;
-      
-      const box = document.createElement("div");
-      box.id = "voiceMemoBox";
-      box.style.margin = "12px 0";
-      box.style.padding = "10px";
-      box.style.border = "1px solid #ddd";
-      box.style.borderRadius = "10px";
-      
-      box.innerHTML = `
-        <div style="font-weight:600;margin-bottom:8px;">Voice Memo / Audio</div>
-        <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
-          <input id="audioUpload" type="file" accept="audio/*" />
-          <button id="btnTranscribeAudio" type="button">Transcribe → Dictation</button>
-          <button id="btnAudioToTemplate" type="button">Upload & Convert → Template</button>
-          <span id="audioMsg" style="opacity:.85;"></span>
-        </div>
-      `;
-      
-      // Insert above dictation box if possible
-      if (dictBox && dictBox.parentElement) dictBox.parentElement.insertBefore(box, dictBox);
-      else mount.prepend(box);
-      
-    } catch (e) {
-      // fail-soft
-      console.warn("voice memo UI inject failed", e);
-    }
-  })();
-  
-  async function fileToBase64(file) {
-    const dataUrl = await new Promise((resolve, reject) => {
-      const r = new FileReader();
-      r.onerror = () => reject(new Error("Failed to read audio file"));
-      r.onload = () => resolve(String(r.result || ""));
-      r.readAsDataURL(file);
-    });
-    // strip prefix
-    return dataUrl.replace(/^data:.*;base64,/, "");
-  }
-  
-  function inferMimeFromName(file) {
-    const name = String(file?.name || "").toLowerCase();
-    if (file?.type) return file.type;
-    if (name.endsWith(".m4a")) return "audio/mp4";
-    if (name.endsWith(".mp3")) return "audio/mpeg";
-    if (name.endsWith(".wav")) return "audio/wav";
-    if (name.endsWith(".webm")) return "audio/webm";
-    return "audio/mp4";
-  }
-  
-  async function transcribeAudioToDictation(alsoConvert = false) {
-    const input = document.getElementById("audioUpload");
-    const msg = document.getElementById("audioMsg");
-    const file = input?.files?.[0];
-    if (!file) {
-      setBadge("Transcribe failed", "bad");
-      setStatus("Transcribe failed:\nPlease choose an audio file first.");
-      if (msg) msg.textContent = "No file selected.";
-      return;
-    }
-    
-    try {
-      setBadge("Transcribing…", "warn");
-      setStatus("Uploading audio for transcription…");
-      if (msg) msg.textContent = "Uploading…";
-      
-      const b64 = await fileToBase64(file);
-      const mime = inferMimeFromName(file);
-      
-      const resp = await httpJson("/transcribe-audio", {
-        method: "POST",
-        body: JSON.stringify({
-          audio_base64: b64,
-          mime_type: mime,
-          filename: file.name || ""
-        }),
-      });
-      
-      const text = String(resp?.text || "").trim();
-      if (!text) {
-        setBadge("Transcribe failed", "bad");
-        setStatus("Transcribe failed:\nServer returned empty transcription.");
-        if (msg) msg.textContent = "Empty transcription.";
-        return;
-      }
-      
-      // Append to dictation
-      const cur = (el("dictationNotes")?.value || "").trim();
-      el("dictationNotes").value = cur ? (cur + "\n" + text) : text;
-      
-      setBadge("Transcribed", "ok");
-      setStatus("Transcription inserted into Dictation.");
-      if (msg) msg.textContent = "Done.";
-      
-      if (alsoConvert) {
-        await convertDictation();
-      }
-    } catch (e) {
-      setBadge("Transcribe failed", "bad");
-      const detail = e?.body ? JSON.stringify(e.body, null, 2) : "";
-      setStatus(`Transcribe failed:\n${e?.message || e}${detail ? "\n\n" + detail : ""}`);
-      if (msg) msg.textContent = "Failed.";
-    }
   }
   
   initTemplates();
