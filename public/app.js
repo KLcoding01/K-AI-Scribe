@@ -479,19 +479,37 @@ function buildEvalAssessmentSummaryFromDictation(dictationRaw = "") {
     s3 = `Pt demonstrates ${chronic ? "chronic " : ""}LBP with difficulty with transfers and gait${gaitDetail}, contributing to increased fall risk.`;
   }
 
-  // Sentence 4: Problem/benefit line (include fall/injury context if stated)
+  // Sentence 4: Problem/benefit line (objective only — NO subjective wording)
   let fallClause = "";
+  
+  // Build purely clinical context (NOT subjective)
   if (hasFall) {
-    const when = weeksMatch ? `${weeksMatch[1]} week(s) ago` : (daysMatch ? `${daysMatch[1]} day(s) ago` : "");
-    fallClause = when ? ` Pt reports s/p fall/trip ${when}.` : " Pt reports s/p recent fall/trip.";
-    if (xrayNeg) fallClause += " X-ray is negative.";
+    const when = weeksMatch
+      ? `${weeksMatch[1]} week(s) ago`
+      : (daysMatch ? `${daysMatch[1]} day(s) ago` : "recently");
+  
+    fallClause = ` History of fall/trip ${when}.`;
+  
+    if (xrayNeg) {
+      fallClause += " Imaging negative for acute fracture.";
+    }
   }
-  if (agreeable) fallClause += " Pt is agreeable to PT treatment.";
-
-  let s4 = "Pt presents with weakness and impaired balance and will benefit from skilled HH PT to decrease fall/injury risk.";
+  
+  // NOTE:
+  // We intentionally DO NOT include:
+  // - agreeable
+  // - Pt reports
+  // - subjective phrasing
+  
+  let s4 =
+    "Pt presents with weakness and impaired balance and will benefit from skilled HH PT to decrease fall and injury risk.";
+  
   if (painLBP && weakness) {
-    s4 = "Pt presents with chronic LBP with weakness and impaired balance and will benefit from skilled HH PT to decrease fall/injury risk.";
+    s4 =
+      "Pt presents with chronic LBP with associated weakness and impaired balance and will benefit from skilled HH PT to decrease fall and injury risk.";
   }
+  
+  // Append clinical fall context
   s4 = s4.replace(/\.\s*$/, ".") + fallClause;
 
   // Sentence 5: keep your required skilled-need line (VC/TC)
