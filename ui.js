@@ -214,6 +214,17 @@ function replaceAssessmentSummaryBlock(templateText="", summary="") {
 // -------------------------
 // Audio transcription endpoint
 // -------------------------
+
+// ---- Express App Init (must be before any routes) ----
+const app = express();
+
+// Middleware (must be before routes)
+app.use(express.json({ limit: "12mb" }));
+app.use(express.urlencoded({ extended: true }));
+app.use(express.static(path.join(__dirname, "public")));
+
+
+
 app.post("/transcribe-audio", async (req, res) => {
   try {
     const audio_base64 = String(req.body?.audio_base64 || "");
@@ -270,7 +281,6 @@ if (NOW > EXPIRATION_DATE) {
   throw new Error("Software expiration reached — contact support for renewal.");
 }
 
-const app = express();
 
 // ---- Job status store ----
 const JOBS = new Map(); // jobId -> { status, message, startedAt, finishedAt, updatedAt, logs[] }
@@ -325,11 +335,6 @@ setInterval(() => {
 
 const PORT = process.env.PORT || 3000;
 
-app.use(express.json({ limit: "12mb" }));
-app.use(express.urlencoded({ extended: true }));
-
-// Serve UI assets
-app.use(express.static(path.join(__dirname, "public")));
 
 
 function loadPublicTemplates() {
