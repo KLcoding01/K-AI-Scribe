@@ -49,6 +49,54 @@ async function callOpenAIJSONSafe(prompt, timeoutMs = 12000) {
 }
 
 
+// ------------------------------------------------------------
+// Audio transcription (m4a/voice memo) -> text
+// Accepts base64 data URLs from the browser and uses OpenAI Audio Transcriptions.
+// Runs server-side so it continues even if the browser tab closes / phone sleeps.
+// ------------------------------------------------------------
+function decodeDataUrlToBuffer(dataUrl) {
+  const s = String(dataUrl || "");
+  const m = s.match(/^data:([^;]+);base64,(.*)$/);
+  if (!m) throw new Error("Invalid data URL (expected base64 data:...;base64,...)");
+  const mime = m[1] || "application/octet-stream";
+  const b64 = m[2] || "";
+  const buf = Buffer.from(b64, "base64");
+  return { mime, buf };
+}
+
+async function transcribeAudioBufferOpenAI({ buf, mime = "audio/m4a", filename = "audio.m4a", timeoutMs = 120000 }) {
+  if (!process.env.OPENAI_API_KEY) throw new Error("Missing OPENAI_API_KEY");
+  // Node 18+ provides fetch/FormData/Blob
+  const fd = new FormData();
+  fd.append("model", "whisper-1");
+  fd.append("file", new Blob([buf], { type: mime }), filename);
+
+  const controller = new AbortController();
+  const t = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const resp = await fetch("https://api.openai.com/v1/audio/transcriptions", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` },
+      body: fd,
+      signal: controller.signal,
+    });
+
+    const txt = await resp.text();
+    let json;
+    try { json = txt ? JSON.parse(txt) : {}; } catch { json = { raw: txt }; }
+    if (!resp.ok) {
+      const msg = json?.error?.message || json?.message || `OpenAI transcription failed (HTTP ${resp.status})`;
+      throw new Error(msg);
+    }
+    const out = String(json?.text || "").trim();
+    if (!out) throw new Error("Transcription returned empty text");
+    return out;
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+
 //
 // EXPIRATION CHECK – blocks use after Mar 1, 2026
 //
@@ -67,6 +115,11 @@ let ACTIVE_JOB_ID = null; // prevents overlapping automations
 const JOB_TTL_MS = 1000 * 60 * 30; // 30 minutes
 const JOB_LOG_MAX = 600; // max log lines stored per job
 
+function isJobCanceled(jobId) {
+  const j = JOBS.get(jobId);
+  return !!(j && (j.canceled || j.status === "canceled"));
+}
+
 function setJob(jobId, patch) {
   const prev = JOBS.get(jobId) || {
     status: "queued",
@@ -75,6 +128,7 @@ function setJob(jobId, patch) {
     finishedAt: null,
     updatedAt: Date.now(),
     logs: [],
+    canceled: false,
   };
   
   const next = {
@@ -114,7 +168,7 @@ setInterval(() => {
 
 const PORT = process.env.PORT || 3000;
 
-app.use(express.json({ limit: "12mb" }));
+app.use(express.json({ limit: "40mb" }));
 app.use(express.urlencoded({ extended: true }));
 
 // Serve UI assets
@@ -155,6 +209,18 @@ app.get("/job-status/:jobId", (req, res) => {
     return res.status(404).json({ jobId, status: "unknown", message: "Job not found" });
   }
   res.json({ jobId, ...job });
+});
+
+
+app.post("/cancel-job/:jobId", (req, res) => {
+  const jobId = String(req.params.jobId || "");
+  const job = JOBS.get(jobId);
+  if (!job) return res.status(404).json({ jobId, status: "unknown", message: "Job not found" });
+
+  // Mark canceled; bots may honor shouldStop/throwIfCanceled.
+  setJob(jobId, { status: "canceled", message: "Canceled by user", canceled: true, finishedAt: Date.now() });
+  appendJobLog(jobId, "🛑 Canceled by user request.");
+  res.json({ jobId, status: "canceled", message: "Canceled" });
 });
 
 // Root: serve UI
@@ -225,13 +291,25 @@ app.post("/run-automation", async (req, res) => {
         _origErr(...args);
       };
       
+      if (isJobCanceled(jobId)) throw new Error("Canceled by user");
+      merged.shouldStop = () => isJobCanceled(jobId);
+      merged.throwIfCanceled = () => { if (isJobCanceled(jobId)) throw new Error("Canceled by user"); };
+
       await runKinnserBot(merged);
-      
+      if (isJobCanceled(jobId)) throw new Error("Canceled by user");
       setJob(jobId, { status: "completed", message: "Autofill completed" });
       appendJobLog(jobId, "✅ Completed: Autofill completed");
     } catch (e) {
+      if (isJobCanceled(jobId) || String(e?.message || "").toLowerCase().includes("canceled")) {
+      setJob(jobId, { status: "canceled", message: "Canceled by user", canceled: true });
+    } else {
       setJob(jobId, { status: "failed", message: e?.message ? String(e.message) : "Job failed" });
+    }
+      if (isJobCanceled(jobId) || String(e?.message || "").toLowerCase().includes("canceled")) {
+      appendJobLog(jobId, "🛑 Canceled: Job canceled by user.");
+    } else {
       appendJobLog(jobId, `❌ Failed: ${e?.message ? String(e.message) : "Job failed"}`);
+    }
     } finally {
       try { console.log = _origLog; console.error = _origErr; } catch {}
       try {
@@ -593,6 +671,31 @@ ${cs}`.trim();
 // Expects: { dictation, taskType, templateText }
 // Returns: { templateText }
 // ------------------------------------------------------------
+
+// ------------------------------------------------------------
+// Transcribe Audio (m4a/voice memo) → text
+// Expects: { audioDataUrl }
+// Returns: { transcript }
+// ------------------------------------------------------------
+app.post("/transcribe-audio", async (req, res) => {
+  try {
+    const audioDataUrl = String(req.body?.audioDataUrl || "").trim();
+    if (!audioDataUrl) return res.status(400).json({ error: "Missing audioDataUrl" });
+
+    const { mime, buf } = decodeDataUrlToBuffer(audioDataUrl);
+    const transcript = await transcribeAudioBufferOpenAI({
+      buf,
+      mime,
+      filename: mime.includes("mp4") || mime.includes("m4a") ? "voice.m4a" : "voice.audio",
+      timeoutMs: 180000,
+    });
+
+    res.json({ transcript });
+  } catch (e) {
+    res.status(500).json({ error: e?.message ? String(e.message) : "transcribe-audio failed" });
+  }
+});
+
 app.post("/convert-dictation", async (req, res) => {
   try {
     const dictation = String(req.body?.dictation || "").trim();
