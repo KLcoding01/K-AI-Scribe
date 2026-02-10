@@ -240,21 +240,25 @@ function patchSubjectiveInTemplate(templateTextRaw = "", subjectiveTextRaw = "")
 // -------------------------
 // Pt Visit ONLY — Medicare-justifiable Assessment generator + patch
 // -------------------------
+// Helper to pick a random item from an array
+const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
+
 function normalizeClinicalTerms(s = "") {
   return String(s || "")
-  .replace(/\bpatient\b/ig, "Pt")
-  .replace(/\blow\s*back\s*pain\b/ig, "LBP")
-  .replace(/\bchronic\s*low\s*back\s*pain\b/ig, "chronic LBP")
-  .replace(/\bprostate\s*cancer\b/ig, "prostate cx")
-  .replace(/\bradiation\s*therapy\b/ig, "radiation tx")
-  .replace(/\s+/g, " ")
-  .trim();
+    .replace(/\bpatient\b/ig, "Pt")
+    .replace(/\blow\s*back\s*pain\b/ig, "LBP")
+    .replace(/\bchronic\s*low\s*back\s*pain\b/ig, "chronic LBP")
+    .replace(/\bprostate\s*cancer\b/ig, "prostate cx")
+    .replace(/\bradiation\s*therapy\b/ig, "radiation tx")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function buildVisitAssessmentFromDictation(dictationRaw = "") {
   const d0 = normalizeClinicalTerms(String(dictationRaw || "").replace(/\r\n/g, "\n"));
   const low = d0.toLowerCase();
   
+  // Logic Flags
   const hasLBP = /\b(lbp|low back pain)\b/i.test(d0) || /\bchronic\b/i.test(low);
   const hasGait = /\b(gait|ambulat|walk|fww|walker|cane|ad)\b/i.test(low);
   const hasTransfers = /\b(transfer|sit\s*to\s*stand|bed\s*mobility|sup\s*to\s*sit|rolling)\b/i.test(low);
@@ -263,62 +267,77 @@ function buildVisitAssessmentFromDictation(dictationRaw = "") {
   const hasBalance = /\b(balance|postur|stability)\b/i.test(low);
   const hasPainMgmt = /\b(pain\s*management|pain)\b/i.test(low);
   const hasCancer = /\b(prostate\s*cx|prostate|cancer|radiation)\b/i.test(low);
-  
-  const s1 = "Pt demonstrates fair tolerance to today’s skilled HH PT visit with intermittent rest breaks required for energy conservation and symptom monitoring.";
+
+  // --- Sentence 1: Tolerance ---
+  const s1 = pick([
+    "Pt demonstrates fair tolerance to today’s skilled HH PT visit with intermittent rest breaks required for energy conservation.",
+    "Today's skilled session was tolerated fairly well, though rest breaks were utilized to monitor symptoms and conserve energy.",
+    "Pt tolerated the PT intervention with fair endurance, requiring periodic seated rest to manage fatigue and monitor vitals."
+  ]);
+
+  // --- Sentence 2: Treatment Emphasis ---
   const s2 = (() => {
     const parts = [];
-    if (hasPainMgmt && hasLBP) parts.push("pain management for chronic LBP");
-    else if (hasPainMgmt) parts.push("pain management strategies");
-    if (hasTransfers) parts.push("functional mobility training for bed mobility and transfers");
-    else parts.push("functional mobility training for safe transfers");
-    if (hasGait) parts.push("gait training to improve household ambulation safety");
-    else parts.push("upright tolerance training to improve mobility safety");
-    return `Tx emphasized ${parts.join(", ")}, with VC/TC provided to improve sequencing, posture, and body mechanics.`;
+    if (hasPainMgmt && hasLBP) parts.push(pick(["pain management for chronic LBP", "LBP mitigation strategies"]));
+    else if (hasPainMgmt) parts.push("pain management techniques");
+    
+    if (hasTransfers) parts.push(pick(["functional mobility training involving transfers", "safety training for bed and chair transfers"]));
+    else parts.push("functional mobility training for safe transitions");
+    
+    if (hasGait) parts.push(pick(["gait training to improve ambulation safety", "skilled gait mechanics training"]));
+    else parts.push("upright tolerance and mobility training");
+
+    const bridge = pick(["Tx focused on", "Session emphasized", "Intervention centered on"]);
+    const cueing = pick(["VC/TC provided to improve mechanics", "tactile and verbal cues for better sequencing", "skilled instruction for posture and safety"]);
+    
+    return `${bridge} ${parts.join(", ")}, with ${cueing}.`;
   })();
+
+  // --- Sentence 3: Deficits & Progress ---
   const s3 = (() => {
     const deficits = [];
     if (hasWeak) deficits.push("LE weakness");
-    if (hasBalance) deficits.push("impaired balance reactions");
+    if (hasBalance) deficits.push("impaired postural stability");
     deficits.push("reduced activity tolerance");
-    const defText = deficits.length ? deficits.join(", ") : "ongoing strength and balance deficits";
-    return `Pt demonstrates gradual functional improvement; however, ${defText} continue to limit task carryover and increase fall risk during mobility.`;
+    
+    const defText = deficits.join(" and ");
+    const progress = pick(["Pt shows steady functional gains", "Pt is making gradual progress toward goals", "Functional improvements are noted"]);
+    
+    return `${progress}; however, ${defText} continue to limit task carryover and increase fall risk.`;
   })();
+
+  // --- Sentence 4: Specific Context (Cancer/Safety) ---
   const s4 = (() => {
+    const safetyTools = pick(["pacing and AD management", "environmental scanning and energy conservation"]);
     if (hasCancer) {
-      return "Gait and safety training incorporated pacing, AD management, and environmental scanning due to medical complexity and fatigue/safety concerns associated with prostate cx and radiation tx.";
+      return `Due to medical complexity and fatigue related to prostate cx/radiation tx, training incorporated ${safetyTools}.`;
     }
-    return "Gait and safety training incorporated pacing, AD management, and environmental scanning to reduce fall/injury risk during mobility within the home.";
+    return `Safety training emphasized ${safetyTools} to minimize fall risk within the home environment.`;
   })();
+
+  // --- Sentence 5: Skilled Necessity ---
   const s5 = (() => {
     const risk = hasFallRisk ? "high fall risk" : "increased fall risk";
-    const painClause = (hasLBP || hasPainMgmt) ? "manage pain flare-ups, " : "";
-    return `Pt continues to require skilled PT for real-time clinical judgment to ${painClause}progress exercise dosing, and provide ongoing VC/TC for safety due to ${risk} and variable tolerance.`;
+    const skillReason = pick([
+      "skilled clinical judgment to progress dosing",
+      "ongoing assessment of physiological response",
+      "specialized instruction to ensure safety"
+    ]);
+    return `Pt continues to require skilled PT for ${skillReason} due to ${risk} and variable tolerance.`;
   })();
-  const s6 = "Continued skilled HH PT remains medically necessary to progress toward goals, maximize functional independence, and prevent decline/hospitalization.";
-  
-  const clean = (s) => {
-    let t = String(s || "").trim().replace(/\s+/g, " ");
-    t = t.replace(/\bPt\s+Pt\b/ig, "Pt").replace(/\.\.+/g, ".");
-    if (!/[.!?]$/.test(t)) t += ".";
-    return t;
-  };
-  
-  return [clean(s1), clean(s2), clean(s3), clean(s4), clean(s5), clean(s6)].join(" ");
-}
 
-function patchVisitAssessmentInTemplate(templateTextRaw = "", assessmentTextRaw = "") {
-  const templateText = String(templateTextRaw || "");
-  const assess = String(assessmentTextRaw || "").trim();
-  if (!templateText || !assess) return templateText;
-  
-  const re = /(^\s*Assessment\s*:\s*)([\s\S]*?)(?=\n\s*(?:Plan|Goals|Frequency|Effective\s*Date)\b|$)/im;
-  if (re.test(templateText)) {
-    return templateText.replace(re, `$1${assess}\n`);
-  }
-  
-  return templateText + `\n\nAssessment:\n${assess}\n`;
-}
+  // --- Sentence 6: Conclusion ---
+  const s6 = pick([
+    "Continued skilled PT is medically necessary to maximize independence and prevent hospitalization.",
+    "Ongoing skilled intervention remains indicated to progress toward goals and prevent functional decline.",
+    "Medically necessary PT continues to be indicated for safety and goal attainment."
+  ]);
 
+  const clean = (s) => String(s || "").trim().replace(/\s+/g, " ");
+  
+  // Combine all parts
+  return [s1, s2, s3, s4, s5, s6].map(clean).join(" ");
+}
 
 // -------------------------
 // ELITE PT Evaluation Assessment Summary generator (STRICT FORMAT)
