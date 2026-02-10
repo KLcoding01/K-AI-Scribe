@@ -1181,7 +1181,27 @@ Effective Date: `
     });
   }
 
-  async function transcribeUploadedAudio() {
+  
+  async function apiFetch(url, payload) {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload || {}),
+    });
+    const raw = await res.text();
+    let data = null;
+    try { data = raw ? JSON.parse(raw) : null; } catch { data = { raw }; }
+    if (!res.ok) {
+      const errMsg = (data && (data.error || data.message)) ? (data.error || data.message) : `HTTP ${res.status}`;
+      const err = new Error(errMsg);
+      err.status = res.status;
+      err.body = data;
+      throw err;
+    }
+    return data;
+  }
+
+async function transcribeUploadedAudio() {
     const f = document.getElementById("audioFile")?.files?.[0] || null;
     const st = document.getElementById("audioMemoStatus");
     if (!f) {
@@ -1196,7 +1216,7 @@ Effective Date: `
       const b64 = await fileToBase64(f);
       const resp = await apiFetch("/transcribe-audio", {
         audio_base64: b64,
-        mime_type: f.type || "audio/mpeg",
+        mime_type: f.type || (String(f.name||"").toLowerCase().endsWith(".m4a") ? "audio/mp4" : "audio/mpeg"),
         filename: f.name || "audio"
       });
 
