@@ -577,7 +577,37 @@ async function generateHHEvalAssessmentSummary({ dictation, problemsHint = "" })
   const text = String(dictation || "").trim();
   const sentenceSpec = getDesiredSentenceSpec(text);
   const hint = String(problemsHint || "").trim();
-  
+  // Pull demographics/PMH/medical dx ONLY from dictation (no invention)
+  function extractPromptFieldsFromDictation(src) {
+    const s = String(src || "");
+    const ageMatch = s.match(/\b(\d{1,3})\s*(?:y\/o|yo|yr\/o|yrs?\/o|year\s*old|years?\s*old|-\s*year\s*old)\b/i);
+    const ageForPrompt = ageMatch ? String(ageMatch[1]) : "__";
+
+    const genderForPrompt = /\bfemale\b/i.test(s) ? "female" : (/\bmale\b/i.test(s) ? "male" : "__");
+
+    let pmhForPrompt = "__";
+    const pmhMatch = s.match(/\b(?:medical\s*history|pmh)\s*(?:,?\s*consists\s*of|consist\s*of|includes|include)\s*([^.\n\r]+)/i);
+    if (pmhMatch && pmhMatch[1]) {
+      pmhForPrompt = pmhMatch[1].trim()
+        .replace(/\bhypertension\b/ig, "HTN")
+        .replace(/\bhyperlipidemia\b/ig, "HLD")
+        .replace(/\bdiabetes\s*(?:mellitus\s*)?(?:type\s*)?2\b/ig, "DM2")
+        .replace(/\bdiabetes\s*type\s*2\b/ig, "DM2")
+        .replace(/\s+/g, " ")
+        .replace(/\s*,\s*/g, ", ")
+        .trim() || "__";
+    }
+
+    let medicalDxForPrompt = "__";
+    const md1 = s.match(/\bmedical\s*diagnosis\s*[:\-]\s*([^.\n\r]+)/i);
+    if (md1 && md1[1]) medicalDxForPrompt = md1[1].trim();
+    const md2 = s.match(/\bwith\s+medical\s+dx\s+of\s+([^.\n\r]+)/i);
+    if (medicalDxForPrompt === "__" && md2 && md2[1]) medicalDxForPrompt = md2[1].trim();
+
+    return { ageForPrompt, genderForPrompt, pmhForPrompt, medicalDxForPrompt };
+  }
+
+  const { ageForPrompt, genderForPrompt, pmhForPrompt, medicalDxForPrompt } = extractPromptFieldsFromDictation(text);  
   // Extract a lightweight problems string from dictation (do NOT include names/PHI)
   const problems = hint || (()=>{
     const hits = [];
@@ -670,7 +700,7 @@ ${cs}`.trim();
   
   // If still invalid, return deterministic fallback (never blank)
   if (!v.ok) {
-    const ageMatch = String(dictation || "").match(/(\d{1,3})\s*y\/o/i);
+    const ageMatch = String(dictation || "").match(/\b(\d{1,3})\s*(?:y\/o|yo|yr\/o|yrs?\/o|year\s*old|years?\s*old|-\s*year\s*old)\b/i);
     const age = ageMatch ? ageMatch[1] : "";
     const gender = /\bfemale\b/i.test(dictation || "") ? "female" : (/\bmale\b/i.test(dictation || "") ? "male" : "");
     const pmhMatch = String(dictation || "").match(/(?:^|\n)\s*(?:relevant\s*medical\s*history|pmh)\s*:\s*([^\n\r]+)/i);
@@ -807,7 +837,7 @@ ${dictation}
             cs = await generateHHEvalAssessmentSummary({ dictation: triggerHay2 });
           }
           if (!cs) {
-            const ageMatch = String(triggerHay2).match(/(\d{1,3})\s*y\/o/i);
+            const ageMatch = String(triggerHay2).match(/\b(\d{1,3})\s*(?:y\/o|yo|yr\/o|yrs?\/o|year\s*old|years?\s*old|-\s*year\s*old)\b/i);
             const age = ageMatch ? ageMatch[1] : "";
             const gender = /\bfemale\b/i.test(triggerHay2) ? "female" : (/\bmale\b/i.test(triggerHay2) ? "male" : "");
             const pmhMatch = String(triggerHay2).match(/(?:^|\n)\s*(?:relevant\s*medical\s*history|pmh)\s*:\s*([^\n\r]+)/i);
