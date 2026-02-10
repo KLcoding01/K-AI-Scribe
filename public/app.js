@@ -259,7 +259,7 @@ function buildVisitAssessmentFromDictation(dictationRaw = "") {
   const low = d0.toLowerCase();
   
   // Logic Flags
-  const hasLBP = /\b(lbp|low back pain)\b/i.test(d0) || /\bchronic\b/i.test(low);
+  const hasLBP = /\b(lbp|low back pain|lower back pain)\b/i.test(d0) || /\bchronic\b/i.test(low);
   const hasGait = /\b(gait|ambulat|walk|fww|walker|cane|ad)\b/i.test(low);
   const hasTransfers = /\b(transfer|sit\s*to\s*stand|bed\s*mobility|sup\s*to\s*sit|rolling)\b/i.test(low);
   const hasFallRisk = /\b(fall\s*risk|unsteady|unsafe|loss\s*of\s*balance|lob|fear\s*of\s*fall)\b/i.test(low);
@@ -339,6 +339,22 @@ function buildVisitAssessmentFromDictation(dictationRaw = "") {
   return [s1, s2, s3, s4, s5, s6].map(clean).join(" ");
 }
 
+function patchVisitAssessmentInTemplate(templateTextRaw = "", assess = "") {
+  let t = String(templateTextRaw || "");
+  if (!t) return t;
+
+  const reAS = /(^\s*Assessment\s*Summary\s*:\s*)([\s\S]*?)(?=\n\s*(?:Plan|Goals|Frequency|Effective\s*Date|Procedures|Interventions)\b|$)/im;
+  if (reAS.test(t)) return t.replace(reAS, `$1${assess}\n`);
+
+  const reA = /(^\s*Assessment\s*:\s*)([\s\S]*?)(?=\n\s*(?:Plan|Goals|Frequency|Effective\s*Date|Procedures|Interventions)\b|$)/im;
+  if (reA.test(t)) return t.replace(reA, `$1${assess}\n`);
+
+  const reS = /(^\s*Summary\s*:\s*)([\s\S]*?)(?=\n\s*(?:Plan|Goals|Frequency|Effective\s*Date|Procedures|Interventions)\b|$)/im;
+  if (reS.test(t)) return t.replace(reS, `$1${assess}\n`);
+
+  return t + `\n\nAssessment Summary:\n${assess}\n`;
+}
+
 // -------------------------
 // ELITE PT Evaluation Assessment Summary generator (STRICT FORMAT)
 // - Sentence 1 MUST be: "Pt is a <age/sex> presents with PMH consist of <pmh>."
@@ -347,25 +363,29 @@ function buildVisitAssessmentFromDictation(dictationRaw = "") {
 // -------------------------
 function normEvalPmhList(pmh = "") {
   let p = String(pmh || "").trim();
-  
-  // Remove leading labels
-  p = p.replace(/^\s*(pmh|past\s*medical\s*history)\s*[:\-]?\s*/i, "");
-  
-  // Normalize common items (light touch)
+
+  p = p.replace(/^[\s,;:.-]+/, "");
+  p = p.replace(/^\s*(pmh|past\s*medical\s*history|medical\s*history|history)\s*[:\-]?\s*/i, "");
+  p = p.replace(/^\s*,?\s*(?:consist(?:s)?\s+of|include[s]?|significant\s+for)\s*[:\-]?\s*/i, "");
+
   p = p
-  .replace(/hypertension/ig, "HTN")
-  .replace(/hyperlipidemia/ig, "HLD")
-  .replace(/diabetes\s*(type\s*2|ii|2)/ig, "DM2")
-  .replace(/prostate\s*cancer/ig, "prostate cx");
-  
-  // Strip trailing punctuation
+    .replace(/hypertension/ig, "HTN")
+    .replace(/hyperlipidemia/ig, "HLD")
+    .replace(/diabetes\s*(type\s*2|ii|2)/ig, "DM2")
+    .replace(/prostate\s*cancer/ig, "prostate cx");
+
+  p = p.replace(/\bconsist\s+of\s+consist\s+of\b/ig, "consist of");
+  p = p.replace(/\bconsists\s+of\s+consists\s+of\b/ig, "consists of");
+  p = p.replace(/PMH\s+consist\s+of\s*,\s*/ig, "PMH consist of ");
+  p = p.replace(/\s*,\s*,+/g, ", ");
+  p = p.replace(/^[, ]+/, "");
+
   p = p.replace(/[.]+$/g, "").trim();
-  
-  // Collapse whitespace
   p = p.replace(/\s+/g, " ").trim();
-  
+
   return p;
 }
+
 
 function extractEvalDemo(dictation = "") {
   const d = String(dictation || "");
@@ -377,18 +397,19 @@ function extractEvalDemo(dictation = "") {
 
 function extractEvalPmh(dictation = "") {
   const d = String(dictation || "");
-  
-  // Prefer explicit "PMH ..." line
+
   let pmh =
-  (d.match(/\b(?:PMH|medical\s+history|history)\s*(?:consists\s+of|include[s]?|significant\s+for)?\s*[:\-]?\s*([^\n\r.]+)/i)?.[1] || "").trim();
-  
-  // If not found, pull from a demographic sentence like "Pt is a 78 y/o male presents with PMH consist of HTN..."
+    (d.match(/\bPMH\s*(?:consists\s+of|consist\s+of|include[s]?|significant\s+for)?\s*[:\-]?\s*([^\n\r.]+)/i)?.[1] || "").trim() ||
+    (d.match(/\bmedical\s+history\s*,?\s*(?:consists\s+of|consist\s+of)\s*([^\n\r.]+)/i)?.[1] || "").trim() ||
+    (d.match(/\bhistory\s*,?\s*(?:consists\s+of|consist\s+of)\s*([^\n\r.]+)/i)?.[1] || "").trim();
+
   if (!pmh) {
-    pmh = (d.match(/\bpresents?\s+with\s+PMH\s*(?:consists of|include[s]?|significant for)?\s*([^\n\r.]+)/i)?.[1] || "").trim();
+    pmh = (d.match(/\bpresents?\s+with\s+PMH\s*(?:consists\s+of|consist\s+of|include[s]?|significant\s+for)?\s*([^\n\r.]+)/i)?.[1] || "").trim();
   }
-  
+
   return normEvalPmhList(pmh);
 }
+
 
 function buildEvalAssessmentSummaryFromDictation(dictationRaw = "") {
   const d0 = normalizeClinicalTerms(String(dictationRaw || "").replace(/\r\n/g, "\n"));
@@ -404,7 +425,7 @@ function buildEvalAssessmentSummaryFromDictation(dictationRaw = "") {
   const unsteady = /\bunsteady\b/i.test(low);
   const impairedBalance = /\bimpaired\s+balance|poor\s+balance|balance\s+deficit/i.test(low);
   const weakness = /\bweak|weakness|decondition/i.test(low);
-  const painLBP = /\b(lbp|low back pain)\b/i.test(low);
+  const painLBP = /\b(lbp|low back pain|lower back pain)\b/i.test(low);
   const radic = /\bradicul|radiat(ing|es|ed)?\b|numb|tingl/i.test(low);
   const transfers = /\btransfer|sit\s*to\s*stand|bed\s*mobility|rolling|sup\s*to\s*sit/i.test(low);
   const gait = /\bgait|ambulat|walk|fww|walker|cane|ad\b/i.test(low);
@@ -412,7 +433,7 @@ function buildEvalAssessmentSummaryFromDictation(dictationRaw = "") {
   // Sentence 1: STRICT format (demo + PMH)
   const s1BaseAge = ageSex ? `${ageSex}` : "";
   const s1BasePmh = pmh ? `${pmh}` : "multiple comorbidities";
-  const s1 = `Pt is a ${s1BaseAge || "adult"} presents with PMH consist of ${s1BasePmh}.`
+  const s1 = `Pt is a ${s1BaseAge || "adult"} who presents with PMH consist of ${s1BasePmh}.`
   .replace(/\s+/g, " ")
   .replace(/\bPt\s+is\s+a\s+adult\s+presents\b/i, "Pt presents");
   
@@ -645,15 +666,11 @@ function patchEvalAssessmentSummary(templateTextRaw = "", summaryTextRaw = "") {
       setStatus("Converting dictation → selected template…");
       
       const taskType = (el("taskType")?.value || "").trim();
-      const tt = (taskType || "").toLowerCase();
-      const isVisitLike = tt.includes("visit");
-      const isEvalLike = tt.includes("evaluation") || tt.includes("eval") || tt.includes("soc") || tt.includes("oasis") || tt.includes("start of care") || tt.includes("recert") || tt.includes("re-eval") || tt.includes("reeval") || tt.includes("re-evaluation") || tt.includes("discharge") || tt.includes("dco");
-
       const templateKey = (el("templateKey")?.value || "").trim();
       
       let templateText = "";
       if (templateKey && TEMPLATES[templateKey]) templateText = TEMPLATES[templateKey];
-      else if (isEvalLike && TEMPLATES.pt_eval_default) templateText = TEMPLATES.pt_eval_default;
+      else if ((taskType || "").toLowerCase().includes("evaluation") && TEMPLATES.pt_eval_default) templateText = TEMPLATES.pt_eval_default;
       else templateText = TEMPLATES.pt_visit_default || "";
       
       const resp = await httpJson("/convert-dictation", {
@@ -668,19 +685,13 @@ function patchEvalAssessmentSummary(templateTextRaw = "", summaryTextRaw = "") {
       outText = patchSubjectiveInTemplate(outText, subjFromDictation);
       
       // Pt Visit ONLY: patch Assessment
-      if (isVisitLike) {
+      if ((taskType || "").toLowerCase().includes("visit")) {
         const visitAssess = buildVisitAssessmentFromDictation(dictation);
         outText = patchVisitAssessmentInTemplate(outText, visitAssess);
       }
       
-      
-      // Non-visit: ensure Assessment Summary is generated for other task types too
-      if (!isVisitLike && !isEvalLike) {
-        const summary = buildEvalAssessmentSummaryFromDictation(dictation);
-        outText = patchEvalAssessmentSummary(outText, summary);
-      }
-// PT Evaluation ONLY: patch vitals + Assessment Summary strict 6 sentences
-      if (isEvalLike) {
+      // PT Evaluation ONLY: patch vitals + Assessment Summary strict 6 sentences
+      if ((taskType || "").toLowerCase().includes("evaluation")) {
         const vitals = extractVitalsFromText(dictation);
         outText = patchVitalsInTemplate(outText, vitals);
         
@@ -724,15 +735,11 @@ function patchEvalAssessmentSummary(templateTextRaw = "", summaryTextRaw = "") {
       const imageDataUrl = await fileToDataUrl(file);
       
       const taskType = (el("taskType")?.value || "").trim();
-      const tt = (taskType || "").toLowerCase();
-      const isVisitLike = tt.includes("visit");
-      const isEvalLike = tt.includes("evaluation") || tt.includes("eval") || tt.includes("soc") || tt.includes("oasis") || tt.includes("start of care") || tt.includes("recert") || tt.includes("re-eval") || tt.includes("reeval") || tt.includes("re-evaluation") || tt.includes("discharge") || tt.includes("dco");
-
       const templateKey = (el("templateKey")?.value || "").trim();
       
       let templateText = "";
       if (templateKey && TEMPLATES[templateKey]) templateText = TEMPLATES[templateKey];
-      else if (isEvalLike && TEMPLATES.pt_eval_default) templateText = TEMPLATES.pt_eval_default;
+      else if ((taskType || "").toLowerCase().includes("evaluation") && TEMPLATES.pt_eval_default) templateText = TEMPLATES.pt_eval_default;
       else templateText = TEMPLATES.pt_visit_default || "";
       
       const resp = await httpJson("/convert-image", {
@@ -1220,11 +1227,6 @@ Effective Date: `
   
   if (el("btnConvert")) el("btnConvert").addEventListener("click", convertDictation);
   if (el("btnConvertImage")) el("btnConvertImage").addEventListener("click", convertImage);
-
-  // Voice Memo / Audio buttons
-  if (el("btnTranscribeAudio")) el("btnTranscribeAudio").addEventListener("click", () => transcribeAudioToDictation(false));
-  if (el("btnAudioToTemplate")) el("btnAudioToTemplate").addEventListener("click", () => transcribeAudioToDictation(true));
-
   
   el("kinnserPassword").addEventListener("keydown", (e) => {
     if (e.key === "Enter") runAutomation();
