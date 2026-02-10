@@ -369,54 +369,63 @@ function normEvalPmhList(pmh = "") {
 
 function extractEvalDemo(dictation = "") {
   const d = String(dictation || "");
-  const hy = "[\\-\\u2010\\u2011\\u2012\\u2013\\u2014\\u2015\\u2212]";
+
   // Supports:
-  // - "68 y/o female"
-  // - "68-year-old female" (and iOS hyphen variants)
-  // - "68 year old female"
-  // - "female 68-year-old"
+  // - "68 y/o female", "68 yo female", "68 y.o. female"
+  // - "68-year-old female" (including iOS unicode hyphens)
+  // - "female 68-year-old" (sex-first variants)
+  let age = "";
+  let sex = "";
+
+  // Age then sex
   let m =
-    d.match(new RegExp(`\\b(\\d{1,3})\\s*(?:y\\/?o|yo|y\\.o\\.)\\s*(male|female)\\b`, "i")) ||
-    d.match(new RegExp(`\\b(\\d{1,3})\\s*(?:${hy}|\\s)?\\s*year\\s*(?:${hy}|\\s)?\\s*old\\s*(male|female|woman|man)\\b`, "i")) ||
-    d.match(new RegExp(`\\b(male|female|woman|man)\\s*(?:,|:)??\\s*(\\d{1,3})\\s*(?:${hy}|\\s)?\\s*year\\s*(?:${hy}|\\s)?\\s*old\\b`, "i"));
+    d.match(/\b(\d{1,3})\s*(?:y\/?o|yo|y\.o\.)\s*(male|female)\b/i) ||
+    d.match(/\b(\d{1,3})\s*(?:[\-\u2010\u2011\u2012\u2013\u2014\u2015\u2212]|\s)?\s*year\s*(?:[\-\u2010\u2011\u2012\u2013\u2014\u2015\u2212]|\s)?\s*old\s*(male|female|woman|man)\b/i);
 
-  let age = "", gender = "";
   if (m) {
-    if (/^\\d/.test(m[1])) { age = m[1]; gender = m[2]; }
-    else { gender = m[1]; age = m[2]; }
-  }
-  gender = String(gender || "").toLowerCase();
-  if (gender === "woman") gender = "female";
-  if (gender === "man") gender = "male";
-  age = age ? String(age).trim() : "";
+    age = String(m[1] || "").trim();
+    sex = String(m[2] || "").trim().toLowerCase();
+  } else {
+    // Sex then age
+    m =
+      d.match(/\b(male|female|woman|man)\s*(?:,|:)?\s*(\d{1,3})\s*(?:y\/?o|yo|y\.o\.)\b/i) ||
+      d.match(/\b(male|female|woman|man)\s*(?:,|:)?\s*(\d{1,3})\s*(?:[\-\u2010\u2011\u2012\u2013\u2014\u2015\u2212]|\s)?\s*year\s*(?:[\-\u2010\u2011\u2012\u2013\u2014\u2015\u2212]|\s)?\s*old\b/i);
 
-  const ageSex = (age && gender) ? `${age} y/o ${gender}` : "";
-  return { age, gender, ageSex };
+    if (m) {
+      sex = String(m[1] || "").trim().toLowerCase();
+      age = String(m[2] || "").trim();
+    }
+  }
+
+  if (sex === "woman") sex = "female";
+  if (sex === "man") sex = "male";
+
+  const parts = [];
+  if (age) parts.push(`${age} y/o`);
+  if (sex) parts.push(sex);
+
+  return { ageSex: parts.join(" ").trim() };
 }
 
 function extractEvalPmh(dictation = "") {
   const d = String(dictation || "");
 
-  // Capture PMH / medical history / history lists up to a period/newline.
+  // Prefer explicit PMH or medical history patterns
   let pmh =
-    (d.match(/\bPMH\b\s*(?:consist(?:s)?\s+of|consists\s+of|include(?:s)?|significant\s+for)?\s*[:\-]?\s*([^\n\r\.]+)/i)?.[1] || "").trim();
+    (d.match(/\bPMH\s*(?:consists of|consist of|include[s]?|significant for)?\s*[:\-]?\s*([^\n\r.]+)/i)?.[1] || "").trim();
 
   if (!pmh) {
     pmh =
-      (d.match(/\bmedical\s+history\b\s*(?:consist(?:s)?\s+of|consists\s+of|include(?:s)?|significant\s+for)?\s*[:\-]?\s*([^\n\r\.]+)/i)?.[1] || "").trim();
+      (d.match(/\b(?:medical\s+history|history)\s*(?:consists of|consist of|include[s]?)\s*[:\-]?\s*([^\n\r.]+)/i)?.[1] || "").trim();
   }
 
+  // If not found, pull from demographic sentence
   if (!pmh) {
     pmh =
-      (d.match(/\bhistory\b\s*(?:consist(?:s)?\s+of|consists\s+of|include(?:s)?|significant\s+for)?\s*[:\-]?\s*([^\n\r\.]+)/i)?.[1] || "").trim();
+      (d.match(/\bpresents?\s+with\s+PMH\s*(?:consists of|consist of|include[s]?|significant for)?\s*([^\n\r.]+)/i)?.[1] || "").trim();
   }
 
-  pmh = normEvalPmhList(pmh)
-    .replace(/\bconsist\s+of\s+consist\s+of\b/ig, "consist of")
-    .replace(/[\s,;]+$/,"")
-    .trim();
-
-  return pmh;
+  return normEvalPmhList(pmh);
 }
 
 function buildEvalAssessmentSummaryFromDictation(dictationRaw = "") {
@@ -438,15 +447,13 @@ function buildEvalAssessmentSummaryFromDictation(dictationRaw = "") {
   const transfers = /\btransfer|sit\s*to\s*stand|bed\s*mobility|rolling|sup\s*to\s*sit/i.test(low);
   const gait = /\bgait|ambulat|walk|fww|walker|cane|ad\b/i.test(low);
   
-  // Sentence 1: STRICT format (age + gender + PMH)
-  const ageTok = ageSex ? ageSex.split(" ")[0] : "__";
-  const genderTok = ageSex ? ageSex.split(" ").slice(-1)[0] : "__";
-  const pmhTok = pmh ? pmh : "__";
-
-  // STRICT opener required by your format:
-  // "Pt is a __ y/o __ who presents with PMH consist of __."
-  const s1 = `Pt is a ${ageTok} y/o ${genderTok} who presents with PMH consist of ${pmhTok}.`;
-
+  // Sentence 1: STRICT format (demo + PMH)
+  const s1BaseAge = ageSex ? `${ageSex}` : "";
+  const s1BasePmh = pmh ? `${pmh}` : "multiple comorbidities";
+  const s1 = `Pt is a ${s1BaseAge || "adult"} presents with PMH consist of ${s1BasePmh}.`
+  .replace(/\s+/g, " ")
+  .replace(/\bPt\s+is\s+a\s+adult\s+presents\b/i, "Pt presents");
+  
   // Sentence 2: STRICT eval services (your exact line)
   const s2 =
   "Pt is seen for PT initial evaluation, home assessment, DME assessment, HEP training/education, fall safety precautions, fall prevention, proper use of AD, education on pain/edema management, and PT POC/goal planning to return to PLOF.";
