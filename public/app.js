@@ -331,6 +331,9 @@ function normEvalPmhList(pmh = "") {
   
   // Remove leading labels
   p = p.replace(/^\s*(pmh|past\s*medical\s*history)\s*[:\-]?\s*/i, "");
+  // Remove accidental lead-in phrases from extraction
+  p = p.replace(/^\s*(?:consist(?:s)?\s+of|include[s]?|significant\s+for)\s*[:\-]?\s*/i, "");
+  p = p.replace(/\bconsist\s+of\s+consist\s+of\b/ig, "consist of");
   
   // Normalize common items (light touch)
   p = p
@@ -362,7 +365,7 @@ function extractEvalDemo(dictation = "") {
   // Pattern A: age then sex
   let m =
     d.match(/\b(\d{1,3})\s*(?:y\/?o|yo|y\.o\.)\s*(male|female)\b/i) ||
-    d.match(/\b(\d{1,3})\s*[- ]?\s*year\s*[- ]?\s*old\s*(male|female|woman|man)\b/i);
+    d.match(/\\b(\\d{1,3})\\s*(?:[\\-\\u2010\\u2011\\u2012\\u2013\\u2014\\u2015\\u2212]|\\s)?\\s*year\\s*(?:[\\-\\u2010\\u2011\\u2012\\u2013\\u2014\\u2015\\u2212]|\\s)?\\s*old\\s*(male|female|woman|man)\\b/i);
 
   if (m) {
     age = String(m[1] || "").trim();
@@ -371,7 +374,7 @@ function extractEvalDemo(dictation = "") {
     // Pattern B: sex then age
     m =
       d.match(/\b(male|female|woman|man)\s*(?:,|:)?\s*(\d{1,3})\s*(?:y\/?o|yo|y\.o\.)\b/i) ||
-      d.match(/\b(male|female|woman|man)\s*(?:,|:)?\s*(\d{1,3})\s*[- ]?\s*year\s*[- ]?\s*old\b/i);
+      d.match(/\\b(male|female|woman|man)\\s*(?:,|:)?\\s*(\\d{1,3})\\s*(?:[\\-\\u2010\\u2011\\u2012\\u2013\\u2014\\u2015\\u2212]|\\s)?\\s*year\\s*(?:[\\-\\u2010\\u2011\\u2012\\u2013\\u2014\\u2015\\u2212]|\\s)?\\s*old\\b/i);
 
     if (m) {
       sex = String(m[1] || "").trim().toLowerCase();
@@ -428,9 +431,9 @@ function buildEvalAssessmentSummaryFromDictation(dictationRaw = "") {
   // Sentence 1: STRICT format (demo + PMH)
   const s1BaseAge = ageSex ? `${ageSex}` : "";
   const s1BasePmh = pmh ? `${pmh}` : "multiple comorbidities";
-  const s1 = `Pt is a ${s1BaseAge || "adult"} presents with PMH consist of ${s1BasePmh}.`
+  const s1 = `Pt is a ${s1BaseAge || "adult"} who presents with PMH consist of ${s1BasePmh}.`
   .replace(/\s+/g, " ")
-  .replace(/\bPt\s+is\s+a\s+adult\s+presents\b/i, "Pt presents");
+  .replace(/\bPt\s+is\s+a\s+adult\s+who\s+presents\b/i, "Pt presents");
   
   // Sentence 2: STRICT eval services (your exact line)
   const s2 =
@@ -475,7 +478,12 @@ function buildEvalAssessmentSummaryFromDictation(dictationRaw = "") {
   };
   
   // IMPORTANT: exactly 6 sentences, in your format.
-  return [clean(s1), clean(s2), clean(s3), clean(s4), clean(s5), clean(s6)].join(" ");
+  let out = [clean(s1), clean(s2), clean(s3), clean(s4), clean(s5), clean(s6)].join(" ");
+  // Fix common duplication artifacts
+  out = out.replace(/\bconsist\s+of\s+consist\s+of\b/ig, "consist of");
+  out = out.replace(/\bPMH\s+consist\s+of\s+consist\s+of\b/ig, "PMH consist of");
+  out = out.replace(/\bPt\s+Pt\b/g, "Pt");
+  return out;
 }
 
 // Replace/patch the "Assessment Summary:" block in eval templates.
