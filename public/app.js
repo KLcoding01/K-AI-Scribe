@@ -254,78 +254,103 @@ function normalizeClinicalTerms(s = "") {
 function buildVisitAssessmentFromDictation(dictationRaw = "") {
   const d0 = normalizeClinicalTerms(String(dictationRaw || "").trim());
   const d = d0;
-  function cleanList(x) {
-    let s = normalizeClinicalTerms(String(x || ""));
-    s = s.replace(/\b(go ahead and generate|generate)\b[^,.\n]*/ig, "");
-    s = s.replace(/\b(pt\s*(?:evaluation|eval|visit)\s*summary\s*for)\b/ig, "");
-    s = s.replace(/\b(period)\b/ig, "");
-    s = s.replace(/\bis at\b/ig, "");
-    s = s.replace(/\bhigh fall risk\b/ig, "high fall risk");
-    s = s.replace(/[.]+$/g, "").trim();
-    // Normalize separators and whitespace
-    s = s.replace(/\s+and\s+/gi, ", ");
-    s = s.replace(/\s*,\s*/g, ",");
-    s = s.replace(/\s{2,}/g, " ").trim();
-    // Light PMH normalization if available
-    if (typeof normEvalPmhList === "function") s = normEvalPmhList(s);
-    // Split, trim, drop empties, and de-dupe to prevent ",,"
-    const parts = String(s || "").split(",").map(p => p.trim()).filter(Boolean);
-    const uniq = [];
-    for (const p of parts) { if (!uniq.includes(p)) uniq.push(p); }
-    return uniq.length ? uniq.join(", ") : "__";
+
+  // -------------------------
+  // helpers
+  // -------------------------
+  const has = (re) => re.test(d);
+
+  function pickTolerance() {
+    // Prefer explicit tolerance phrases
+    if (has(/\b(excellent|very good)\s+tolerance\b/i)) return "very good";
+    if (has(/\bgood\s+tolerance\b/i)) return "good";
+    if (has(/\bfair\s+tolerance\b/i)) return "fair";
+    if (has(/\bpoor\s+tolerance\b/i)) return "poor";
+    if (has(/\b(tolerated)\s+(tx|treatment)\s+well\b/i)) return "good";
+    if (has(/\bno\s+adverse\s+reactions?\b/i)) return "good";
+    // fallback if user says "good tolerance overall"
+    if (has(/\bgood\s+tolerance\s+overall\b/i)) return "good";
+    return "fair";
   }
 
-  // --- Parse age / gender (supports "68 y/o", "68-year-old", "68 year old")
-  const ageMatch = d.match(/\b(\d{1,3})\s*(?:y\/o|yo|yr\/o|yrs?\/o|-?\s*years?\s*(?:-|\s)*old|-?\s*year\s*(?:-|\s)*old)\b/i);
-  const age = ageMatch ? String(ageMatch[1]) : "__";
-  const gender = /\bfemale\b/i.test(d) ? "female" : (/\bmale\b/i.test(d) ? "male" : "__");
+  function pickSetting() {
+    // Only say HH if user implies it; else keep generic PT
+    if (has(/\bhh\b|\bhome\s*health\b/i)) return "HH";
+    if (has(/\bop\b|\boutpatient\b/i)) return "OP";
+    return "HH"; // your workflow appears HH-heavy; keep consistent default
+  }
 
-  // --- PMH / history list
-  let pmh = "__";
-  const pmhMatch =
-    d.match(/\bmedical\s*history\s*,?\s*(?:consists\s*of|include[s]?)\s*([^\.]+)/i) ||
-    d.match(/\bpmh\s*(?:consists\s*of|include[s]?)\s*([^\.]+)/i) ||
-    d.match(/\brelevant\s*history\s*(?:consists\s*of|include[s]?)\s*([^\.]+)/i);
-  if (pmhMatch && pmhMatch[1]) pmh = cleanList(pmhMatch[1]);
+  function extractInterventionsList() {
+    const items = [];
 
-  // --- Visit focus/impairments
-  let focus = "";
-  const focusMatch =
-    d.match(/\bpt\s*visit\s*summary\s*for\s*([^\.]+)/i) ||
-    d.match(/\bvisit\s*summary\s*for\s*([^\.]+)/i) ||
-    d.match(/\bsummary\s*for\s*([^\.]+)/i);
-  if (focusMatch && focusMatch[1]) focus = cleanList(focusMatch[1]);
+    // Strong signals from dictation
+    if (has(/\bfunctional\s+mobility\b|\bbed\s+mobility\b|\btransfers?\b/i)) items.push("functional mobility training");
+    if (has(/\bgait\b|\bambulat/i)) items.push("gait training");
+    if (has(/\bther[-\s]*ex\b|\btherex\b|\bstrength\b|\brom\b/i)) items.push("TherEx");
 
-  // --- Fall history
+    // If user literally requests these in the instruction line, catch them too
+    if (has(/\bther[-\s]*ex\b|\btherex\b/i) && !items.includes("TherEx")) items.push("TherEx");
+    if (has(/\bfunctional\s+mobility\b/i) && !items.includes("functional mobility training")) items.push("functional mobility training");
+    if (has(/\bgait\s+training\b/i) && !items.includes("gait training")) items.push("gait training");
+
+    // Fallback if nothing detected
+    if (!items.length) return "task-specific TherEx/TherAct and functional mobility training";
+
+    // Format nicely
+    if (items.length === 1) return items[0];
+    if (items.length === 2) return `${items[0]} and ${items[1]}`;
+    return `${items.slice(0, -1).join(", ")}, and ${items[items.length - 1]}`;
+  }
+
+  function extractImpairments() {
+    const imp = [];
+
+    if (has(/\bunsteady\s+gait\b|\bimbalan|\bbalance\b/i)) imp.push("impaired balance/unsteady gait");
+    if (has(/\bweak|weakness|muscle\s+atrophy|decondition/i)) imp.push("generalized weakness/deconditioning");
+    if (has(/\blimited\s+activity\s+tolerance|fatigue|low\s+endurance|endurance\b/i)) imp.push("limited activity tolerance/endurance");
+    if (has(/\bpain\b|\blbp\b|\bneck\s+pain\b|\bknee\s+pain\b/i)) imp.push("pain impacting mobility");
+
+    if (!imp.length) return "ongoing functional mobility deficits";
+    if (imp.length === 1) return imp[0];
+    if (imp.length === 2) return `${imp[0]} and ${imp[1]}`;
+    return `${imp.slice(0, -1).join(", ")}, and ${imp[imp.length - 1]}`;
+  }
+
+  // --- Fall history (only if mentioned)
   const word2num = { one:1, two:2, three:3, four:4, five:5, six:6, seven:7, eight:8, nine:9, ten:10 };
   let fallTiming = "";
   const daysAgo = d.match(/\b(\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s+days?\s+ago\b/i);
   if (daysAgo) {
     const v = String(daysAgo[1]).toLowerCase();
     const n = /^\d+$/.test(v) ? v : String(word2num[v] || v);
-        const ni = parseInt(n, 10);
+    const ni = parseInt(n, 10);
     fallTiming = `${n} ${(!isNaN(ni) && ni === 1) ? "day" : "days"} ago`;
-  } else if (/\byesterday\b/i.test(d)) {
-    fallTiming = "yesterday";
-  } else if (/\btoday\b/i.test(d)) {
-    fallTiming = "today";
-  }
+  } else if (/\byesterday\b/i.test(d)) fallTiming = "yesterday";
+  else if (/\btoday\b/i.test(d)) fallTiming = "today";
 
   const hasFall = /\b(fall|fell|falling)\b/i.test(d);
-  const negXray = /\bnegative\s+for\s+x-?ray\b/i.test(d) || /\bno\s+x-?ray\b/i.test(d) || /\bx-?ray\s*(?:negative|neg)\b/i.test(d);
+  const negXray = /\bnegative\s+for\s+x-?ray\b/i.test(d) || /\bx-?ray\s*(?:negative|neg)\b/i.test(d) || /\bnegative\s+for\s+fx\b/i.test(d);
 
-  const focusLine = focus ? focus : "current functional mobility deficits";
-    const fallLine = hasFall
+  const fallLine = hasFall
     ? `Pt had a fall${fallTiming ? " " + fallTiming : " recently"}${negXray ? " and x-ray indicates negative for fx" : ""}.`
     : "";
 
-  // --- 6-sentence visit Assessment (includes user-provided info, no vitals)
-  const s1 = `Pt demonstrates fair tolerance to skilled HH PT tx today. Pt is a ${age} y/o ${gender} with PMH of ${pmh}.`;
-  const s2 = `Pt currently demonstrates ${focusLine}, contributing to limitations with safe functional mobility and ADLs and increased fall risk within the home.`;
-  const s3 = `Tx emphasized task-specific TherEx/TherAct and functional mobility training with VC/TC provided for sequencing, posture, pacing, and safety to improve carryover.`;
-  const s4 = fallLine || `Pt remains at high fall risk with mobility attempts due to weakness and impaired balance reactions, requiring skilled clinical judgment for safe progression.`;
+  // -------------------------
+  // Build 6-sentence Assessment (visit)
+  // -------------------------
+  const tol = pickTolerance();
+  const setting = pickSetting();
+  const txList = extractInterventionsList();
+  const impair = extractImpairments();
+
+  const s1 = `Pt demonstrates ${tol} tolerance to skilled ${setting} PT tx today.`;
+  const s2 = `Tx emphasized ${txList} with VC/TC provided for sequencing, posture, pacing, and safety to improve carryover.`;
+  const s3 = `Pt continues to demonstrate ${impair}, contributing to limitations with safe functional mobility and ADLs and increased fall risk within the home.`;
+  const s4 = fallLine
+    ? `${fallLine} Pt required skilled clinical judgment for safe progression during mobility tasks.`
+    : `Pt required skilled clinical judgment for safe progression during mobility tasks, with rest breaks utilized as needed to manage fatigue and maintain safety.`;
   const s5 = `Education was provided on HEP carryover, fall prevention strategies, and proper use of AD as indicated to promote safe household mobility.`;
-  const s6 = `Continued skilled HH PT remains medically necessary to progress pt toward goals, maximize functional potential, and improve safety per POC.`;
+  const s6 = `Continued skilled ${setting} PT remains medically necessary to progress pt toward goals, maximize functional potential, and improve safety per POC.`;
 
   return [s1, s2, s3, s4, s5, s6].join(" ");
 }
