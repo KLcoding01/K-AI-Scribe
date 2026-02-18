@@ -26,7 +26,7 @@ function extractVitalsFromText(raw = "") {
   const hr = t.match(/\b(?:heart\s*rate|hr)\s*[:=]?\s*(\d{2,3})\b/i);
   const rr = t.match(/\b(?:resp(?:irations?)?|rr)\s*[:=]?\s*(\d{1,2})\b/i);
   const temp = t.match(/\b(?:temp(?:erature)?)\s*[:=]?\s*(\d{2,3}(?:\.\d)?)\b/i);
-  
+
   return {
     bpSys: bp ? String(bp[1]) : "",
     bpDia: bp ? String(bp[2]) : "",
@@ -39,7 +39,7 @@ function extractVitalsFromText(raw = "") {
 function patchVitalsInTemplate(templateTextRaw = "", vitals = {}) {
   let t = String(templateTextRaw || "");
   if (!t) return t;
-  
+
   const v = vitals || {};
   if (v.temperature) t = t.replace(/(\bTemp\s*:\s*)([^\n\r]*)/i, `$1${v.temperature}`);
   if (v.bpSys || v.bpDia) {
@@ -48,7 +48,7 @@ function patchVitalsInTemplate(templateTextRaw = "", vitals = {}) {
   }
   if (v.heartRate) t = t.replace(/(\bHeart\s*Rate\s*:\s*)([^\n\r]*)/i, `$1${v.heartRate}`);
   if (v.respirations) t = t.replace(/(\bRespirations\s*:\s*)([^\n\r]*)/i, `$1${v.respirations}`);
-  
+
   return t;
 }
 
@@ -61,7 +61,7 @@ function looksGenericSubjective(text = "") {
   if (!t) return true;
   if (t.length < 10) return true;
   if (t === "." || t === "-" || t === "n/a" || t === "na") return true;
-  
+
   const genericPhrases = [
     "pt agrees to pt evaluation",
     "pt agrees to pt re-evaluation",
@@ -79,7 +79,7 @@ function looksGenericSubjective(text = "") {
     "no changes since last visit",
     "subjective:",
   ];
-  
+
   return genericPhrases.some(p => t.includes(p));
 }
 
@@ -96,26 +96,26 @@ function normalizeSubjectTokens(s = "") {
 
 function stripJunkFromDictation(raw = "") {
   const text = String(raw || "").replace(/\r\n/g, "\n");
-  
+
   const lines = text
   .split("\n")
   .map(l => String(l || "").trim())
   .filter(Boolean)
   // Remove prompt/instruction lines
   .filter(l => !/^\s*(generate|write|create|revise|condense|make|fix)\b/i.test(l));
-  
+
   let joined = lines.join(" ");
-  
+
   // Strip vitals fragments
   joined = joined
   .replace(/\b(?:bp|blood\s*pressure)\s*[:=]?\s*\d{2,3}\s*\/\s*\d{2,3}\b/ig, "")
   .replace(/\b(?:heart\s*rate|hr)\s*[:=]?\s*\d{2,3}\b/ig, "")
   .replace(/\b(?:resp(?:irations?)?|rr)\s*[:=]?\s*\d{1,2}\b/ig, "")
   .replace(/\b(?:temp(?:erature)?)\s*[:=]?\s*\d{2,3}(?:\.\d)?\b/ig, "");
-  
+
   // Remove headings if pasted
   joined = joined.replace(/\b(subjective|assessment summary|assessment|plan|goals|vital signs|pain assessment)\s*[:\-]?\b/ig, " ");
-  
+
   return joined.replace(/\s+/g, " ").trim();
 }
 
@@ -144,10 +144,10 @@ function isDemographicsOrHistoryLine(s = "") {
 function scoreSubjectiveSentence(s = "") {
   const t = String(s || "").trim();
   const low = t.toLowerCase();
-  
+
   // HARD BLOCK: demographics/history/diagnosis never belongs in Subjective
   if (isDemographicsOrHistoryLine(t)) return -999;
-  
+
   // Hard exclusions (objective/treatment leakage)
   const exclude = [
     "therex", "theract", "gait training", "transfer training", "bed mobility",
@@ -157,25 +157,25 @@ function scoreSubjectiveSentence(s = "") {
     "skilled", "medically necessary", "vital signs", "bp", "hr", "rr", "temp"
   ];
   if (exclude.some(k => low.includes(k))) return -500;
-  
+
   let score = 0;
-  
+
   // Strong subjective verbs/phrases
   if (/\b(pt\s*)?(reports?|states?|verbalizes?|verbalized|noted|denies|c\/o|complains?|endorses?)\b/i.test(t)) score += 10;
   if (/\b(caregiver|cg|family|daughter|son|wife|husband)\s+reports?\b/i.test(t)) score += 10;
-  
+
   // Symptom/tolerance cues
   if (/\b(pain|sore|stiff|dizzy|fatigue|tired|weak|numb|tingl|radicul|fear of falling|falls)\b/i.test(t)) score += 4;
-  
+
   // Starts like a subjective statement
   if (/^(pt|caregiver|cg|family|daughter|son|wife|husband)\b/i.test(t)) score += 2;
-  
+
   // Penalize generic consent-only lines
   if (/(agrees to (pt|therapy)|no new complaints|tolerated)/i.test(t)) score -= 4;
-  
+
   // Penalize very short fragments
   if (t.length < 20) score -= 2;
-  
+
   return score;
 }
 
@@ -183,26 +183,26 @@ function scoreSubjectiveSentence(s = "") {
 function extractSubjectiveFromDictation(dictationRaw = "") {
   const raw = String(dictationRaw || "").trim();
   if (!raw) return "Pt agrees to PT evaluation and treatment.";
-  
+
   const cleaned = stripJunkFromDictation(raw);
   if (!cleaned) return "Pt agrees to PT evaluation and treatment.";
-  
+
   const norm = normalizeSubjectTokens(cleaned);
   const sentences = splitSentencesSmart(norm);
-  
+
   const scored = sentences
   .map(s => ({ s: s.trim(), score: scoreSubjectiveSentence(s) }))
   .filter(x => x.s && x.score > 0)
   .sort((a, b) => b.score - a.score);
-  
+
   if (!scored.length) return "Pt agrees to PT evaluation and treatment.";
-  
+
   const picked = [];
   for (const item of scored) {
     if (picked.length >= 2) break;
     if (!picked.includes(item.s)) picked.push(item.s);
   }
-  
+
   return normalizeSubjectTokens(picked.join(" "));
 }
 
@@ -214,10 +214,10 @@ function patchSubjectiveInTemplate(templateTextRaw = "", subjectiveTextRaw = "")
   const templateText = String(templateTextRaw || "");
   const subj = String(subjectiveTextRaw || "").trim();
   if (!templateText || !subj) return templateText;
-  
+
   const re = /(^\s*Subjective\s*:?\s*\n)([\s\S]*?)(?=\n\s*(?:Vital\s*Signs|Pain\s*Assessment|Pain|Functional\s*Status|Functional\s*Assessment|Response\s*to\s*Treatment|Exercises|Teaching\s*Tools|Education|Assessment\s*Summary|Assessment|Goals|Plan|Frequency)\b|\s*$)/im;
   const m = templateText.match(re);
-  
+
   if (!m) {
     const reInline = /(^\s*Subjective\s*:?\s*)(.*)$/im;
     if (reInline.test(templateText)) {
@@ -228,10 +228,10 @@ function patchSubjectiveInTemplate(templateTextRaw = "", subjectiveTextRaw = "")
     }
     return templateText;
   }
-  
+
   const existingBlock = (m[2] || "").trim();
   const firstLine = existingBlock.split("\n").map(x => x.trim()).filter(Boolean)[0] || "";
-  
+
   if (existingBlock && !looksGenericSubjective(firstLine)) return templateText;
   return templateText.replace(re, `${m[1]}${subj}\n`);
 }
@@ -254,69 +254,36 @@ function normalizeClinicalTerms(s = "") {
 function buildVisitAssessmentFromDictation(dictationRaw = "") {
   const d0 = normalizeClinicalTerms(String(dictationRaw || "").trim());
   const d = d0;
-
-  // -------------------------
-  // helpers
-  // -------------------------
-  const has = (re) => re.test(d);
-
-  function pickTolerance() {
-    // Prefer explicit tolerance phrases
-    if (has(/\b(excellent|very good)\s+tolerance\b/i)) return "very good";
-    if (has(/\bgood\s+tolerance\b/i)) return "good";
-    if (has(/\bfair\s+tolerance\b/i)) return "fair";
-    if (has(/\bpoor\s+tolerance\b/i)) return "poor";
-    if (has(/\b(tolerated)\s+(tx|treatment)\s+well\b/i)) return "good";
-    if (has(/\bno\s+adverse\s+reactions?\b/i)) return "good";
-    // fallback if user says "good tolerance overall"
-    if (has(/\bgood\s+tolerance\s+overall\b/i)) return "good";
-    return "fair";
+  function cleanList(x) {
+    let s = normalizeClinicalTerms(String(x || ""));
+    s = s.replace(/\b(go ahead and generate|generate)\b[^,.\n]*/ig, "");
+    s = s.replace(/\b(pt\s*(?:evaluation|eval|visit)\s*summary\s*for)\b/ig, "");
+    s = s.replace(/\b(period)\b/ig, "");
+    s = s.replace(/\bis at\b/ig, "");
+    s = s.replace(/\bhigh fall risk\b/ig, "high fall risk");
+    s = s.replace(/[.]+$/g, "").trim();
+    // Normalize separators and whitespace
+    s = s.replace(/\s+and\s+/gi, ", ");
+    s = s.replace(/\s*,\s*/g, ",");
+    s = s.replace(/\s{2,}/g, " ").trim();
+    // Light PMH normalization if available
+    if (typeof normEvalPmhList === "function") s = normEvalPmhList(s);
+    // Split, trim, drop empties, and de-dupe to prevent ",,"
+    const parts = String(s || "").split(",").map(p => p.trim()).filter(Boolean);
+    const uniq = [];
+    for (const p of parts) { if (!uniq.includes(p)) uniq.push(p); }
+    return uniq.length ? uniq.join(", ") : "__";
   }
 
-  function pickSetting() {
-    // Only say HH if user implies it; else keep generic PT
-    if (has(/\bhh\b|\bhome\s*health\b/i)) return "HH";
-    if (has(/\bop\b|\boutpatient\b/i)) return "OP";
-    return "HH"; // your workflow appears HH-heavy; keep consistent default
-  }
+  // --- Visit focus/impairments
+  let focus = "";
+  const focusMatch =
+    d.match(/\bpt\s*visit\s*summary\s*for\s*([^\.]+)/i) ||
+    d.match(/\bvisit\s*summary\s*for\s*([^\.]+)/i) ||
+    d.match(/\bsummary\s*for\s*([^\.]+)/i);
+  if (focusMatch && focusMatch[1]) focus = cleanList(focusMatch[1]);
 
-  function extractInterventionsList() {
-    const items = [];
-
-    // Strong signals from dictation
-    if (has(/\bfunctional\s+mobility\b|\bbed\s+mobility\b|\btransfers?\b/i)) items.push("functional mobility training");
-    if (has(/\bgait\b|\bambulat/i)) items.push("gait training");
-    if (has(/\bther[-\s]*ex\b|\btherex\b|\bstrength\b|\brom\b/i)) items.push("TherEx");
-
-    // If user literally requests these in the instruction line, catch them too
-    if (has(/\bther[-\s]*ex\b|\btherex\b/i) && !items.includes("TherEx")) items.push("TherEx");
-    if (has(/\bfunctional\s+mobility\b/i) && !items.includes("functional mobility training")) items.push("functional mobility training");
-    if (has(/\bgait\s+training\b/i) && !items.includes("gait training")) items.push("gait training");
-
-    // Fallback if nothing detected
-    if (!items.length) return "task-specific TherEx/TherAct and functional mobility training";
-
-    // Format nicely
-    if (items.length === 1) return items[0];
-    if (items.length === 2) return `${items[0]} and ${items[1]}`;
-    return `${items.slice(0, -1).join(", ")}, and ${items[items.length - 1]}`;
-  }
-
-  function extractImpairments() {
-    const imp = [];
-
-    if (has(/\bunsteady\s+gait\b|\bimbalan|\bbalance\b/i)) imp.push("impaired balance/unsteady gait");
-    if (has(/\bweak|weakness|muscle\s+atrophy|decondition/i)) imp.push("generalized weakness/deconditioning");
-    if (has(/\blimited\s+activity\s+tolerance|fatigue|low\s+endurance|endurance\b/i)) imp.push("limited activity tolerance/endurance");
-    if (has(/\bpain\b|\blbp\b|\bneck\s+pain\b|\bknee\s+pain\b/i)) imp.push("pain impacting mobility");
-
-    if (!imp.length) return "ongoing functional mobility deficits";
-    if (imp.length === 1) return imp[0];
-    if (imp.length === 2) return `${imp[0]} and ${imp[1]}`;
-    return `${imp.slice(0, -1).join(", ")}, and ${imp[imp.length - 1]}`;
-  }
-
-  // --- Fall history (only if mentioned)
+  // --- Fall history
   const word2num = { one:1, two:2, three:3, four:4, five:5, six:6, seven:7, eight:8, nine:9, ten:10 };
   let fallTiming = "";
   const daysAgo = d.match(/\b(\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s+days?\s+ago\b/i);
@@ -325,32 +292,27 @@ function buildVisitAssessmentFromDictation(dictationRaw = "") {
     const n = /^\d+$/.test(v) ? v : String(word2num[v] || v);
     const ni = parseInt(n, 10);
     fallTiming = `${n} ${(!isNaN(ni) && ni === 1) ? "day" : "days"} ago`;
-  } else if (/\byesterday\b/i.test(d)) fallTiming = "yesterday";
-  else if (/\btoday\b/i.test(d)) fallTiming = "today";
+  } else if (/\byesterday\b/i.test(d)) {
+    fallTiming = "yesterday";
+  } else if (/\btoday\b/i.test(d)) {
+    fallTiming = "today";
+  }
 
   const hasFall = /\b(fall|fell|falling)\b/i.test(d);
-  const negXray = /\bnegative\s+for\s+x-?ray\b/i.test(d) || /\bx-?ray\s*(?:negative|neg)\b/i.test(d) || /\bnegative\s+for\s+fx\b/i.test(d);
+  const negXray = /\bnegative\s+for\s+x-?ray\b/i.test(d) || /\bno\s+x-?ray\b/i.test(d) || /\bx-?ray\s*(?:negative|neg)\b/i.test(d);
 
+  const focusLine = focus ? focus : "current functional mobility deficits";
   const fallLine = hasFall
     ? `Pt had a fall${fallTiming ? " " + fallTiming : " recently"}${negXray ? " and x-ray indicates negative for fx" : ""}.`
     : "";
 
-  // -------------------------
-  // Build 6-sentence Assessment (visit)
-  // -------------------------
-  const tol = pickTolerance();
-  const setting = pickSetting();
-  const txList = extractInterventionsList();
-  const impair = extractImpairments();
-
-  const s1 = `Pt demonstrates ${tol} tolerance to skilled ${setting} PT tx today.`;
-  const s2 = `Tx emphasized ${txList} with VC/TC provided for sequencing, posture, pacing, and safety to improve carryover.`;
-  const s3 = `Pt continues to demonstrate ${impair}, contributing to limitations with safe functional mobility and ADLs and increased fall risk within the home.`;
-  const s4 = fallLine
-    ? `${fallLine} Pt required skilled clinical judgment for safe progression during mobility tasks.`
-    : `Pt required skilled clinical judgment for safe progression during mobility tasks, with rest breaks utilized as needed to manage fatigue and maintain safety.`;
+  // --- 6-sentence visit Assessment (NO demographics/PMH)
+  const s1 = `Pt demonstrates fair tolerance to skilled HH PT tx today.`;
+  const s2 = `Pt currently demonstrates ${focusLine}, contributing to limitations with safe functional mobility and ADLs and increased fall risk within the home.`;
+  const s3 = `Tx emphasized task-specific TherEx/TherAct and functional mobility training with VC/TC provided for sequencing, posture, pacing, and safety to improve carryover.`;
+  const s4 = fallLine || `Pt remains at high fall risk with mobility attempts due to weakness and impaired balance reactions, requiring skilled clinical judgment for safe progression.`;
   const s5 = `Education was provided on HEP carryover, fall prevention strategies, and proper use of AD as indicated to promote safe household mobility.`;
-  const s6 = `Continued skilled ${setting} PT remains medically necessary to progress pt toward goals, maximize functional potential, and improve safety per POC.`;
+  const s6 = `Continued skilled HH PT remains medically necessary to progress pt toward goals, maximize functional potential, and improve safety per POC.`;
 
   return [s1, s2, s3, s4, s5, s6].join(" ");
 }
@@ -359,12 +321,12 @@ function patchVisitAssessmentInTemplate(templateTextRaw = "", assessmentTextRaw 
   const templateText = String(templateTextRaw || "");
   const assess = String(assessmentTextRaw || "").trim();
   if (!templateText || !assess) return templateText;
-  
+
   const re = /(^\s*Assessment\s*:\s*)([\s\S]*?)(?=\n\s*(?:Plan|Goals|Frequency|Effective\s*Date)\b|$)/im;
   if (re.test(templateText)) {
     return templateText.replace(re, `$1${assess}\n`);
   }
-  
+
   return templateText + `\n\nAssessment:\n${assess}\n`;
 }
 
@@ -377,23 +339,23 @@ function patchVisitAssessmentInTemplate(templateTextRaw = "", assessmentTextRaw 
 // -------------------------
 function normEvalPmhList(pmh = "") {
   let p = String(pmh || "").trim();
-  
+
   // Remove leading labels
   p = p.replace(/^\s*(pmh|past\s*medical\s*history)\s*[:\-]?\s*/i, "");
-  
+
   // Normalize common items (light touch)
   p = p
   .replace(/hypertension/ig, "HTN")
   .replace(/hyperlipidemia/ig, "HLD")
   .replace(/diabetes\s*(type\s*2|ii|2)/ig, "DM2")
   .replace(/prostate\s*cancer/ig, "prostate cx");
-  
+
   // Strip trailing punctuation
   p = p.replace(/[.]+$/g, "").trim();
-  
+
   // Collapse whitespace
   p = p.replace(/\s+/g, " ").trim();
-  
+
   return p;
 }
 
@@ -407,16 +369,16 @@ function extractEvalDemo(dictation = "") {
 
 function extractEvalPmh(dictation = "") {
   const d = String(dictation || "");
-  
+
   // Prefer explicit "PMH ..." line
   let pmh =
   (d.match(/\bPMH\s*(?:consists of|include[s]?|significant for)?\s*[:\-]?\s*([^\n\r.]+)/i)?.[1] || "").trim();
-  
+
   // If not found, pull from a demographic sentence like "Pt is a 78 y/o male presents with PMH consist of HTN..."
   if (!pmh) {
     pmh = (d.match(/\bpresents?\s+with\s+PMH\s*(?:consists of|include[s]?|significant for)?\s*([^\n\r.]+)/i)?.[1] || "").trim();
   }
-  
+
   return normEvalPmhList(pmh);
 }
 
@@ -472,7 +434,7 @@ function buildEvalAssessmentSummaryFromDictation(dictationRaw = "") {
   if (daysAgo) {
     const v = String(daysAgo[1]).toLowerCase();
     const n = /^\d+$/.test(v) ? v : String(word2num[v] || v);
-        const ni = parseInt(n, 10);
+    const ni = parseInt(n, 10);
     fallTiming = `${n} ${(!isNaN(ni) && ni === 1) ? "day" : "days"} ago`;
   } else if (/\byesterday\b/i.test(d)) {
     fallTiming = "yesterday";
@@ -483,7 +445,7 @@ function buildEvalAssessmentSummaryFromDictation(dictationRaw = "") {
   const hasFall = /\b(fall|fell|falling)\b/i.test(d);
   const negXray = /\bnegative\s+for\s+x-?ray\b/i.test(d) || /\bno\s+x-?ray\b/i.test(d) || /\bx-?ray\s*(?:negative|neg)\b/i.test(d);
 
-    const fallSentence = hasFall
+  const fallSentence = hasFall
     ? `Pt had a fall${fallTiming ? " " + fallTiming : " recently"}${negXray ? " and x-ray indicates negative for fx" : ""}.`
     : `Pt demonstrates increased fall risk once mobility is attempted.`;
 
@@ -503,7 +465,7 @@ function patchEvalAssessmentSummary(templateTextRaw = "", summaryTextRaw = "") {
   const templateText = String(templateTextRaw || "");
   const summary = String(summaryTextRaw || "").trim();
   if (!templateText || !summary) return templateText;
-  
+
   const re = /(^\s*Assessment\s*Summary\s*:\s*)([\s\S]*?)(?=\n\s*(?:Goals|Plan|Frequency|Short-Term\s*Goals|Long-Term\s*Goals)\b|$)/im;
   if (re.test(templateText)) {
     return templateText.replace(re, `$1${summary}\n`);
@@ -514,13 +476,13 @@ function patchEvalAssessmentSummary(templateTextRaw = "", summaryTextRaw = "") {
 
 (() => {
   const el = (id) => document.getElementById(id);
-  
+
   const apiBase = window.location.origin;
   el("apiBasePill").textContent = `API: ${apiBase}`;
-  
+
   let pollTimer = null;
   let activeJobId = null;
-  
+
 
   const ACTIVE_JOB_STORAGE_KEY = "ks_active_job_id";
   function setBadge(text, kind = "") {
@@ -528,12 +490,12 @@ function patchEvalAssessmentSummary(templateTextRaw = "", summaryTextRaw = "") {
     b.textContent = text;
     b.className = "badge" + (kind ? " " + kind : "");
   }
-  
+
   function setStatus(text) {
     el("statusBox").textContent = text;
     el("statusBox").scrollTop = el("statusBox").scrollHeight;
   }
-  
+
   async function httpJson(url, options = {}) {
     const res = await fetch(url, {
       ...options,
@@ -550,7 +512,48 @@ function patchEvalAssessmentSummary(templateTextRaw = "", summaryTextRaw = "") {
     }
     return body;
   }
-  
+
+  // -------------------------
+  // Pt Visit ONLY — AI-generated Assessment (varies wording)
+  // Uses existing /convert-dictation endpoint (NO server changes).
+  // Falls back to deterministic builder if AI call fails.
+  // -------------------------
+  async function buildVisitAssessmentFromAI(dictationRaw = "", taskType = "PT Visit") {
+    const base = String(dictationRaw || "").trim();
+    if (!base) return buildVisitAssessmentFromDictation(dictationRaw);
+
+    const miniTemplate = `Assessment:\n(autofilled)\n`;
+
+    const aiDictation =
+`Write a Medicare-compliant home health PT VISIT Assessment in EXACTLY 6 sentences.
+Requirements:
+- Do NOT include age, sex, PMH, or demographics (those belong in eval/reeval only).
+- Base ONLY on the info provided below (do not invent scores/measurements).
+- Must include: tolerance/response, key impairments/limitations, skilled interventions performed (use: TherEx, TherAct, gait training, functional mobility training as applicable), VC/TC as applicable, education/HEP/fall prevention, and medical necessity/continued skilled HH PT per POC.
+- Vary wording naturally; avoid repeating the same fixed phrasing each time.
+
+Info:
+${base}`;
+
+    try {
+      const resp = await httpJson("/convert-dictation", {
+        method: "POST",
+        body: JSON.stringify({ dictation: aiDictation, taskType, templateText: miniTemplate }),
+      });
+
+      const out = String(resp?.templateText || "").trim();
+      if (!out) return buildVisitAssessmentFromDictation(dictationRaw);
+
+      const m = out.match(/^\s*Assessment\s*:\s*([\s\S]*?)\s*$/im);
+      const assess = (m && m[1]) ? String(m[1]).replace(/\s+/g, " ").trim() : "";
+      if (!assess) return buildVisitAssessmentFromDictation(dictationRaw);
+
+      return assess;
+    } catch {
+      return buildVisitAssessmentFromDictation(dictationRaw);
+    }
+  }
+
   async function testHealth() {
     try {
       setBadge("Checking…", "warn");
@@ -711,23 +714,23 @@ function patchEvalAssessmentSummary(templateTextRaw = "", summaryTextRaw = "") {
 
     runBtn.parentElement.insertBefore(btn, runBtn.nextSibling);
   }
-  
+
   function stopPolling() {
     if (pollTimer) clearInterval(pollTimer);
     pollTimer = null;
   }
-  
+
   async function pollJob(jobId) {
     stopPolling();
     pollTimer = setInterval(async () => {
       try {
         const job = await httpJson(`/job-status/${encodeURIComponent(jobId)}`);
-        
+
         if (job.status === "completed") setBadge("Completed", "ok");
         else if (job.status === "failed") setBadge("Failed", "bad");
         else if (job.status === "canceled" || job.status === "cancelled") setBadge("Canceled", "warn");
         else setBadge(job.status || "running", "warn");
-        
+
         const summaryLines = [
           `jobId: ${job.jobId}`,
           `status: ${job.status}`,
@@ -736,10 +739,10 @@ function patchEvalAssessmentSummary(templateTextRaw = "", summaryTextRaw = "") {
           `updatedAt: ${job.updatedAt ? new Date(job.updatedAt).toISOString() : ""}`,
           `finishedAt: ${job.finishedAt ? new Date(job.finishedAt).toISOString() : ""}`,
         ];
-        
+
         const logText = Array.isArray(job.logs) ? job.logs.join("\n") : (job.log || "");
         setStatus(summaryLines.join("\n") + (logText ? `\n\n${logText}` : ""));
-        
+
         if (job.status === "completed" || job.status === "failed" || job.status === "canceled" || job.status === "cancelled") {
           try { localStorage.removeItem(ACTIVE_JOB_STORAGE_KEY); } catch {}
           activeJobId = null;
@@ -753,7 +756,7 @@ function patchEvalAssessmentSummary(templateTextRaw = "", summaryTextRaw = "") {
       }
     }, 1200);
   }
-  
+
   function clearForm() {
     el("patientName").value = "";
     el("visitDate").value = "";
@@ -769,7 +772,7 @@ function patchEvalAssessmentSummary(templateTextRaw = "", summaryTextRaw = "") {
     if (el("btnStop")) el("btnStop").disabled = true;
     stopPolling();
   }
-  
+
   async function runAutomation() {
     const kinnserUsername = el("kinnserUsername").value.trim();
     const kinnserPassword = el("kinnserPassword").value;
@@ -779,24 +782,24 @@ function patchEvalAssessmentSummary(templateTextRaw = "", summaryTextRaw = "") {
     const timeIn = el("timeIn").value.trim();
     const timeOut = el("timeOut").value.trim();
     const aiNotes = el("aiNotes").value || "";
-    
+
     if (!patientName || !visitDate || !taskType) {
       setBadge("Missing fields", "bad");
       setStatus("Please fill Patient name, Visit date, and Task type.");
       return;
     }
-    
+
     if (!kinnserUsername || !kinnserPassword) {
       setBadge("Missing login", "bad");
       setStatus("Please enter Kinnser username and password.");
       return;
     }
-    
+
     try {
       el("btnRun").disabled = true;
       setBadge("Starting…", "warn");
       setStatus("Submitting job…");
-      
+
       const body = {
         kinnserUsername,
         kinnserPassword,
@@ -807,12 +810,12 @@ function patchEvalAssessmentSummary(templateTextRaw = "", summaryTextRaw = "") {
         timeOut,
         aiNotes: aiNotes.replace(/\r\n/g, "\n"),
       };
-      
+
       const resp = await httpJson("/run-automation", {
         method: "POST",
         body: JSON.stringify(body),
       });
-      
+
       activeJobId = resp.jobId;
       try { localStorage.setItem(ACTIVE_JOB_STORAGE_KEY, String(activeJobId)); } catch {}
       if (el("btnStop")) el("btnStop").disabled = false;
@@ -826,7 +829,7 @@ function patchEvalAssessmentSummary(templateTextRaw = "", summaryTextRaw = "") {
       el("btnRun").disabled = false;
     }
   }
-  
+
   async function convertDictation() {
     const dictation = (el("dictationNotes")?.value || "").trim();
     if (!dictation) {
@@ -834,46 +837,46 @@ function patchEvalAssessmentSummary(templateTextRaw = "", summaryTextRaw = "") {
       setStatus("Convert failed:\nPlease enter dictation first.");
       return;
     }
-    
+
     try {
       el("btnConvert").disabled = true;
       setBadge("Converting…", "warn");
       setStatus("Converting dictation → selected template…");
-      
+
       const taskType = (el("taskType")?.value || "").trim();
       const templateKey = (el("templateKey")?.value || "").trim();
-      
+
       let templateText = "";
       if (templateKey && TEMPLATES[templateKey]) templateText = TEMPLATES[templateKey];
       else if ((taskType || "").toLowerCase().includes("evaluation") && TEMPLATES.pt_eval_default) templateText = TEMPLATES.pt_eval_default;
       else templateText = TEMPLATES.pt_visit_default || "";
-      
+
       const resp = await httpJson("/convert-dictation", {
         method: "POST",
         body: JSON.stringify({ dictation, taskType, templateText }),
       });
-      
+
       let outText = String(resp.templateText || "");
-      
+
       // Subjective: always patch from dictation if AI output subjective looks generic
       const subjFromDictation = extractSubjectiveFromDictation(dictation);
       outText = patchSubjectiveInTemplate(outText, subjFromDictation);
-      
-      // Pt Visit ONLY: patch Assessment
+
+      // Pt Visit ONLY: patch Assessment (AI-generated, varies each time)
       if ((taskType || "").toLowerCase().includes("visit")) {
-        const visitAssess = buildVisitAssessmentFromDictation(dictation);
+        const visitAssess = await buildVisitAssessmentFromAI(dictation, taskType);
         outText = patchVisitAssessmentInTemplate(outText, visitAssess);
       }
-      
+
       // PT Evaluation ONLY: patch vitals + Assessment Summary strict 6 sentences
       if ((taskType || "").toLowerCase().includes("evaluation")) {
         const vitals = extractVitalsFromText(dictation);
         outText = patchVitalsInTemplate(outText, vitals);
-        
+
         const evalSummary = buildEvalAssessmentSummaryFromDictation(dictation);
         outText = patchEvalAssessmentSummary(outText, evalSummary);
       }
-      
+
       el("aiNotes").value = sanitizeNotes(outText);
       setBadge("Ready", "ok");
       setStatus("Conversion completed. Review AI Notes, then click Run Automation.");
@@ -884,7 +887,7 @@ function patchEvalAssessmentSummary(templateTextRaw = "", summaryTextRaw = "") {
       el("btnConvert").disabled = false;
     }
   }
-  
+
   function fileToDataUrl(file) {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
@@ -893,7 +896,7 @@ function patchEvalAssessmentSummary(templateTextRaw = "", summaryTextRaw = "") {
       reader.readAsDataURL(file);
     });
   }
-  
+
   async function convertImage() {
     const file = el("imageFile")?.files?.[0];
     if (!file) {
@@ -901,27 +904,27 @@ function patchEvalAssessmentSummary(templateTextRaw = "", summaryTextRaw = "") {
       setStatus("Image convert failed:\nPlease choose an image file first.");
       return;
     }
-    
+
     try {
       el("btnConvertImage").disabled = true;
       setBadge("Converting…", "warn");
       setStatus("Converting image → selected template…");
-      
+
       const imageDataUrl = await fileToDataUrl(file);
-      
+
       const taskType = (el("taskType")?.value || "").trim();
       const templateKey = (el("templateKey")?.value || "").trim();
-      
+
       let templateText = "";
       if (templateKey && TEMPLATES[templateKey]) templateText = TEMPLATES[templateKey];
       else if ((taskType || "").toLowerCase().includes("evaluation") && TEMPLATES.pt_eval_default) templateText = TEMPLATES.pt_eval_default;
       else templateText = TEMPLATES.pt_visit_default || "";
-      
+
       const resp = await httpJson("/convert-image", {
         method: "POST",
         body: JSON.stringify({ imageDataUrl, taskType, templateText }),
       });
-      
+
       el("aiNotes").value = sanitizeNotes(resp.templateText || "");
       setBadge("Ready", "ok");
       setStatus("Image conversion completed. Review AI Notes, then click Run Automation.");
@@ -932,7 +935,7 @@ function patchEvalAssessmentSummary(templateTextRaw = "", summaryTextRaw = "") {
       el("btnConvertImage").disabled = false;
     }
   }
-  
+
   // ------------------------------
   // Templates (client-side)
   // ------------------------------
@@ -1215,7 +1218,7 @@ Plan
 Frequency:
 Effective Date: `
   };
-  
+
   function initTemplates() {
     const dd = el("templateKey");
     if (!dd) return;
@@ -1234,7 +1237,7 @@ Effective Date: `
       setStatus(`Loaded template: ${key}`);
     });
   }
-  
+
   // ------------------------------
   // Remember Kinnser credentials (localStorage)
   // ------------------------------
@@ -1247,7 +1250,7 @@ Effective Date: `
       if (el("rememberCreds") && (u || p)) el("rememberCreds").checked = true;
     } catch {}
   }
-  
+
   function saveCreds() {
     try {
       if (!el("rememberCreds") || !el("rememberCreds").checked) {
@@ -1264,7 +1267,7 @@ Effective Date: `
       setStatus("Failed to save credentials.");
     }
   }
-  
+
   function clearCreds() {
     try {
       localStorage.removeItem("ks_kinnser_user");
@@ -1279,19 +1282,19 @@ Effective Date: `
   initTemplates();
   loadSavedCreds();
   resumeExistingJobIfAny();
-  
+
   if (el("btnSaveCreds")) el("btnSaveCreds").addEventListener("click", saveCreds);
   if (el("btnClearCreds")) el("btnClearCreds").addEventListener("click", clearCreds);
-  
+
   el("btnHealth").addEventListener("click", testHealth);
   el("btnRun").addEventListener("click", runAutomation);
   el("btnClear").addEventListener("click", clearForm);
-  
+
   if (el("btnConvert")) el("btnConvert").addEventListener("click", convertDictation);
   if (el("btnConvertImage")) el("btnConvertImage").addEventListener("click", convertImage);
   if (el("btnConvertAudio")) el("btnConvertAudio").addEventListener("click", convertAudio);
   if (el("btnStop")) el("btnStop").addEventListener("click", stopJob);
-  
+
   el("kinnserPassword").addEventListener("keydown", (e) => {
     if (e.key === "Enter") runAutomation();
   });
