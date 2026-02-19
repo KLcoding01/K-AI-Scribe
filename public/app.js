@@ -525,12 +525,19 @@ function patchEvalAssessmentSummary(templateTextRaw = "", summaryTextRaw = "") {
     const miniTemplate = `Assessment:\n(autofilled)\n`;
 
     const aiDictation =
-`Write a Medicare-compliant home health PT VISIT Assessment in EXACTLY 6 sentences.
-Requirements:
+`Write a Medicare-compliant home health PT VISIT Assessment in 5-7 sentences.
+
+Rules:
+- ALWAYS use "Pt" (never write "the patient" or "patient").
+- Use medical abbreviations.
+- Use Medicare-defensive clinical wording.
+- Use EXACT abbreviations:
+  * Therapeutic exercise = "Ther-ex"
+  * Therapeutic activity = "Ther-act"
 - Do NOT include age, sex, PMH, or demographics (those belong in eval/reeval only).
 - Base ONLY on the info provided below (do not invent scores/measurements).
-- Must include: tolerance/response, key impairments/limitations, skilled interventions performed (use: TherEx, TherAct, gait training, functional mobility training as applicable), VC/TC as applicable, education/HEP/fall prevention, and medical necessity/continued skilled HH PT per POC.
-- Vary wording naturally; avoid repeating the same fixed phrasing each time.
+- Must include: tolerance/response, key impairments/limitations, skilled interventions performed, VC/TC as applicable, education/HEP/fall prevention, and medical necessity/continued skilled HH PT per POC.
+- Vary wording naturally while remaining professional and Medicare-compliant.
 
 Info:
 ${base}`;
