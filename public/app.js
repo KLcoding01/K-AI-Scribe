@@ -2,6 +2,7 @@
 // - ELITE Subjective extractor: blocks demographics/PMH from Subjective (eval/visit)
 // - Pt Visit ONLY: Medicare-justifiable 6-sentence Assessment generator + patch
 // - ELITE PT Evaluation: strict 6-sentence Assessment Summary generator in your required format
+// - PT Re-evaluation: Medicare-defensible 6–7 sentence Assessment Summary generator + patch (NEW)
 // - Keeps spacing/formatting intact; client-side post-patch only (no server changes)
 
 'use strict';
@@ -332,28 +333,87 @@ function patchVisitAssessmentInTemplate(templateTextRaw = "", assessmentTextRaw 
 
 
 // -------------------------
+// PT Re-evaluation — Medicare-defensible Assessment Summary generator + patch (NEW)
+// - 6–7 sentences, similar defensible style to PT Visit
+// - Varies wording naturally; fallback deterministic builder
+// -------------------------
+function buildReevalAssessmentSummaryFromDictation(dictationRaw = "") {
+  const d0 = normalizeClinicalTerms(String(dictationRaw || "").trim());
+  const d = d0;
+
+  function cleanFocus(x) {
+    let s = normalizeClinicalTerms(String(x || ""));
+    s = s.replace(/\b(go ahead and generate|generate)\b[^,.\n]*/ig, "");
+    s = s.replace(/\b(pt\s*(?:re-?evaluation|reeval|re evaluation)\s*summary\s*for)\b/ig, "");
+    s = s.replace(/\b(pt\s*(?:evaluation|eval|visit)\s*summary\s*for)\b/ig, "");
+    s = s.replace(/\b(period)\b/ig, "");
+    s = s.replace(/[.]+$/g, "").trim();
+    s = s.replace(/\s+and\s+/gi, ", ");
+    s = s.replace(/\s*,\s*/g, ",");
+    s = s.replace(/\s{2,}/g, " ").trim();
+
+    const parts = String(s || "").split(",").map(p => p.trim()).filter(Boolean);
+    const uniq = [];
+    for (const p of parts) { if (!uniq.includes(p)) uniq.push(p); }
+    return uniq.length ? uniq.join(", ") : "";
+  }
+
+  // Try to pull primary focus if user dictated "re-eval summary for ..."
+  let focus = "";
+  const m =
+    d.match(/\b(re-?eval(?:uation)?|re\s*evaluation|re-?evaluation)\s*summary\s*for\s*([^\.]+)/i) ||
+    d.match(/\bpt\s*re-?eval(?:uation)?\s*for\s*([^\.]+)/i);
+  if (m && (m[2] || m[1])) {
+    focus = cleanFocus(m[2] || m[1] || "");
+  }
+
+  const focusLine = focus || "functional mobility deficits secondary to weakness, impaired balance, and decreased activity tolerance";
+
+  // Determine if gait is limited/NT
+  const noGait = /\b(unable to (?:ambulate|walk)|unable gait|no gait|non-ambulatory|does not ambulate|nt for gait)\b/i.test(d);
+  const bedMob = /\b(bed mobility|rolling|sup to sit|sit to sup)\b/i.test(d);
+  const transfers = /\b(transfer|sit to stand|stand to sit|toilet|bsc)\b/i.test(d);
+  const highFallRisk = /\b(high fall risk|fall risk|fear of falling|falls?)\b/i.test(d);
+
+  const s1 = `Pt has been receiving skilled HH PT services to address ${focusLine}.`;
+  const s2 = `Pt demonstrates slow but ongoing progress toward goals, however continues to present with limitations in functional mobility and safety within the home.`;
+  const s3 = `Current deficits include ${bedMob ? "limited bed mobility, " : ""}${transfers ? "impaired transfers, " : ""}${noGait ? "inability to safely initiate gait, " : "decreased gait tolerance with unsteady gait, "}${highFallRisk ? "and poor balance reactions contributing to high fall risk." : "and impaired balance contributing to increased fall risk."}`.replace(/\s+,/g, ",").replace(/\s{2,}/g, " ").trim();
+  const s4 = `Skilled intervention continues to require clinical judgment to progress Ther-ex/Ther-act, functional mobility training, and balance activities with VC/TC as needed for sequencing, posture, pacing, and safety.`;
+  const s5 = `Pt and/or CG require continued training for HEP carryover, fall prevention, and safe use of AD/DME as indicated to reduce risk of injury and improve household function.`;
+  const s6 = `Continued skilled HH PT remains medically necessary to further progress pt toward established goals, maximize functional potential, and improve independence with ADLs per POC.`;
+
+  return [s1, s2, s3, s4, s5, s6].join(" ");
+}
+
+// Patch "Assessment Summary:" block in re-eval templates.
+function patchReevalAssessmentSummary(templateTextRaw = "", summaryTextRaw = "") {
+  const templateText = String(templateTextRaw || "");
+  const summary = String(summaryTextRaw || "").trim();
+  if (!templateText || !summary) return templateText;
+
+  const re = /(^\s*Assessment\s*Summary\s*:\s*)([\s\S]*?)(?=\n\s*(?:Goals|Plan|Frequency|Short-Term\s*Goals|Long-Term\s*Goals)\b|$)/im;
+  if (re.test(templateText)) {
+    return templateText.replace(re, `$1${summary}\n`);
+  }
+  return templateText + `\n\nAssessment Summary: ${summary}\n`;
+}
+
+
+// -------------------------
 // ELITE PT Evaluation Assessment Summary generator (STRICT FORMAT)
-// - Sentence 1 MUST be: "Pt is a <age/sex> presents with PMH consist of <pmh>."
-// - Sentences 2–6 fixed in your Medicare-justifiable structure
-// - Adds stronger, objective-sounding modifiers based on dictation cues (no invented metrics)
 // -------------------------
 function normEvalPmhList(pmh = "") {
   let p = String(pmh || "").trim();
 
-  // Remove leading labels
   p = p.replace(/^\s*(pmh|past\s*medical\s*history)\s*[:\-]?\s*/i, "");
 
-  // Normalize common items (light touch)
   p = p
   .replace(/hypertension/ig, "HTN")
   .replace(/hyperlipidemia/ig, "HLD")
   .replace(/diabetes\s*(type\s*2|ii|2)/ig, "DM2")
   .replace(/prostate\s*cancer/ig, "prostate cx");
 
-  // Strip trailing punctuation
   p = p.replace(/[.]+$/g, "").trim();
-
-  // Collapse whitespace
   p = p.replace(/\s+/g, " ").trim();
 
   return p;
@@ -361,7 +421,6 @@ function normEvalPmhList(pmh = "") {
 
 function extractEvalDemo(dictation = "") {
   const d = String(dictation || "");
-  // Common patterns: "78 y/o male", "78 yo male", "78 y.o. male"
   const m = d.match(/\b(\d{1,3})\s*(?:y\/?o|yo|y\.o\.)\s*(male|female)\b/i);
   if (!m) return { ageSex: "" };
   return { ageSex: `${m[1]} y/o ${m[2].toLowerCase()}` };
@@ -369,12 +428,9 @@ function extractEvalDemo(dictation = "") {
 
 function extractEvalPmh(dictation = "") {
   const d = String(dictation || "");
-
-  // Prefer explicit "PMH ..." line
   let pmh =
   (d.match(/\bPMH\s*(?:consists of|include[s]?|significant for)?\s*[:\-]?\s*([^\n\r.]+)/i)?.[1] || "").trim();
 
-  // If not found, pull from a demographic sentence like "Pt is a 78 y/o male presents with PMH consist of HTN..."
   if (!pmh) {
     pmh = (d.match(/\bpresents?\s+with\s+PMH\s*(?:consists of|include[s]?|significant for)?\s*([^\n\r.]+)/i)?.[1] || "").trim();
   }
@@ -393,25 +449,20 @@ function buildEvalAssessmentSummaryFromDictation(dictationRaw = "") {
     s = s.replace(/\bis at\b/ig, "");
     s = s.replace(/\bhigh fall risk\b/ig, "high fall risk");
     s = s.replace(/[.]+$/g, "").trim();
-    // Normalize separators and whitespace
     s = s.replace(/\s+and\s+/gi, ", ");
     s = s.replace(/\s*,\s*/g, ",");
     s = s.replace(/\s{2,}/g, " ").trim();
-    // Light PMH normalization if available
     if (typeof normEvalPmhList === "function") s = normEvalPmhList(s);
-    // Split, trim, drop empties, and de-dupe to prevent ",,"
     const parts = String(s || "").split(",").map(p => p.trim()).filter(Boolean);
     const uniq = [];
     for (const p of parts) { if (!uniq.includes(p)) uniq.push(p); }
     return uniq.length ? uniq.join(", ") : "__";
   }
 
-  // --- Parse age / gender (supports "68 y/o", "68-year-old", "68 year old")
   const ageMatch = d.match(/\b(\d{1,3})\s*(?:y\/o|yo|yr\/o|yrs?\/o|-?\s*years?\s*(?:-|\s)*old|-?\s*year\s*(?:-|\s)*old)\b/i);
   const age = ageMatch ? String(ageMatch[1]) : "__";
   const gender = /\bfemale\b/i.test(d) ? "female" : (/\bmale\b/i.test(d) ? "male" : "__");
 
-  // --- Pull PMH list
   let pmh = "__";
   const pmhMatch =
     d.match(/\bmedical\s*history\s*,?\s*(?:consists\s*of|include[s]?)\s*([^\.]+)/i) ||
@@ -419,7 +470,6 @@ function buildEvalAssessmentSummaryFromDictation(dictationRaw = "") {
     d.match(/\brelevant\s*history\s*(?:consists\s*of|include[s]?)\s*([^\.]+)/i);
   if (pmhMatch && pmhMatch[1]) pmh = cleanList(pmhMatch[1]);
 
-  // --- Medical Dx / HNP (prefer instruction "PT evaluation summary for ...")
   let medicalDx = "__";
   const dxMatch =
     d.match(/\bpt\s*(?:evaluation|eval)\s*summary\s*for\s*([^\.]+)/i) ||
@@ -427,7 +477,6 @@ function buildEvalAssessmentSummaryFromDictation(dictationRaw = "") {
     d.match(/\bevaluation\s*summary\s*for\s*([^\.]+)/i);
   if (dxMatch && dxMatch[1]) medicalDx = cleanList(dxMatch[1]);
 
-  // --- Fall history
   const word2num = { one:1, two:2, three:3, four:4, five:5, six:6, seven:7, eight:8, nine:9, ten:10 };
   let fallTiming = "";
   const daysAgo = d.match(/\b(\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s+days?\s+ago\b/i);
@@ -449,7 +498,6 @@ function buildEvalAssessmentSummaryFromDictation(dictationRaw = "") {
     ? `Pt had a fall${fallTiming ? " " + fallTiming : " recently"}${negXray ? " and x-ray indicates negative for fx" : ""}.`
     : `Pt demonstrates increased fall risk once mobility is attempted.`;
 
-  // --- Strict 6-sentence Assessment Summary in YOUR format (no vitals; no "objective findings")
   const s1 = `Pt is a ${age} y/o ${gender} who presents with HNP of ${medicalDx} which consists of PMH of ${pmh}.`;
   const s2 = `Pt underwent PT initial evaluation with completion of home safety assessment, DME assessment, and initiation of HEP education, with education provided on fall prevention strategies, proper use of AD, pain and edema management as indicated, and establishment of PT POC and functional goals to progress pt toward PLOF.`;
   const s3 = `Pt currently demonstrates ${medicalDx}, limiting safe participation in ADLs and household mobility and increasing overall fall risk within the home environment.`;
@@ -460,7 +508,6 @@ function buildEvalAssessmentSummaryFromDictation(dictationRaw = "") {
   return [s1, s2, s3, s4, s5, s6].join(" ");
 }
 
-// Replace/patch the "Assessment Summary:" block in eval templates.
 function patchEvalAssessmentSummary(templateTextRaw = "", summaryTextRaw = "") {
   const templateText = String(templateTextRaw || "");
   const summary = String(summaryTextRaw || "").trim();
@@ -482,7 +529,6 @@ function patchEvalAssessmentSummary(templateTextRaw = "", summaryTextRaw = "") {
 
   let pollTimer = null;
   let activeJobId = null;
-
 
   const ACTIVE_JOB_STORAGE_KEY = "ks_active_job_id";
   function setBadge(text, kind = "") {
@@ -513,11 +559,6 @@ function patchEvalAssessmentSummary(templateTextRaw = "", summaryTextRaw = "") {
     return body;
   }
 
-  // -------------------------
-  // Pt Visit ONLY — AI-generated Assessment (varies wording)
-  // Uses existing /convert-dictation endpoint (NO server changes).
-  // Falls back to deterministic builder if AI call fails.
-  // -------------------------
   async function buildVisitAssessmentFromAI(dictationRaw = "", taskType = "PT Visit") {
     const base = String(dictationRaw || "").trim();
     if (!base) return buildVisitAssessmentFromDictation(dictationRaw);
@@ -561,6 +602,59 @@ ${base}`;
     }
   }
 
+  async function buildReevalAssessmentSummaryFromAI(dictationRaw = "", taskType = "PT Re-Evaluation") {
+    const base = String(dictationRaw || "").trim();
+    if (!base) return buildReevalAssessmentSummaryFromDictation(dictationRaw);
+
+    const miniTemplate = `Assessment Summary:\n(autofilled)\n`;
+
+    const aiDictation =
+`Write a Medicare-compliant home health PT RE-EVALUATION Assessment Summary in 6-7 sentences.
+
+Rules:
+- ALWAYS use "Pt" (never write "the patient" or "patient").
+- Use medical abbreviations.
+- Use Medicare-defensive clinical wording appropriate for HH PT re-eval.
+- Use EXACT abbreviations:
+  * Therapeutic exercise = "Ther-ex"
+  * Therapeutic activity = "Ther-act"
+- Do NOT include age, sex, PMH, or demographics (those belong in eval/initial only).
+- Base ONLY on the info provided below (do not invent scores/measurements).
+- Must include: progress status (e.g., slow/partial), ongoing functional limitations (bed mobility/transfers/gait/balance as applicable), high fall risk/safety needs, skilled interventions and need for clinical judgment, pt/CG education (HEP/fall prevention/AD use), and medical necessity/continued skilled HH PT per POC.
+- Vary wording naturally while remaining professional and Medicare-compliant.
+- Keep it HH PT professional and defensible.
+
+Info:
+${base}`;
+
+    try {
+      const resp = await httpJson("/convert-dictation", {
+        method: "POST",
+        body: JSON.stringify({ dictation: aiDictation, taskType, templateText: miniTemplate }),
+      });
+
+      const out = String(resp?.templateText || "").trim();
+      if (!out) return buildReevalAssessmentSummaryFromDictation(dictationRaw);
+
+      const m = out.match(/^\s*Assessment\s*Summary\s*:\s*([\s\S]*?)\s*$/im);
+      const summary = (m && m[1]) ? String(m[1]).replace(/\s+/g, " ").trim() : "";
+      if (!summary) return buildReevalAssessmentSummaryFromDictation(dictationRaw);
+
+      const sents = splitSentencesSmart(summary);
+      if (sents.length >= 6 && sents.length <= 7) return summary;
+      if (sents.length > 7) return sents.slice(0, 7).join(" ");
+      if (sents.length < 6) {
+        const closer = `Continued skilled HH PT remains medically necessary to progress pt toward goals and improve safety per POC.`;
+        const merged = (summary + " " + closer).replace(/\s+/g, " ").trim();
+        const s2 = splitSentencesSmart(merged);
+        return (s2.length > 7) ? s2.slice(0, 7).join(" ") : merged;
+      }
+      return summary;
+    } catch {
+      return buildReevalAssessmentSummaryFromDictation(dictationRaw);
+    }
+  }
+
   async function testHealth() {
     try {
       setBadge("Checking…", "warn");
@@ -574,10 +668,6 @@ ${base}`;
     }
   }
 
-
-  // ------------------------------
-  // Persist job polling across refresh / phone sleep
-  // ------------------------------
   function resumeExistingJobIfAny() {
     try {
       const stored = localStorage.getItem(ACTIVE_JOB_STORAGE_KEY);
@@ -590,9 +680,6 @@ ${base}`;
     } catch {}
   }
 
-  // ------------------------------
-  // Stop / Cancel active job
-  // ------------------------------
   async function stopJob() {
     if (!activeJobId) {
       setBadge("No job", "warn");
@@ -604,7 +691,6 @@ ${base}`;
       setBadge("Canceling…", "warn");
       setStatus(`Requesting cancel…\njobId: ${activeJobId}`);
       await httpJson(`/cancel-job/${encodeURIComponent(activeJobId)}`, { method: "POST" });
-      // polling will pick up canceled status
       await pollJob(activeJobId);
     } catch (e) {
       setBadge("Cancel failed", "bad");
@@ -613,12 +699,7 @@ ${base}`;
     }
   }
 
-  // ------------------------------
-  // Audio (.m4a) → transcription → template
-  // Injects UI controls under the Image convert section.
-  // ------------------------------
   function ensureAudioControls() {
-    // Already added?
     if (el("audioFile") || el("btnConvertAudio")) return;
 
     const anchorBtn = el("btnConvertImage") || el("btnConvert");
@@ -638,7 +719,6 @@ ${base}`;
     input.accept = "audio/*,.m4a";
     input.style.width = "100%";
     input.style.marginBottom = "10px";
-    // Attempt to match styling of image input if present
     const imgInput = el("imageFile");
     if (imgInput && imgInput.className) input.className = imgInput.className;
 
@@ -646,14 +726,12 @@ ${base}`;
     btn.type = "button";
     btn.id = "btnConvertAudio";
     btn.textContent = "Convert Audio → Selected Template";
-    // Match styling of existing buttons
     if (anchorBtn.className) btn.className = anchorBtn.className;
 
     wrap.appendChild(label);
     wrap.appendChild(input);
     wrap.appendChild(btn);
 
-    // Insert after image convert button if present, else after dictation convert
     const insertAfter = el("btnConvertImage") || el("btnConvert");
     insertAfter.parentElement.insertBefore(wrap, insertAfter.nextSibling);
   }
@@ -687,7 +765,6 @@ ${base}`;
         return;
       }
 
-      // Put transcript into dictation box and reuse existing convert pipeline
       if (el("dictationNotes")) el("dictationNotes").value = transcript;
       setBadge("Converting…", "warn");
       setStatus("Transcribed. Converting transcript → selected template…");
@@ -701,9 +778,6 @@ ${base}`;
     }
   }
 
-  // ------------------------------
-  // Ensure Stop button exists next to Run
-  // ------------------------------
   function ensureStopButton() {
     if (el("btnStop")) return;
     const runBtn = el("btnRun");
@@ -715,8 +789,6 @@ ${base}`;
     btn.textContent = "Stop";
     btn.disabled = true;
     if (runBtn.className) btn.className = runBtn.className;
-
-    // slight spacing
     btn.style.marginLeft = "10px";
 
     runBtn.parentElement.insertBefore(btn, runBtn.nextSibling);
@@ -856,6 +928,7 @@ ${base}`;
       let templateText = "";
       if (templateKey && TEMPLATES[templateKey]) templateText = TEMPLATES[templateKey];
       else if ((taskType || "").toLowerCase().includes("evaluation") && TEMPLATES.pt_eval_default) templateText = TEMPLATES.pt_eval_default;
+      else if (((taskType || "").toLowerCase().includes("re-evaluation") || (taskType || "").toLowerCase().includes("reeval")) && TEMPLATES.pt_reeval_default) templateText = TEMPLATES.pt_reeval_default;
       else templateText = TEMPLATES.pt_visit_default || "";
 
       const resp = await httpJson("/convert-dictation", {
@@ -865,17 +938,19 @@ ${base}`;
 
       let outText = String(resp.templateText || "");
 
-      // Subjective: always patch from dictation if AI output subjective looks generic
       const subjFromDictation = extractSubjectiveFromDictation(dictation);
       outText = patchSubjectiveInTemplate(outText, subjFromDictation);
 
-      // Pt Visit ONLY: patch Assessment (AI-generated, varies each time)
       if ((taskType || "").toLowerCase().includes("visit")) {
         const visitAssess = await buildVisitAssessmentFromAI(dictation, taskType);
         outText = patchVisitAssessmentInTemplate(outText, visitAssess);
       }
 
-      // PT Evaluation ONLY: patch vitals + Assessment Summary strict 6 sentences
+      if ((taskType || "").toLowerCase().includes("re-evaluation") || (taskType || "").toLowerCase().includes("reeval")) {
+        const reevalSummary = await buildReevalAssessmentSummaryFromAI(dictation, taskType);
+        outText = patchReevalAssessmentSummary(outText, reevalSummary);
+      }
+
       if ((taskType || "").toLowerCase().includes("evaluation")) {
         const vitals = extractVitalsFromText(dictation);
         outText = patchVitalsInTemplate(outText, vitals);
@@ -925,6 +1000,7 @@ ${base}`;
       let templateText = "";
       if (templateKey && TEMPLATES[templateKey]) templateText = TEMPLATES[templateKey];
       else if ((taskType || "").toLowerCase().includes("evaluation") && TEMPLATES.pt_eval_default) templateText = TEMPLATES.pt_eval_default;
+      else if (((taskType || "").toLowerCase().includes("re-evaluation") || (taskType || "").toLowerCase().includes("reeval")) && TEMPLATES.pt_reeval_default) templateText = TEMPLATES.pt_reeval_default;
       else templateText = TEMPLATES.pt_visit_default || "";
 
       const resp = await httpJson("/convert-image", {
@@ -943,9 +1019,6 @@ ${base}`;
     }
   }
 
-  // ------------------------------
-  // Templates (client-side)
-  // ------------------------------
   const TEMPLATES = {
     pt_visit_default: `Subjective:
 Pt reports no new complaints and agrees to PT tx today.
@@ -1142,7 +1215,7 @@ Current Status: Independent / Dependent / Needs Assistance / Needs Supervision
 Physical and Psychological Status: Pt presents with a pleasant demeanor and is able to follow simple physical therapy instructions to perform functional tasks when prompted.
 
 Course of Illness and Treatment
-Services Provided: Skilled physical therapy services were provided to address deficits in strength, balance, mobility, and functional independence. Interventions included TherEx, TherAct, gait and balance training, functional mobility training, and patient/caregiver education with VC/TC as needed to promote safety and carryover. Services were directed toward reducing fall risk, improving ADLs, and progressing the pt toward PLOF per established POC.
+Services Provided: Skilled physical therapy services were provided to address deficits in strength, balance, mobility, and functional independence. Interventions included TherEx, TherAct, gait and balance training, functional mobility training, patient/caregiver education with VC/TC as needed to promote safety and carryover. Services were directed toward reducing fall risk, improving ADLs, and progressing the pt toward PLOF per established POC.
 Frequency/Duration: See IE.
 Patient Progress/Response: Pt demonstrates good tolerance to HH PT and has successfully met established goals. Pt is now independent with HEP and demonstrates good understanding of proper form and safety techniques. Improved overall mobility, strength, and balance noted during sessions. Education reinforced on continuation of HEP to maintain progress and prevent decline. No adverse reactions observed, and Pt verbalized confidence managing exercises independently. Continued PT not indicated at this time unless functional decline occurs.
 
@@ -1245,9 +1318,6 @@ Effective Date: `
     });
   }
 
-  // ------------------------------
-  // Remember Kinnser credentials (localStorage)
-  // ------------------------------
   function loadSavedCreds() {
     try {
       const u = localStorage.getItem("ks_kinnser_user") || "";
@@ -1284,6 +1354,7 @@ Effective Date: `
       setStatus("Cleared saved Kinnser credentials.");
     } catch {}
   }
+
   ensureStopButton();
   ensureAudioControls();
   initTemplates();
