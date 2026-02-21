@@ -643,17 +643,27 @@ ${base}`;
       const m = out.match(/^\s*Assessment\s*Summary\s*:\s*([\s\S]*?)\s*$/im);
       const summary = (m && m[1]) ? String(m[1]).replace(/\s+/g, " ").trim() : "";
       if (!summary) return buildReevalAssessmentSummaryFromDictation(dictationRaw);
+      // Guardrail: if model echoed Initial Eval boilerplate (age/PMH/HNP/etc) or placeholders, ignore and use deterministic re-eval builder.
+      const looksEvalish =
+        /\b(y\/o|pmh|hnp|initial\s+evaluation|home\s+safety\s+assessment|dme\s+assessment)\b/i.test(summary) ||
+        /__/.test(summary);
+      if (looksEvalish) return buildReevalAssessmentSummaryFromDictation(dictationRaw);
 
       const sents = splitSentencesSmart(summary);
+
+      // Enforce 6–7 sentences
       if (sents.length >= 6 && sents.length <= 7) return summary;
       if (sents.length > 7) return sents.slice(0, 7).join(" ");
-      if (sents.length < 6) {
-        const closer = `Continued skilled HH PT remains medically necessary to progress pt toward goals and improve safety per POC.`;
-        const merged = (summary + " " + closer).replace(/\s+/g, " ").trim();
-        const s2 = splitSentencesSmart(merged);
-        return (s2.length > 7) ? s2.slice(0, 7).join(" ") : merged;
-      }
-      return summary;
+
+      // If too short, append a defensible medical-necessity closer, then re-check.
+      const closer = `Continued skilled HH PT remains medically necessary to progress pt toward goals, improve safety, and reduce fall risk per POC.`;
+      const merged = (summary + " " + closer).replace(/\s+/g, " ").trim();
+      const s2 = splitSentencesSmart(merged);
+      if (s2.length >= 6 && s2.length <= 7) return merged;
+      if (s2.length > 7) return s2.slice(0, 7).join(" ");
+
+      // Last resort: deterministic builder
+      return buildReevalAssessmentSummaryFromDictation(dictationRaw);
     } catch {
       return buildReevalAssessmentSummaryFromDictation(dictationRaw);
     }
