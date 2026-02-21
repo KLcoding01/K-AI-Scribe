@@ -1297,8 +1297,7 @@ function parseStructuredFromFreeText(aiNotes = "") {
       rawHelperLine: "",
       noHazardsIdentified: false,
     },
-    pain: {
-      hasPain: false,
+    pain: { status: "skip", hasPain: false,
       primaryLocationText: "",
       intensityValue: "-1",
       increasedBy: "",
@@ -1821,16 +1820,21 @@ function parseStructuredFromFreeText(aiNotes = "") {
                                                       
                                                       
                                                       // PAIN ASSESSMENT (explicit block)
-                                                      const painYesNo =
-                                                      text.match(/(?:^|\n)\s*pain\s*:\s*(yes|no)\b/i) ||
-                                                      text.match(/(?:^|\n)\s*pain\s+assessment\s*:\s*(yes|no)\b/i);
-                                                      
-                                                      if (painYesNo) {
-    const yn = (painYesNo[1] || "").toLowerCase();
-    result.pain.hasPain = yn === "yes";
+                                                      const painMatch = noteText.match(/pain\s*:\s*(skip|yes|no)\b/i);
+  if (painMatch) {
+    const v = painMatch[1].toLowerCase();
+    if (v === "skip") {
+      result.pain.status = "skip";
+      // Do not touch existing Pain fields in the EMR when Pain is marked Skip.
+    } else if (v === "yes") {
+      result.pain.status = "yes";
+      result.pain.hasPain = true;
+    } else if (v === "no") {
+      result.pain.status = "no";
+      result.pain.hasPain = false;
+    }
   }
-                                                      
-                                                      // Pain Location
+// Pain Location
                                                       // Prefer explicit "Primary Location Other:" (matches your required Kinnser workflow)
                                                       const painLocOther = text.match(/(?:^|\n)\s*primary\s+location\s+other\s*:\s*([^\n\r]+)/i);
                                                       if (painLocOther) {
@@ -2213,7 +2217,7 @@ async function extractNoteDataFromAI(aiNotes, visitType = "Evaluation") {
     clinicalStatement: (structured.clinicalStatement || "").trim(),
   };
   
-
+  
   return base;
 }
 
@@ -3075,8 +3079,13 @@ async function fillTreatmentGoalsAndPainPlan(context, data) {
     log("⚠️ Template frame not found for goals/plan.");
     return;
   }
-  
   const pain = data.pain || {};
+  const painStatus = String(pain.status || "").toLowerCase();
+  if (painStatus === "skip") {
+    log("Pain marked as SKIP — leaving existing Pain fields unchanged.");
+    return;
+  }
+
   const plan = data.plan || {};
   
   const aiGoalLines = plan.goalTexts || [];
@@ -4017,9 +4026,8 @@ async function runPtReevalBot({
       });
     } catch {}
     
-    // 4) Select Template
-    await selectTemplateGW2(activePage);
-    
+    // 4) Template selection
+    // NOTE: GW2 template selection removed (leave existing EMR template unchanged).
     // 5) Visit basics
     await fillVisitBasics(activePage, { timeIn, timeOut, visitDate });
     
