@@ -181,12 +181,16 @@ function scoreSubjectiveSentence(s = "") {
 }
 
 // ELITE extractor: returns 1–2 true subjective sentences max, excludes demographics/PMH
-function extractSubjectiveFromDictation(dictationRaw = "") {
+function extractSubjectiveFromDictation(dictationRaw = "", taskType = "") {
+  const tt = String(taskType || "").toLowerCase();
+  const isReeval = /re[-\s]?eval/.test(tt) || tt.includes("re-evaluation") || tt.includes("re evaluation");
+  const defaultLine = isReeval ? "Pt agrees to PT Re-evaluation." : "Pt agrees to PT evaluation and treatment.";
+
   const raw = String(dictationRaw || "").trim();
-  if (!raw) return "Pt agrees to PT evaluation and treatment.";
+  if (!raw) return defaultLine;
 
   const cleaned = stripJunkFromDictation(raw);
-  if (!cleaned) return "Pt agrees to PT evaluation and treatment.";
+  if (!cleaned) return defaultLine;
 
   const norm = normalizeSubjectTokens(cleaned);
   const sentences = splitSentencesSmart(norm);
@@ -196,7 +200,7 @@ function extractSubjectiveFromDictation(dictationRaw = "") {
   .filter(x => x.s && x.score > 0)
   .sort((a, b) => b.score - a.score);
 
-  if (!scored.length) return "Pt agrees to PT evaluation and treatment.";
+  if (!scored.length) return defaultLine;
 
   const picked = [];
   for (const item of scored) {
@@ -925,33 +929,43 @@ ${base}`;
       const taskType = (el("taskType")?.value || "").trim();
       const templateKey = (el("templateKey")?.value || "").trim();
 
+      const tt = String(taskType || "").toLowerCase();
+      const isVisit = tt.includes("visit");
+      const isReeval = /re[-\s]?eval/.test(tt) || tt.includes("re-evaluation") || tt.includes("re evaluation");
+      const isEval = tt.includes("evaluation") && !isReeval;
+
       let templateText = "";
       if (templateKey && TEMPLATES[templateKey]) templateText = TEMPLATES[templateKey];
-      else if ((taskType || "").toLowerCase().includes("evaluation") && TEMPLATES.pt_eval_default) templateText = TEMPLATES.pt_eval_default;
-      else if (((taskType || "").toLowerCase().includes("re-evaluation") || (taskType || "").toLowerCase().includes("reeval")) && TEMPLATES.pt_reeval_default) templateText = TEMPLATES.pt_reeval_default;
+      else if (isReeval && TEMPLATES.pt_reeval_default) templateText = TEMPLATES.pt_reeval_default;
+      else if (isEval && TEMPLATES.pt_eval_default) templateText = TEMPLATES.pt_eval_default;
       else templateText = TEMPLATES.pt_visit_default || "";
 
-      const resp = await httpJson("/convert-dictation", {
+
+const resp = await httpJson("/convert-dictation", {
         method: "POST",
         body: JSON.stringify({ dictation, taskType, templateText }),
       });
 
       let outText = String(resp.templateText || "");
 
-      const subjFromDictation = extractSubjectiveFromDictation(dictation);
+      // Subjective: patch from dictation if template subjective looks generic
+      const subjFromDictation = extractSubjectiveFromDictation(dictation, taskType);
       outText = patchSubjectiveInTemplate(outText, subjFromDictation);
 
-      if ((taskType || "").toLowerCase().includes("visit")) {
+      // Pt Visit ONLY: patch Assessment (AI-generated, varies each time)
+      if (isVisit) {
         const visitAssess = await buildVisitAssessmentFromAI(dictation, taskType);
         outText = patchVisitAssessmentInTemplate(outText, visitAssess);
       }
 
-      if ((taskType || "").toLowerCase().includes("re-evaluation") || (taskType || "").toLowerCase().includes("reeval")) {
+      // PT Re-Evaluation ONLY: patch Assessment Summary (AI-generated, varies each time; 6–7 sentences)
+      if (isReeval) {
         const reevalSummary = await buildReevalAssessmentSummaryFromAI(dictation, taskType);
         outText = patchReevalAssessmentSummary(outText, reevalSummary);
       }
 
-      if ((taskType || "").toLowerCase().includes("evaluation")) {
+      // PT Evaluation ONLY: patch vitals + Assessment Summary strict 6 sentences
+      if (isEval) {
         const vitals = extractVitalsFromText(dictation);
         outText = patchVitalsInTemplate(outText, vitals);
 
@@ -959,7 +973,8 @@ ${base}`;
         outText = patchEvalAssessmentSummary(outText, evalSummary);
       }
 
-      el("aiNotes").value = sanitizeNotes(outText);
+
+el("aiNotes").value = sanitizeNotes(outText);
       setBadge("Ready", "ok");
       setStatus("Conversion completed. Review AI Notes, then click Run Automation.");
     } catch (e) {
