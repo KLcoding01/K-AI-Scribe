@@ -3952,6 +3952,31 @@ async function fillFrequencyAndDate(context, data, visitDate) {
   }
 
   // Try on main scope/page
+  // --------------------------------------------------
+  // Reassessment: Suppress Treat As Order (No POC change)
+  // Required to prevent SAVE_VALIDATION_ERROR
+  // --------------------------------------------------
+  try {
+    const suppressSelector = '#frm_suppressTreatAsOrder';
+    const suppressBox = await scope.locator
+      ? await scope.locator(suppressSelector).first().isVisible().catch(() => false)
+      : false;
+
+    if (suppressBox) {
+      const isChecked = await scope.locator(suppressSelector).isChecked().catch(() => false);
+      if (!isChecked) {
+        await scope.locator(suppressSelector).check().catch(() => {});
+        log('Checked suppressTreatAsOrder (No POC change).');
+      } else {
+        log('suppressTreatAsOrder already checked.');
+      }
+    } else {
+      log('suppressTreatAsOrder checkbox not found (may not apply).');
+    }
+  } catch (e) {
+    log('Error checking suppressTreatAsOrder: ' + e.message);
+  }
+
   if (await tryClick(scope, "scope")) return true;
 
   // Try all iframes (common in Kinnser/WellSky)
