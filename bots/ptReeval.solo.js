@@ -27,6 +27,53 @@ function logErr(...args) {
 
 // Backwards-safe alias if you want to keep calling logErrSafe in other places
 function logErrSafe(...args) { return logErr(...args); }
+// --------------------------------------------------
+// Section gating: if a heading is NOT present in AI Notes,
+// skip filling that whole section (leave existing EMR fields untouched).
+// This lets you paste partial AI Notes without overwriting other areas.
+// --------------------------------------------------
+function detectRequestedSections(noteText = "") {
+  const t = String(noteText || "");
+
+  const hasLine = (re) => re.test(t);
+
+  return {
+    // Core
+    subjective: hasLine(/^\s*Subjective\b/im),
+    vitals: hasLine(/^\s*Vital\s*Signs\b/im),
+    pain: hasLine(/^\s*Pain\b\s*:/im) || hasLine(/^\s*Pain\s*Assessment\b/im),
+
+    assessmentSummary: hasLine(/^\s*Assessment\s*Summary\b/im),
+
+    // Eval-ish / other
+    medicalDx: hasLine(/^\s*Medical\s*Diagnosis\b/im),
+    ptDx: hasLine(/^\s*PT\s*Diagnosis\b/im),
+    precautions: hasLine(/^\s*Precautions\b/im),
+    relevantHx: hasLine(/^\s*Relevant\s*Medical\s*History\b/im),
+    priorLevel: hasLine(/^\s*Prior\s*Level\s*of\s*Function\b/im),
+    patientGoals: hasLine(/^\s*Patient\s*Goals\b/im),
+
+    living: hasLine(/^\s*Living\s*Situation\b/im),
+    neuroPhysical: hasLine(/^\s*Neuro\s*\/\s*Physical\b/im),
+
+    romStrength: hasLine(/^\s*ROM\s*\/\s*Strength\b/im),
+    functional: hasLine(/^\s*Functional\s*(Status|Assessment)\b/im),
+    gait: hasLine(/^\s*Gait\b/im),
+
+    dme: hasLine(/^\s*DME\b/im),
+    edema: hasLine(/^\s*Edema\b/im),
+
+    goals: hasLine(/^\s*Goals\b/im) || hasLine(/^\s*Short-?Term\s*Goals\b/im) || hasLine(/^\s*Long-?Term\s*Goals\b/im),
+    plan: hasLine(/^\s*Plan\b/im),
+    frequency: hasLine(/^\s*Frequency\b/im),
+    effectiveDate: hasLine(/^\s*Effective\s*Date\b/im),
+  };
+}
+
+function anyTrue(...vals) {
+  return vals.some(Boolean);
+}
+
 
 // =========================
 // SOLO BOT FILE (no ./common.js dependency)
@@ -4071,6 +4118,8 @@ async function runPtReevalBot({
   // If AI Notes are blank, fall back to the default Re-evaluation template.
   if (!aiNotes || !String(aiNotes).trim()) aiNotes = DEFAULT_REEVAL_TEMPLATE;
 
+
+  const requested = detectRequestedSections(aiNotes);
   const { browser, context, page } = await launchBrowserContext();
   
   try {
@@ -4109,44 +4158,96 @@ async function runPtReevalBot({
     
     // 7) Vitals + Relevant History + Clinical Statement
     // NOTE: your fillVitalsAndNarratives() already fills frm_RlvntMedHist + frm_EASI1 per your code
-    await fillVitalsAndNarratives(activePage, aiData);
-    
+if (requested.vitals) {
+      await fillVitalsAndNarratives(activePage, aiData);
+    } else {
+      log('Skipping Vital Signs (not provided in AI Notes).');
+    }
+
     // 8) Medical Dx (frm_MedDiagText)
-    await fillMedDiagnosisAndSubjective(activePage, aiData);
-    
+if (anyTrue(requested.medicalDx, requested.ptDx, requested.precautions)) {
+      await fillMedDiagnosisAndSubjective(activePage, aiData);
+    } else {
+      log('Skipping Medical/PT Dx + Precautions (not provided in AI Notes).');
+    }
+
     // 9) Subjective
-    await fillSubjectiveOnly(activePage, aiData);
-    
+if (requested.subjective) {
+      await fillSubjectiveOnly(activePage, aiData);
+    } else {
+      log('Skipping Subjective (not provided in AI Notes).');
+    }
+
     // 10) Prior level + Patient goals
-    await fillPriorLevelAndPatientGoals(activePage, aiData);
-    
+if (anyTrue(requested.priorLevel, requested.patientGoals)) {
+      await fillPriorLevelAndPatientGoals(activePage, aiData);
+    } else {
+      log('Skipping PLOF/Patient Goals (not provided in AI Notes).');
+    }
+
     // 11) Living situation / safety hazards
-    await fillHomeSafetySection(activePage, aiData);
-    
+if (requested.living) {
+      await fillHomeSafetySection(activePage, aiData);
+    } else {
+      log('Skipping Living Situation/Home Safety (not provided in AI Notes).');
+    }
+
     // 12) Pain section
-    await fillPainSection(activePage, aiData);
-    
+if (requested.pain) {
+      await fillPainSection(activePage, aiData);
+    } else {
+      log('Skipping Pain section (not provided in AI Notes).');
+    }
+
     // 13) Neuro / Physical assessment text fields
-    await fillNeuroPhysical(activePage, aiData);
-    
+if (requested.neuroPhysical) {
+      await fillNeuroPhysical(activePage, aiData);
+    } else {
+      log('Skipping Neuro/Physical (not provided in AI Notes).');
+    }
+
     // 14) Edema
-    await fillEdemaSection(activePage, aiData);
-    
+if (requested.edema) {
+      await fillEdemaSection(activePage, aiData);
+    } else {
+      log('Skipping Edema (not provided in AI Notes).');
+    }
+
     // 15) ROM/Strength
-    await fillPhysicalRomStrength(activePage, aiData.romStrength);
-    
+if (requested.romStrength) {
+      await fillPhysicalRomStrength(activePage, aiData.romStrength);
+    } else {
+      log('Skipping ROM/Strength (not provided in AI Notes).');
+    }
+
     // 16) Functional (FAPT)
-    await fillFunctionalSection(activePage, aiData);
-    
+if (requested.functional || requested.gait) {
+      await fillFunctionalSection(activePage, aiData);
+    } else {
+      log('Skipping Functional/Gait (not provided in AI Notes).');
+    }
+
     // 17) DME checkboxes + other
-    await fillDMESection(activePage, aiData);
-    
+if (requested.dme) {
+      await fillDMESection(activePage, aiData);
+    } else {
+      log('Skipping DME (not provided in AI Notes).');
+    }
+
     // 18) Treatment goals + pain plan (if pain)
-    await fillTreatmentGoalsAndPainPlan(activePage, aiData);
-    
+if (anyTrue(requested.goals, requested.plan) || requested.pain) {
+      await fillTreatmentGoalsAndPainPlan(activePage, aiData);
+    } else {
+      log('Skipping Goals/Plan/Pain Plan (not provided in AI Notes).');
+    }
+
     // 19) Frequency + effective date
-    await fillFrequencyAndDate(activePage, aiData, visitDate);
-    
+if (anyTrue(requested.frequency, requested.effectiveDate)) {
+      await fillFrequencyAndDate(activePage, aiData, visitDate);
+    } else {
+      log('Skipping Frequency/Effective Date (not provided in AI Notes).');
+    }
+
     await clickSave(activePage);
     await wait(2500);
 
