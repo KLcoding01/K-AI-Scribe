@@ -563,10 +563,47 @@ function patchEvalAssessmentSummary(templateTextRaw = "", summaryTextRaw = "") {
     return body;
   }
 
-  async function buildVisitAssessmentFromAI(dictationRaw = "", taskType = "PT Visit") {
-    const base = String(dictationRaw || "").trim();
-    if (!base) return buildVisitAssessmentFromDictation(dictationRaw);
+  
+  // -------------------------
+  // Visit Assessment hygiene (prevents Subjective/Vitals from leaking into Assessment)
+  // - If AI returns headings or vitals, we strip + validate; otherwise fall back to deterministic builder.
+  // -------------------------
+  function cleanVisitAssessmentText(raw = "") {
+    let t = String(raw || "");
+    if (!t) return "";
 
+    // Remove any accidental section headers / blocks
+    t = t.replace(/\bSubjective\s*:?\s*/ig, " ");
+    t = t.replace(/\bVital\s*Signs\b\s*:?/ig, " ");
+    t = t.replace(/\bPain\s*Assessment\b\s*:?/ig, " ");
+    t = t.replace(/\bResponse\s*to\s*Treatment\b\s*:?/ig, " ");
+
+    // Remove common vitals lines if they sneak in
+    t = t.replace(/\bTemp\s*:\s*[^\n\r.]*\b/ig, " ");
+    t = t.replace(/\bBP\s*:\s*[^\n\r.]*\b/ig, " ");
+    t = t.replace(/\bHeart\s*Rate\s*:\s*[^\n\r.]*\b/ig, " ");
+    t = t.replace(/\bRespirations\s*:\s*[^\n\r.]*\b/ig, " ");
+
+    // Collapse whitespace
+    t = t.replace(/\s+/g, " ").trim();
+
+    // Ensure it ends like a sentence
+    if (t && !/[.!?]$/.test(t)) t += ".";
+    return t;
+  }
+
+  function looksLikeVisitAssessmentHasLeakage(assess = "") {
+    const low = String(assess || "").toLowerCase();
+    if (!low) return true;
+    // Headings / template-like artifacts
+    if (/(\bsubjective\b|\bvital\s*signs\b|\bpain\s*assessment\b|\bresponse\s*to\s*treatment\b)/i.test(low)) return true;
+    // Vitals tokens
+    if (/(\btemp\s*:|\bbp\s*:|\bheart\s*rate\s*:|\brespirations\s*:)/i.test(low)) return true;
+    return false;
+  }  async function buildVisitAssessmentFromAI(dictationRaw = "", taskType = "PT Visit") {
+    const baseClean = stripJunkFromDictation(dictationRaw);
+    const base = String((baseClean || dictationRaw) || "").trim();
+    if (!base) return buildVisitAssessmentFromDictation(dictationRaw);
     const miniTemplate = `Assessment:\n(autofilled)\n`;
 
     const aiDictation =
@@ -597,8 +634,9 @@ ${base}`;
       if (!out) return buildVisitAssessmentFromDictation(dictationRaw);
 
       const m = out.match(/^\s*Assessment\s*:\s*([\s\S]*?)\s*$/im);
-      const assess = (m && m[1]) ? String(m[1]).replace(/\s+/g, " ").trim() : "";
-      if (!assess) return buildVisitAssessmentFromDictation(dictationRaw);
+      let assess = (m && m[1]) ? String(m[1]).replace(/\s+/g, " ").trim() : "";
+      assess = cleanVisitAssessmentText(assess);
+      if (!assess || looksLikeVisitAssessmentHasLeakage(assess)) return buildVisitAssessmentFromDictation(dictationRaw);
 
       return assess;
     } catch {
