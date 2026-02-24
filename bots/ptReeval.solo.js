@@ -3809,18 +3809,38 @@ async function fillFrequencyAndDate(context, data, visitDate) {
         ];
         
         // Heuristic: does popup message look like a validation failure?
-        function isBadDialogMessage(msg = "") {
+        // NOTE: Kinnser sometimes shows informational dialogs that include the word "required"
+        // (e.g., "physician signature is not required if no change to Plan of Care").
+        // Those should NOT fail the job.
+        function isIgnorableDialogMessage(msg = "") {
         const m = String(msg || "").toLowerCase();
         return (
-        m.includes("error") ||
-        m.includes("required") ||
-        m.includes("missing") ||
-        m.includes("cannot") ||
-        m.includes("unable") ||
-        m.includes("invalid") ||
-        m.includes("please correct") ||
-        m.includes("must be") ||
-        m.includes("failed")
+          (m.includes("no change to plan of care") && m.includes("physician") && m.includes("signature") && m.includes("not required")) ||
+          (m.includes("physician signature") && m.includes("not required") && m.includes("plan of care"))
+        );
+        }
+
+        function isBadDialogMessage(msg = "") {
+        const m = String(msg || "").toLowerCase();
+        if (!m) return false;
+
+        // Explicit allow-list for known informational dialogs.
+        if (isIgnorableDialogMessage(m)) return false;
+
+        // If the dialog contains "not required", it's usually informational.
+        // Keep this broad to avoid false failures.
+        if (m.includes("not required")) return false;
+
+        return (
+          m.includes("error") ||
+          m.includes("required") ||
+          m.includes("missing") ||
+          m.includes("cannot") ||
+          m.includes("unable") ||
+          m.includes("invalid") ||
+          m.includes("please correct") ||
+          m.includes("must be") ||
+          m.includes("failed")
         );
         }
         
@@ -3909,9 +3929,12 @@ async function fillFrequencyAndDate(context, data, visitDate) {
           // The global dialog handler already accepts, but we try accepting safely anyway.
           try { await dlg.accept(); } catch {}
           
-          if (isBadDialogMessage(msg)) {
-          throw new Error(`SAVE_POPUP_ERROR: ${msg}`);
-        }
+          if (isIgnorableDialogMessage(msg)) {
+            log("ℹ️ Save popup is informational (no POC change / signature not required). Continuing…");
+            await wait(800);
+          } else if (isBadDialogMessage(msg)) {
+            throw new Error(`SAVE_POPUP_ERROR: ${msg}`);
+          }
       } else {
         // No dialog captured. Still allow time for any inline validation to render.
         await wait(1000);
