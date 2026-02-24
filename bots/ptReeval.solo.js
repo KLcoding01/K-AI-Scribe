@@ -1820,7 +1820,7 @@ function parseStructuredFromFreeText(aiNotes = "") {
                                                       
                                                       
                                                       // PAIN ASSESSMENT (explicit block)
-                                                      const painMatch = noteText.match(/pain\s*:\s*(skip|yes|no)\b/i);
+                                                      const painMatch = text.match(/pain\s*:\s*(skip|yes|no)\b/i);
   if (painMatch) {
     const v = painMatch[1].toLowerCase();
     if (v === "skip") {
