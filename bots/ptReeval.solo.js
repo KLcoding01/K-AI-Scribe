@@ -3867,9 +3867,19 @@ async function fillFrequencyAndDate(context, data, visitDate) {
         const txt = (await loc.innerText().catch(() => "")).trim();
         
         // Only fail if there is meaningful error text (avoid empty containers)
-        if (txt && txt.length >= 3) {
-        throw new Error(`SAVE_VALIDATION_ERROR: ${txt.slice(0, 500)}`);
-      }
+if (txt && txt.length >= 3) {
+  // Some WellSky reassessment visits show a validation banner even when "No Change to Plan of Care"
+  // is selected (physician signature not required). Treat this specific message as non-fatal.
+  const ign =
+    /No\s*Change\s*to\s*Plan\s*of\s*Care/i.test(txt) &&
+    /physician\s+signature\s+is\s+not\s+required/i.test(txt) &&
+    /therapy\s+reassess/i.test(txt);
+  if (ign) {
+    try { log('Non-fatal save validation (No Change to POC) detected; continuing.'); } catch {}
+  } else {
+    throw new Error(`SAVE_VALIDATION_ERROR: ${txt.slice(0, 500)}`);
+  }
+}
       }
       }
       
