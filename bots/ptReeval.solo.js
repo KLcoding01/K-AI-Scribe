@@ -3955,21 +3955,36 @@ async function fillFrequencyAndDate(context, data, visitDate) {
   // --------------------------------------------------
   // Reassessment: Suppress Treat As Order (No POC change)
   // Required to prevent SAVE_VALIDATION_ERROR
+  // NOTE: Even if already checked, we still apply the expected name/hidden wiring
+  //       and dispatch a change event (the site uses onchange to rename fields).
   // --------------------------------------------------
   try {
     const suppressSelector = '#frm_suppressTreatAsOrder';
-    const suppressBox = await scope.locator
-      ? await scope.locator(suppressSelector).first().isVisible().catch(() => false)
-      : false;
+    const hiddenSelector = '#frm_suppressTreatAsOrder_hidden';
+    const expectedName = 'frm_suppressTreatAsOrder|spWritefrmBit|1';
 
-    if (suppressBox) {
-      const isChecked = await scope.locator(suppressSelector).isChecked().catch(() => false);
+    const loc = scope.locator(suppressSelector);
+    const count = await loc.count().catch(() => 0);
+
+    if (count > 0) {
+      const isChecked = await loc.first().isChecked().catch(() => false);
       if (!isChecked) {
-        await scope.locator(suppressSelector).check().catch(() => {});
+        await loc.first().check({ force: true }).catch(() => {});
         log('Checked suppressTreatAsOrder (No POC change).');
       } else {
         log('suppressTreatAsOrder already checked.');
       }
+
+      // Mirror the page's onchange() behavior to ensure the correct field name is posted.
+      await loc.first().evaluate((el, args) => {
+        try {
+          el.setAttribute('name', args.expectedName);
+          const hid = document.querySelector(args.hiddenSelector);
+          if (hid) hid.setAttribute('name', args.expectedName);
+          el.dispatchEvent(new Event('change', { bubbles: true }));
+        } catch {}
+      }, { hiddenSelector, expectedName }).catch(() => {});
+      log('Applied suppressTreatAsOrder name/hidden + change event.');
     } else {
       log('suppressTreatAsOrder checkbox not found (may not apply).');
     }
